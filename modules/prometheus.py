@@ -3,10 +3,27 @@ import asyncio
 import json
 import re
 
+async def detect_protocol(ip, port, timeout=3):
+    """
+    Detects whether a service is running on HTTP or HTTPS.
+    Returns the protocol string ('http' or 'https') or None if unreachable.
+    """
+    protocols = ['https', 'http']  # Try HTTPS first as it's more secure
+    
+    for protocol in protocols:
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+                response = await client.get(f"{protocol}://{ip}:{port}/")
+                if response.status_code in [200, 401, 403, 302, 404]:  # Any valid HTTP response
+                    return protocol
+        except:
+            continue
+    return 'http'  # Default to HTTP if detection fails
+
 async def check_unauthenticated_dashboard(target_url):
     """Checks for unauthenticated access to the Prometheus dashboard."""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(target_url, timeout=5)
             if response.status_code == 200 and '<title>Prometheus</title>' in response.text:
                 return {
@@ -23,7 +40,7 @@ async def check_config_exposure(target_url):
     """Checks if the Prometheus configuration file is exposed."""
     config_url = f"{target_url}/config"
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(config_url, timeout=5)
             if response.status_code == 200 and 'global' in response.text and 'scrape_configs' in response.text:
                 return {
@@ -40,7 +57,7 @@ async def check_targets_exposure(target_url):
     """Checks if the Prometheus targets page is exposed, revealing network topology."""
     targets_url = f"{target_url}/targets"
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(targets_url, timeout=5)
             if response.status_code == 200 and 'Endpoints' in response.text and 'State' in response.text:
                 return {
@@ -67,7 +84,7 @@ async def check_metrics_exposure(target_url):
     
     for endpoint in metrics_endpoints:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
                 response = await client.get(f"{target_url}{endpoint}", timeout=5)
                 if response.status_code == 200:
                     content = response.text
@@ -131,7 +148,7 @@ async def check_cve_vulnerabilities(target_url):
     
     # CVE-2019-3826 - Stored XSS vulnerability
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             # Test for XSS in query interface
             xss_payload = {"query": "<script>alert('XSS')</script>"}
             response = await client.get(f"{target_url}/graph", params=xss_payload, timeout=5)
@@ -167,7 +184,7 @@ async def check_cve_vulnerabilities(target_url):
     
     # Query injection testing (PromQL injection)
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             # Test for PromQL injection with file read attempt
             injection_payload = {"query": "up{__name__=\"../../../etc/passwd\"}"}
             response = await client.get(f"{target_url}/api/v1/query", params=injection_payload, timeout=5)
@@ -185,7 +202,7 @@ async def check_cve_vulnerabilities(target_url):
     
     # ReDoS in metric name validation
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             # Test for ReDoS vulnerability with crafted metric names
             redos_payload = {"query": "(a+)+$" + "a" * 1000}
             start_time = asyncio.get_event_loop().time()
@@ -227,7 +244,7 @@ async def check_pprof_endpoints(target_url):
     
     for endpoint in pprof_endpoints:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
                 response = await client.get(f"{target_url}{endpoint}", timeout=5)
                 if response.status_code == 200:
                     content = response.text
@@ -271,7 +288,7 @@ async def check_api_endpoints(target_url):
     
     for endpoint, name in api_endpoints:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
                 response = await client.get(f"{target_url}{endpoint}", timeout=5)
                 if response.status_code == 200:
                     exposed_apis.append(f"{endpoint} ({name})")
@@ -307,7 +324,7 @@ async def get_prometheus_version(target_url):
     version_info = {}
     
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             # Try build info API
             response = await client.get(f"{target_url}/api/v1/status/buildinfo", timeout=5)
             if response.status_code == 200:
@@ -326,7 +343,7 @@ async def get_prometheus_version(target_url):
     
     # Try to extract from main page
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(target_url, timeout=5)
             if response.status_code == 200:
                 # Look for version in HTML
@@ -422,7 +439,7 @@ async def check_node_exporter_metrics(ip, port=9100):
     
     # Check /metrics endpoint
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(f"{target_url}/metrics", timeout=5)
             if response.status_code == 200:
                 content = response.text
@@ -491,7 +508,7 @@ async def check_node_exporter_metrics(ip, port=9100):
     
     # Check /pprof endpoint for debugging information exposure
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(f"{target_url}/pprof", timeout=5)
             if response.status_code == 200:
                 content = response.text.lower()
@@ -534,69 +551,78 @@ async def check_node_exporter_metrics(ip, port=9100):
 
 async def run_scans(ip, port):
     """Runs all defined Prometheus scans against a target."""
-    target_url = f"http://{ip}:{port}"
-    print(f"  -> Running Prometheus scans on {target_url}")
-    results = []
+    # Test both HTTP and HTTPS protocols
+    protocols = ['http', 'https']
+    all_results = []
     
-    # Get version information first
-    version_info = await get_prometheus_version(target_url)
-    service_version = version_info.get('version', 'Unknown') if version_info else 'Unknown'
+    for protocol in protocols:
+        target_url = f"{protocol}://{ip}:{port}"
+        print(f"  -> Running Prometheus scans on {target_url}")
+        
+        # Get version information first to verify connectivity
+        version_info = await get_prometheus_version(target_url)
+        service_version = version_info.get('version', 'Unknown') if version_info else 'Unknown'
+        
+        # Skip this protocol if we can't connect
+        if not version_info:
+            continue
+        
+        # Run basic checks concurrently for this protocol
+        tasks = [
+            check_unauthenticated_dashboard(target_url),
+            check_config_exposure(target_url),
+            check_targets_exposure(target_url),
+            check_metrics_exposure(target_url),
+            check_api_endpoints(target_url),
+            check_pprof_endpoints(target_url)
+        ]
+        check_results = await asyncio.gather(*tasks)
+        
+        for res in check_results:
+            if res:
+                if isinstance(res, list):
+                    # Handle list of vulnerabilities
+                    for vuln in res:
+                        vuln['module'] = 'Prometheus'
+                        vuln['service_version'] = service_version
+                        vuln['server'] = ip
+                        vuln['port'] = port
+                    all_results.extend(res)
+                else:
+                    # Handle single vulnerability
+                    res['module'] = 'Prometheus'
+                    res['service_version'] = service_version
+                    res['server'] = ip
+                    res['port'] = port
+                    all_results.append(res)
+        
+        # Run payload-based CVE checks for this protocol
+        cve_results = await check_cve_vulnerabilities(target_url)
+        for cve_result in cve_results:
+            cve_result['module'] = 'Prometheus'
+            cve_result['service_version'] = service_version
+            cve_result['server'] = ip
+            cve_result['port'] = port
+            all_results.append(cve_result)
+        
+        # Run version-based CVE checks for this protocol
+        version_cve_results = await check_version_based_cves(version_info)
+        for version_cve_result in version_cve_results:
+            version_cve_result['module'] = 'Prometheus'
+            version_cve_result['service_version'] = service_version
+            version_cve_result['server'] = ip
+            version_cve_result['port'] = port
+            all_results.append(version_cve_result)
+        
+        # Special handling for Node Exporter on port 9100 (protocol-specific)
+        if port == 9100:
+            node_exporter_results = await check_node_exporter_metrics(ip, port)
+            for ne_result in node_exporter_results:
+                ne_result['module'] = 'Prometheus Node Exporter'
+                ne_result['service_version'] = service_version if service_version != 'Unknown' else 'Node Exporter'
+                ne_result['server'] = ip
+                ne_result['port'] = port
+                all_results.extend(node_exporter_results)
+            break  # Only run Node Exporter check once, not for both protocols
     
-    # Run basic checks concurrently
-    tasks = [
-        check_unauthenticated_dashboard(target_url),
-        check_config_exposure(target_url),
-        check_targets_exposure(target_url),
-        check_metrics_exposure(target_url),
-        check_api_endpoints(target_url),
-        check_pprof_endpoints(target_url)
-    ]
-    check_results = await asyncio.gather(*tasks)
-    
-    for res in check_results:
-        if res:
-            if isinstance(res, list):
-                # Handle list of vulnerabilities
-                for vuln in res:
-                    vuln['module'] = 'Prometheus'
-                    vuln['service_version'] = service_version
-                    vuln['server'] = ip
-                    vuln['port'] = port
-                results.extend(res)
-            else:
-                # Handle single vulnerability
-                res['module'] = 'Prometheus'
-                res['service_version'] = service_version
-                res['server'] = ip
-                res['port'] = port
-                results.append(res)
-    
-    # Run payload-based CVE checks
-    cve_results = await check_cve_vulnerabilities(target_url)
-    for cve_result in cve_results:
-        cve_result['module'] = 'Prometheus'
-        cve_result['service_version'] = service_version
-        cve_result['server'] = ip
-        cve_result['port'] = port
-    results.extend(cve_results)
-    
-    # Run version-based CVE checks
-    version_cve_results = await check_version_based_cves(version_info)
-    for version_cve_result in version_cve_results:
-        version_cve_result['module'] = 'Prometheus'
-        version_cve_result['service_version'] = service_version
-        version_cve_result['server'] = ip
-        version_cve_result['port'] = port
-    results.extend(version_cve_results)
-    
-    # Special handling for Node Exporter on port 9100
-    if port == 9100:
-        node_exporter_results = await check_node_exporter_metrics(ip, port)
-        for ne_result in node_exporter_results:
-            ne_result['module'] = 'Prometheus Node Exporter'
-            ne_result['service_version'] = service_version if service_version != 'Unknown' else 'Node Exporter'
-            ne_result['server'] = ip
-            ne_result['port'] = port
-        results.extend(node_exporter_results)
-            
-    return results
+    return all_results

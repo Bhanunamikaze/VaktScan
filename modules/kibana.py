@@ -3,6 +3,23 @@ import asyncio
 import json
 import re
 
+async def detect_protocol(ip, port, timeout=3):
+    """
+    Detects whether a service is running on HTTP or HTTPS.
+    Returns the protocol string ('http' or 'https') or None if unreachable.
+    """
+    protocols = ['https', 'http']  # Try HTTPS first as it's more secure
+    
+    for protocol in protocols:
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+                response = await client.get(f"{protocol}://{ip}:{port}/")
+                if response.status_code in [200, 401, 403, 302, 404]:  # Any valid HTTP response
+                    return protocol
+        except:
+            continue
+    return 'http'  # Default to HTTP if detection fails
+
 # Kibana CVE database with verified vulnerabilities
 CVE_DATABASE = {
     "CVE-2019-7609": {
@@ -125,7 +142,7 @@ async def get_kibana_version(target_url):
     
     # Try the main page first
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(target_url, timeout=5)
             if response.status_code == 200:
                 # Look for version in HTML content
@@ -145,7 +162,7 @@ async def get_kibana_version(target_url):
     
     # Try status API endpoint
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(f"{target_url}/api/status", timeout=5)
             if response.status_code == 200:
                 try:
@@ -162,7 +179,7 @@ async def get_kibana_version(target_url):
     
     # Try about page
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(f"{target_url}/app/kibana#/dev_tools/console", timeout=5)
             if response.status_code == 200:
                 version_match = re.search(r'Kibana\s+([0-9]+\.[0-9]+\.[0-9]+)', response.text, re.IGNORECASE)
@@ -177,7 +194,7 @@ async def get_kibana_version(target_url):
 async def check_exposed_ui(target_url):
     """Checks if the Kibana login page or UI is publicly accessible."""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(target_url, timeout=5)
             if response.status_code == 200:
                 content = response.text.lower()
@@ -273,7 +290,7 @@ async def check_api_endpoints(target_url):
     
     for endpoint, name in api_endpoints:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
                 response = await client.get(f"{target_url}{endpoint}", timeout=5)
                 if response.status_code == 200:
                     accessible_endpoints.append(f"{endpoint} ({name})")
@@ -312,7 +329,7 @@ async def test_cve_payload(target_url, cve_id, cve_data):
     test_url = f"{target_url}{payload['path']}"
     
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = None
             
             if payload["method"] == "GET":
@@ -415,47 +432,55 @@ async def check_cve_vulnerabilities(target_url):
 
 async def run_scans(ip, port):
     """Runs all defined Kibana scans against a target."""
-    target_url = f"http://{ip}:{port}"
-    print(f"  -> Running Kibana scans on {target_url}")
-    results = []
+    # Test both HTTP and HTTPS protocols
+    protocols = ['http', 'https']
+    all_results = []
     
-    # Get version information first
-    version_info = await get_kibana_version(target_url)
-    service_version = version_info.get('number', 'Unknown') if version_info else 'Unknown'
+    for protocol in protocols:
+        target_url = f"{protocol}://{ip}:{port}"
+        print(f"  -> Running Kibana scans on {target_url}")
+        
+        # Get version information first to verify connectivity
+        version_info = await get_kibana_version(target_url)
+        service_version = version_info.get('number', 'Unknown') if version_info else 'Unknown'
+        
+        # Skip this protocol if we can't connect
+        if not version_info:
+            continue
+        
+        # Run basic checks concurrently for this protocol
+        tasks = [
+            check_exposed_ui(target_url),
+            check_default_credentials(target_url),
+            check_api_endpoints(target_url)
+        ]
+        check_results = await asyncio.gather(*tasks)
+        
+        for res in check_results:
+            if res:
+                if isinstance(res, list):
+                    # Handle list of vulnerabilities
+                    for vuln in res:
+                        vuln['module'] = 'Kibana'
+                        vuln['service_version'] = service_version
+                        vuln['server'] = ip
+                        vuln['port'] = port
+                    all_results.extend(res)
+                else:
+                    # Handle single vulnerability
+                    res['module'] = 'Kibana'
+                    res['service_version'] = service_version
+                    res['server'] = ip
+                    res['port'] = port
+                    all_results.append(res)
+        
+        # Run CVE checks for this protocol
+        cve_results = await check_cve_vulnerabilities(target_url)
+        for cve_result in cve_results:
+            cve_result['module'] = 'Kibana'
+            cve_result['service_version'] = service_version
+            cve_result['server'] = ip
+            cve_result['port'] = port
+            all_results.append(cve_result)
     
-    # Run basic checks concurrently
-    tasks = [
-        check_exposed_ui(target_url),
-        check_default_credentials(target_url),
-        check_api_endpoints(target_url)
-    ]
-    check_results = await asyncio.gather(*tasks)
-    
-    for res in check_results:
-        if res:
-            if isinstance(res, list):
-                # Handle list of vulnerabilities
-                for vuln in res:
-                    vuln['module'] = 'Kibana'
-                    vuln['service_version'] = service_version
-                    vuln['server'] = ip
-                    vuln['port'] = port
-                results.extend(res)
-            else:
-                # Handle single vulnerability
-                res['module'] = 'Kibana'
-                res['service_version'] = service_version
-                res['server'] = ip
-                res['port'] = port
-                results.append(res)
-    
-    # Run CVE checks
-    cve_results = await check_cve_vulnerabilities(target_url)
-    for cve_result in cve_results:
-        cve_result['module'] = 'Kibana'
-        cve_result['service_version'] = service_version
-        cve_result['server'] = ip
-        cve_result['port'] = port
-    results.extend(cve_results)
-    
-    return results
+    return all_results

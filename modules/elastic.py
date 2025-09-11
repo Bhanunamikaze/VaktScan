@@ -3,6 +3,23 @@ import asyncio
 import json
 import re
 
+async def detect_protocol(ip, port, timeout=3):
+    """
+    Detects whether a service is running on HTTP or HTTPS.
+    Returns the protocol string ('http' or 'https') or None if unreachable.
+    """
+    protocols = ['https', 'http']  # Try HTTPS first as it's more secure
+    
+    for protocol in protocols:
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+                response = await client.get(f"{protocol}://{ip}:{port}/")
+                if response.status_code in [200, 401, 403, 302, 404]:  # Any valid HTTP response
+                    return protocol
+        except:
+            continue
+    return 'http'  # Default to HTTP if detection fails
+
 # A list of sensitive paths that should not be publicly accessible
 SENSITIVE_PATHS = [
     "/_cat/nodes", "/_nodes", "/_nodes/stats", "/_cluster/stats", "/_cluster/health",
@@ -298,7 +315,7 @@ async def get_elasticsearch_version(target_url):
     
     # Try main root endpoint first
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(target_url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
@@ -320,7 +337,7 @@ async def get_elasticsearch_version(target_url):
     
     for endpoint in alternative_endpoints:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
                 response = await client.get(f"{target_url}{endpoint}", timeout=5)
                 if response.status_code == 200:
                     data = response.json()
@@ -402,7 +419,7 @@ async def test_cve_payload(target_url, cve_id, cve_data):
     test_url = f"{target_url}{payload['path']}"
     
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = None
             
             if payload["method"] == "GET":
@@ -574,7 +591,7 @@ async def check_cve_vulnerabilities(target_url):
 async def check_unauthenticated_access(target_url):
     """Checks for unauthenticated access and grabs version info."""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(target_url, timeout=5)
             if response.status_code == 200 and 'You Know, for Search' in response.text:
                 version_info = response.json().get('version', {}).get('number', 'N/A')
@@ -597,7 +614,7 @@ async def check_default_credentials(target_url):
         ('admin', 'elasticadmin')
     ]
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             for user, password in creds:
                 response = await client.get(target_url, auth=(user, password), timeout=5)
                 if response.status_code == 200 and 'You Know, for Search' in response.text:
@@ -625,7 +642,7 @@ async def check_sensitive_paths(target_url):
         return None
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             tasks = [probe_path(client, path) for path in SENSITIVE_PATHS]
             results = await asyncio.gather(*tasks)
             accessible_paths = [res for res in results if res is not None]
@@ -644,39 +661,47 @@ async def check_sensitive_paths(target_url):
 
 async def run_scans(ip, port):
     """Runs all defined Elasticsearch scans against a target."""
-    target_url = f"http://{ip}:{port}"
-    print(f"  -> Running Elasticsearch scans on {target_url}")
-    results = []
+    # Test both HTTP and HTTPS protocols
+    protocols = ['http', 'https']
+    all_results = []
     
-    # Get version information first
-    version_info = await get_elasticsearch_version(target_url)
-    service_version = version_info.get('number', 'Unknown') if version_info else 'Unknown'
+    for protocol in protocols:
+        target_url = f"{protocol}://{ip}:{port}"
+        print(f"  -> Running Elasticsearch scans on {target_url}")
+        
+        # Get version information first to verify connectivity
+        version_info = await get_elasticsearch_version(target_url)
+        service_version = version_info.get('number', 'Unknown') if version_info else 'Unknown'
+        
+        # Skip this protocol if we can't connect
+        if not version_info:
+            continue
+        
+        # Run checks concurrently for this protocol
+        tasks = [
+            check_unauthenticated_access(target_url),
+            check_default_credentials(target_url),
+            check_sensitive_paths(target_url)
+        ]
+        check_results = await asyncio.gather(*tasks)
+        
+        for res in check_results:
+            if res:
+                # Add module, version, server and port info
+                res['module'] = 'Elasticsearch'
+                res['service_version'] = service_version
+                res['server'] = ip
+                res['port'] = port
+                all_results.append(res)
+        
+        # Run CVE checks for this protocol
+        cve_results = await check_cve_vulnerabilities(target_url)
+        for cve_result in cve_results:
+            cve_result['module'] = 'Elasticsearch'
+            cve_result['service_version'] = service_version
+            cve_result['server'] = ip
+            cve_result['port'] = port
+            all_results.append(cve_result)
     
-    # Run checks concurrently
-    tasks = [
-        check_unauthenticated_access(target_url),
-        check_default_credentials(target_url),
-        check_sensitive_paths(target_url)
-    ]
-    check_results = await asyncio.gather(*tasks)
-    
-    for res in check_results:
-        if res:
-            # Add module, version, server and port info
-            res['module'] = 'Elasticsearch'
-            res['service_version'] = service_version
-            res['server'] = ip
-            res['port'] = port
-            results.append(res)
-    
-    # Run CVE checks
-    cve_results = await check_cve_vulnerabilities(target_url)
-    for cve_result in cve_results:
-        cve_result['module'] = 'Elasticsearch'
-        cve_result['service_version'] = service_version
-        cve_result['server'] = ip
-        cve_result['port'] = port
-    results.extend(cve_results)
-            
-    return results
+    return all_results
 
