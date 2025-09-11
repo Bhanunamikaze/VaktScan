@@ -113,7 +113,7 @@ def save_results_to_csv(vulnerabilities, filename=None):
         print(f"{Colors.RED}[!] Error saving CSV file: {e}{Colors.RESET}")
         return None
 
-async def main(targets_file, concurrency, resume=False, output_csv=False):
+async def main(targets_file, concurrency, resume=False, output_csv=False, module_filter=None, custom_ports=None):
     """
     Main orchestrator for the scanning tool.
     """
@@ -167,7 +167,23 @@ async def main(targets_file, concurrency, resume=False, output_csv=False):
 
         # 2. Define service ports and run the port scan
         service_ports = get_service_ports()
+        
+        # Apply module filter if specified
+        if module_filter:
+            print(f"{Colors.YELLOW}[*] Module filter: Scanning only {module_filter.capitalize()} services{Colors.RESET}")
+            service_ports = {module_filter: service_ports.get(module_filter, [])}
+        
         all_ports_to_scan = [port for ports in service_ports.values() for port in ports]
+        
+        # Add custom ports if specified
+        if custom_ports:
+            try:
+                custom_port_list = [int(port.strip()) for port in custom_ports.split(',')]
+                all_ports_to_scan.extend(custom_port_list)
+                all_ports_to_scan = list(set(all_ports_to_scan))  # Remove duplicates
+                print(f"{Colors.YELLOW}[*] Added custom ports: {custom_port_list}{Colors.RESET}")
+            except ValueError as e:
+                print(f"{Colors.RED}[!] Error parsing custom ports: {e}. Ignoring custom ports.{Colors.RESET}")
         
         state_manager.set_totals(len(unique_ips), len(unique_ips) * len(all_ports_to_scan))
         
@@ -208,18 +224,36 @@ async def main(targets_file, concurrency, resume=False, output_csv=False):
             
             for port in data['open_ports']:
                 # Check each potential service for this port
-                if port in service_ports.get('elasticsearch', []):
+                # Only check services that are in the filtered service_ports dictionary
+                if 'elasticsearch' in service_ports and port in service_ports.get('elasticsearch', []):
                     validation_tasks.append(validate_service('elasticsearch', ip, port))
                     service_mapping.append(('elasticsearch', ip, port, elastic.run_scans))
-                if port in service_ports.get('kibana', []):
+                if 'kibana' in service_ports and port in service_ports.get('kibana', []):
                     validation_tasks.append(validate_service('kibana', ip, port))
                     service_mapping.append(('kibana', ip, port, kibana.run_scans))
-                if port in service_ports.get('grafana', []):
+                if 'grafana' in service_ports and port in service_ports.get('grafana', []):
                     validation_tasks.append(validate_service('grafana', ip, port))
                     service_mapping.append(('grafana', ip, port, grafana.run_scans))
-                if port in service_ports.get('prometheus', []):
+                if 'prometheus' in service_ports and port in service_ports.get('prometheus', []):
                     validation_tasks.append(validate_service('prometheus', ip, port))
                     service_mapping.append(('prometheus', ip, port, prometheus.run_scans))
+                
+                # Handle custom ports - attempt to identify service by trying validation
+                if custom_ports and port not in [p for ports in service_ports.values() for p in ports]:
+                    print(f"{Colors.YELLOW}[*] Custom port {port} detected, attempting service identification...{Colors.RESET}")
+                    # Try to validate against all available services for custom ports
+                    original_service_ports = get_service_ports()
+                    for service_name in original_service_ports.keys():
+                        if module_filter is None or service_name == module_filter:
+                            validation_tasks.append(validate_service(service_name, ip, port))
+                            if service_name == 'elasticsearch':
+                                service_mapping.append((service_name, ip, port, elastic.run_scans))
+                            elif service_name == 'kibana':
+                                service_mapping.append((service_name, ip, port, kibana.run_scans))
+                            elif service_name == 'grafana':
+                                service_mapping.append((service_name, ip, port, grafana.run_scans))
+                            elif service_name == 'prometheus':
+                                service_mapping.append((service_name, ip, port, prometheus.run_scans))
         
         if not validation_tasks:
             print("\n[*] No potential services found on open ports.")
@@ -329,10 +363,14 @@ if __name__ == "__main__":
     parser.add_argument("-c", "--concurrency", type=int, default=100, help="Number of concurrent tasks to run.")
     parser.add_argument("-r", "--resume", action="store_true", help="Resume an interrupted scan from saved state.")
     parser.add_argument("--csv", action="store_true", help="Save results to CSV file.")
+    parser.add_argument("-m", "--module", choices=["elasticsearch", "kibana", "grafana", "prometheus"], 
+                        help="Scan only specific service module (default: all modules)")
+    parser.add_argument("-p", "--ports", type=str, 
+                        help="Additional custom ports to scan (comma-separated, e.g., 8080,8443,9999)")
     args = parser.parse_args()
 
     try:
-        asyncio.run(main(args.targets_file, args.concurrency, args.resume, args.csv))
+        asyncio.run(main(args.targets_file, args.concurrency, args.resume, args.csv, args.module, args.ports))
     except KeyboardInterrupt:
         print("\n[*] Scanner terminated by user.")
         sys.exit(0)

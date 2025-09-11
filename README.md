@@ -15,10 +15,12 @@ An advanced, high-performance security scanner designed for comprehensive vulner
 
 ###  Advanced Vulnerability Detection
 - **30+ CVE Database**: Comprehensive vulnerability coverage with payload testing
+- **Dual Protocol Support**: Automated HTTP and HTTPS testing for complete coverage
 - **Version-Based Detection**: Custom version parsing and vulnerability mapping without external dependencies
 - **Severity Classification**: CRITICAL, HIGH, MEDIUM risk categorization with detailed descriptions
 - **Active Payload Testing**: Exploitation attempts for vulnerability confirmation
 - **Service Validation**: Ensures accurate service identification before scanning
+- **SSL/TLS Support**: Handles both secure and insecure connections with proper certificate handling
 
 ###  High-Performance Architecture
 - **Multi-target Support**: IPs, hostnames, domains, and CIDR subnets
@@ -87,6 +89,15 @@ python main.py targets.txt -c 500
 
 # Resume interrupted scan
 python main.py targets.txt --resume
+
+# Scan specific service only
+python main.py targets.txt -m elasticsearch
+
+# Add custom ports to scan
+python main.py targets.txt -p 8080,8443,9999
+
+# Combined options
+python main.py targets.txt -m grafana -p 3001,3002 -c 200
 ```
 
 ##  Sample Output
@@ -99,6 +110,10 @@ python main.py targets.txt --resume
 [*] Progress: 1,250/10,000 (12.5%) | Rate: 892.3 scans/sec | ETA: 10s
 [*] Port scanning completed. Found 45 open ports across 12 services.
 [*] Validated 12 service(s). Starting VaktScan vulnerability assessment...
+  -> Running Elasticsearch scans on http://192.168.1.100:9200
+  -> Running Grafana scans on http://192.168.1.102:3000
+  -> Running Elasticsearch scans on https://192.168.1.100:9200
+  -> Running Grafana scans on https://192.168.1.102:3000
 
 [CRITICAL] CVE-2021-44228 - Log4Shell RCE | http://192.168.1.100:9200
 [HIGH] CVE-2018-17246 - Kibana File Read | http://192.168.1.101:5601
@@ -116,7 +131,11 @@ python main.py targets.txt [OPTIONS]
 
 Options:
   -c, --concurrency INT    Set concurrency level (default: 100, max: 2000)
-  --resume                Resume from previous interrupted scan
+  -r, --resume            Resume from previous interrupted scan
+  --csv                   Save results to CSV file
+  -m, --module SERVICE    Scan only specific service module:
+                          elasticsearch, kibana, grafana, prometheus
+  -p, --ports PORTS       Additional custom ports to scan (comma-separated)
   -h, --help              Show help message
 ```
 
@@ -174,6 +193,31 @@ https://logs.company.com:5601
 - **CVE-2018-1000816** - Path Traversal
 - Plus comprehensive metrics endpoint analysis and Node Exporter security assessment
 
+## 🔐 HTTP/HTTPS Protocol Support
+
+VaktScan automatically tests **both HTTP and HTTPS protocols** for complete coverage:
+
+### **Dual Protocol Testing**
+- **Automatic Detection**: Tests both HTTP and HTTPS on every service
+- **Complete Coverage**: Detects services running on secure (HTTPS) or insecure (HTTP) configurations
+- **Production Ready**: Handles self-signed certificates and SSL/TLS configurations
+- **No Duplicates**: Intelligent filtering prevents duplicate vulnerability reports
+
+### **SSL/TLS Handling**
+- **Self-Signed Certificates**: Automatically handles development/testing environments
+- **Certificate Validation**: Configurable SSL verification (disabled by default for compatibility)
+- **Timeout Management**: Intelligent timeout handling prevents hanging on unresponsive HTTPS services
+- **Graceful Fallback**: Continues scanning even when one protocol fails
+
+### **Example Output**
+```bash
+  -> Running Elasticsearch scans on http://192.168.1.100:9200    # HTTP test
+  -> Running Elasticsearch scans on https://192.168.1.100:9200   # HTTPS test
+  -> Running Grafana scans on http://192.168.1.102:3000          # HTTP test  
+  -> Running Grafana scans on https://192.168.1.102:3000         # HTTPS test
+```
+
+**All services (Elasticsearch, Kibana, Grafana, Prometheus) automatically test both protocols for comprehensive security assessment.**
 
 ##  Development & Extension
 
@@ -183,9 +227,19 @@ https://logs.company.com:5601
 ```python
 # modules/newservice.py
 async def run_scans(ip, port):
-    target_url = f"http://{ip}:{port}"
-    # Implementation here
-    return results
+    # Test both HTTP and HTTPS protocols
+    protocols = ['http', 'https']
+    all_results = []
+    
+    for protocol in protocols:
+        target_url = f"{protocol}://{ip}:{port}"
+        # Implementation here for this protocol
+        # Skip if can't connect
+        if not version_info:
+            continue
+        # Add results to all_results
+        
+    return all_results
 ```
 
 2. **Register service ports**:
@@ -211,7 +265,7 @@ from modules import elastic, kibana, grafana, prometheus, newservice
 async def check_new_vulnerability(target_url):
     """Check for specific vulnerability."""
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10, verify=False) as client:
             response = await client.get(f"{target_url}/vulnerable-endpoint")
             if response.status_code == 200 and "vulnerable_indicator" in response.text:
                 return {
@@ -224,8 +278,10 @@ async def check_new_vulnerability(target_url):
         pass
     return None
 
-# Add to tasks list in run_scans()
-tasks.append(check_new_vulnerability(target_url))
+# Add to tasks list in run_scans() for each protocol
+for protocol in protocols:
+    target_url = f"{protocol}://{ip}:{port}"
+    tasks.append(check_new_vulnerability(target_url))
 ```
 
 ##  License
