@@ -53,8 +53,7 @@ async def progress_reporter(total_tasks, completed_tasks, start_time):
     last_completed = 0
     last_update_time = start_time
     
-    # Show initial progress immediately
-    print(f"[*] Progress: 0/{total_tasks:,} (0.0%) | Rate: 0.0 scans/sec | ETA: --s")
+    # Wait for some progress before showing initial message
     
     while completed_tasks[0] < total_tasks:
         await asyncio.sleep(0.1)  # Very frequent checks for high concurrency
@@ -65,7 +64,7 @@ async def progress_reporter(total_tasks, completed_tasks, start_time):
         # Update every 0.2 seconds or if any progress made
         time_since_update = current_time - last_update_time
         
-        if time_since_update >= 0.2 or completed != last_completed:
+        if (time_since_update >= 0.2 or completed != last_completed) and completed > 0:
             progress = (completed / total_tasks) * 100
             rate = completed / elapsed if elapsed > 0 else 0
             eta = (total_tasks - completed) / rate if rate > 0 else 0

@@ -5,12 +5,12 @@ import os
 import signal
 import csv
 import time
-from urllib.parse import urlparse
+# Removed unused import: from urllib.parse import urlparse
 
 # Add vendor directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
 
-from utils import process_targets, get_service_ports
+from utils import process_targets, process_targets_streaming, get_service_ports
 from port_scanner import scan_ports
 from service_validator import validate_service
 from scan_state import ScanStateManager
@@ -113,7 +113,7 @@ def save_results_to_csv(vulnerabilities, filename=None):
         print(f"{Colors.RED}[!] Error saving CSV file: {e}{Colors.RESET}")
         return None
 
-async def main(targets_file, concurrency, resume=False, output_csv=False, module_filter=None, custom_ports=None):
+async def main(targets_file, concurrency, resume=False, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000):
     """
     Main orchestrator for the scanning tool.
     """
@@ -142,10 +142,47 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
             print(f"{Colors.CYAN}[*] Starting VaktScan - Nordic Security Scanner...{Colors.RESET}")
 
         # 1. Process and expand all targets from the input file
+        raw_targets = [line.strip() for line in open(targets_file, 'r')]
+        
+        # Auto-detect if we need streaming based on target file size
+        estimated_ips = 0
+        should_stream = False
+        for target in raw_targets:
+            if not target or target.startswith('#'):
+                continue
+            try:
+                import ipaddress
+                network = ipaddress.ip_network(target, strict=False)
+                estimated_ips += network.num_addresses
+                if estimated_ips > 30000:  # Auto-enable streaming for 30k+ IPs
+                    should_stream = True
+                    break
+            except:
+                estimated_ips += 1
+        
+        if should_stream:
+            print(f"{Colors.YELLOW}[*] Large target set detected ({estimated_ips:,}+ IPs) - using streaming mode{Colors.RESET}")
+            
+            # Check if we have existing streaming state to resume
+            if is_resume and state_manager.state.get("streaming_mode", False):
+                print(f"{Colors.CYAN}[*] Resuming streaming scan from previous state...{Colors.RESET}")
+                completed_chunks = state_manager.state.get("completed_chunks", 0)
+                if completed_chunks > 0:
+                    return await resume_streaming_scan(state_manager, raw_targets, concurrency, output_csv, module_filter, custom_ports, chunk_size)
+                else:
+                    print(f"{Colors.YELLOW}[*] No completed chunks found, starting fresh streaming scan...{Colors.RESET}")
+                    return await process_streaming_scan(raw_targets, concurrency, output_csv, module_filter, custom_ports, chunk_size, state_manager)
+            else:
+                # Mark this as a streaming scan in state
+                state_manager.state["streaming_mode"] = True
+                state_manager.state["completed_chunks"] = 0
+                state_manager.save_state()
+                return await process_streaming_scan(raw_targets, concurrency, output_csv, module_filter, custom_ports, chunk_size, state_manager)
+        
+        # Regular processing for smaller target sets
         if not is_resume or state_manager.state["phase"] == "initializing":
             print(f"{Colors.CYAN}[*] Parsing targets from {targets_file}...{Colors.RESET}")
             try:
-                raw_targets = [line.strip() for line in open(targets_file, 'r')]
                 unique_ips = await process_targets(raw_targets)
                 print(f"{Colors.GREEN}[+] Successfully resolved {len(unique_ips)} unique IP addresses.{Colors.RESET}")
                 state_manager.update_phase("target_processing_complete")
@@ -157,8 +194,6 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
                 return
         else:
             print(f"[*] Using previously resolved {state_manager.state['total_ips']} unique IP addresses.")
-            # For resume, we still need the IP list for processing
-            raw_targets = [line.strip() for line in open(targets_file, 'r')]
             unique_ips = await process_targets(raw_targets)
 
         if not unique_ips:
@@ -350,6 +385,279 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
     # Clean up state file after successful completion
     state_manager.cleanup_state_file()
 
+async def process_streaming_scan(raw_targets, concurrency, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000, state_manager=None):
+    """
+    Processes large target sets in streaming chunks to avoid memory exhaustion.
+    """
+    # First, calculate total IPs and chunks for progress tracking
+    print(f"{Colors.CYAN}[*] Calculating total targets...{Colors.RESET}")
+    total_ips = 0
+    for target in raw_targets:
+        if not target or target.startswith('#'):
+            continue
+        try:
+            import ipaddress
+            network = ipaddress.ip_network(target, strict=False)
+            total_ips += network.num_addresses
+        except:
+            total_ips += 1
+    
+    total_chunks = (total_ips + chunk_size - 1) // chunk_size  # Ceiling division
+    print(f"{Colors.CYAN}[*] Starting streaming scan: {total_ips:,} total IPs across {total_chunks} chunks (chunk size: {chunk_size:,}){Colors.RESET}")
+    
+    # Define service ports
+    service_ports = get_service_ports()
+    
+    # Apply module filter if specified
+    if module_filter:
+        print(f"{Colors.YELLOW}[*] Module filter: Scanning only {module_filter.capitalize()} services{Colors.RESET}")
+        service_ports = {module_filter: service_ports.get(module_filter, [])}
+    
+    all_ports_to_scan = [port for ports in service_ports.values() for port in ports]
+    
+    # Add custom ports if specified
+    if custom_ports:
+        try:
+            custom_port_list = [int(port.strip()) for port in custom_ports.split(',')]
+            all_ports_to_scan.extend(custom_port_list)
+            all_ports_to_scan = list(set(all_ports_to_scan))
+            print(f"{Colors.YELLOW}[*] Added custom ports: {custom_port_list}{Colors.RESET}")
+        except ValueError as e:
+            print(f"{Colors.RED}[!] Error parsing custom ports: {e}. Ignoring custom ports.{Colors.RESET}")
+    
+    all_vulnerabilities = []
+    chunk_count = 0
+    processed_ips = 0
+    
+    try:
+        # Process targets in streaming chunks
+        async for ip_chunk in process_targets_streaming(raw_targets, chunk_size):
+            chunk_count += 1
+            processed_ips += len(ip_chunk)
+            
+            print(f"\n{Colors.BRIGHT_CYAN}=== Processing Chunk {chunk_count}/{total_chunks} ({len(ip_chunk):,} IPs) ==={Colors.RESET}")
+            print(f"{Colors.CYAN}[*] Overall Progress: {processed_ips:,}/{total_ips:,} IPs ({processed_ips/total_ips*100:.1f}%) | Remaining: {total_ips-processed_ips:,} IPs{Colors.RESET}")
+            
+            # Scan this chunk
+            total_combinations = len(ip_chunk) * len(all_ports_to_scan)
+            print(f"{Colors.CYAN}[*] Scanning chunk {chunk_count}: {len(ip_chunk):,} IPs across {len(all_ports_to_scan)} ports ({total_combinations:,} combinations){Colors.RESET}")
+            open_ports_results = await scan_ports(ip_chunk, all_ports_to_scan, concurrency, state_manager)
+            
+            # Process any found services and run vulnerability scans
+            chunk_vulnerabilities = await process_chunk_services(open_ports_results, service_ports, module_filter, custom_ports)
+            all_vulnerabilities.extend(chunk_vulnerabilities)
+            
+            # Save state if state_manager provided
+            if state_manager:
+                state_manager.state["completed_chunks"] = chunk_count
+                for vuln in chunk_vulnerabilities:
+                    state_manager.add_vulnerability(vuln)
+                state_manager.save_state()
+            
+            remaining_chunks = total_chunks - chunk_count
+            print(f"{Colors.GREEN}[+] Chunk {chunk_count}/{total_chunks} completed. Found {len(chunk_vulnerabilities)} new vulnerabilities ({len(all_vulnerabilities)} total). {remaining_chunks} chunks remaining.{Colors.RESET}")
+    
+    except KeyboardInterrupt:
+        print(f"\n[!] Streaming scan interrupted. Processed {chunk_count}/{total_chunks} chunks ({processed_ips:,}/{total_ips:,} IPs).")
+        
+    # Print final results
+    await print_final_results(all_vulnerabilities, output_csv)
+    return all_vulnerabilities
+
+async def process_chunk_services(open_ports_results, service_ports, module_filter, custom_ports):
+    """Process services found in a chunk and run vulnerability scans."""
+    validation_tasks = []
+    service_mapping = []
+    
+    for ip, data in open_ports_results.items():
+        if not data['open_ports']:
+            continue
+        
+        print(f"[*] Found open ports on {ip}: {data['open_ports']}")
+        
+        for port in data['open_ports']:
+            # Check each potential service for this port
+            if 'elasticsearch' in service_ports and port in service_ports.get('elasticsearch', []):
+                validation_tasks.append(validate_service('elasticsearch', ip, port))
+                service_mapping.append(('elasticsearch', ip, port, elastic.run_scans))
+            if 'kibana' in service_ports and port in service_ports.get('kibana', []):
+                validation_tasks.append(validate_service('kibana', ip, port))
+                service_mapping.append(('kibana', ip, port, kibana.run_scans))
+            if 'grafana' in service_ports and port in service_ports.get('grafana', []):
+                validation_tasks.append(validate_service('grafana', ip, port))
+                service_mapping.append(('grafana', ip, port, grafana.run_scans))
+            if 'prometheus' in service_ports and port in service_ports.get('prometheus', []):
+                validation_tasks.append(validate_service('prometheus', ip, port))
+                service_mapping.append(('prometheus', ip, port, prometheus.run_scans))
+            
+            # Handle custom ports
+            if custom_ports and port not in [p for ports in service_ports.values() for p in ports]:
+                print(f"{Colors.YELLOW}[*] Custom port {port} detected, attempting service identification...{Colors.RESET}")
+                original_service_ports = get_service_ports()
+                for service_name in original_service_ports.keys():
+                    if module_filter is None or service_name == module_filter:
+                        validation_tasks.append(validate_service(service_name, ip, port))
+                        if service_name == 'elasticsearch':
+                            service_mapping.append((service_name, ip, port, elastic.run_scans))
+                        elif service_name == 'kibana':
+                            service_mapping.append((service_name, ip, port, kibana.run_scans))
+                        elif service_name == 'grafana':
+                            service_mapping.append((service_name, ip, port, grafana.run_scans))
+                        elif service_name == 'prometheus':
+                            service_mapping.append((service_name, ip, port, prometheus.run_scans))
+    
+    chunk_vulnerabilities = []
+    if validation_tasks:
+        # Run validations concurrently
+        validation_results = await asyncio.gather(*validation_tasks, return_exceptions=True)
+        
+        # Run vulnerability scans for validated services
+        scan_tasks = []
+        validated_services = 0
+        
+        for is_valid, (service, ip, port, scanner_func) in zip(validation_results, service_mapping):
+            if isinstance(is_valid, bool) and is_valid:
+                print(f"  -> Running {service.capitalize()} scans on http://{ip}:{port}")
+                scan_tasks.append(scanner_func(ip, port))
+                validated_services += 1
+        
+        if scan_tasks:
+            print(f"{Colors.CYAN}[*] Running vulnerability scans on {validated_services} validated services...{Colors.RESET}")
+            chunk_results = await asyncio.gather(*scan_tasks, return_exceptions=True)
+            
+            # Collect results from this chunk
+            for result_list in chunk_results:
+                if isinstance(result_list, list):
+                    chunk_vulnerabilities.extend(result_list)
+                elif result_list and not isinstance(result_list, Exception):
+                    chunk_vulnerabilities.append(result_list)
+    
+    return chunk_vulnerabilities
+
+async def print_final_results(all_vulnerabilities, output_csv):
+    """Print final vulnerability results and optionally save to CSV."""
+    print(f"{Colors.BRIGHT_CYAN}\n" + "="*50 + f"{Colors.RESET}")
+    print(f"{Colors.BRIGHT_YELLOW}{Colors.BOLD}      Final Vulnerability Results{Colors.RESET}")
+    print(f"{Colors.BRIGHT_CYAN}" + "="*50 + f"\n{Colors.RESET}")
+    
+    if all_vulnerabilities:
+        for result in all_vulnerabilities:
+            # Color code by vulnerability status
+            if result['status'] == 'VULNERABLE':
+                status_color = Colors.BRIGHT_RED
+            elif result['status'] == 'CRITICAL':
+                status_color = Colors.RED + Colors.BOLD
+            elif result['status'] == 'POTENTIAL':
+                status_color = Colors.YELLOW
+            elif result['status'] == 'INFO':
+                status_color = Colors.BLUE
+            else:
+                status_color = Colors.WHITE
+            
+            print(f"{status_color}[!] {result['status']}{Colors.RESET}: {Colors.BOLD}{result['vulnerability']}{Colors.RESET} on {Colors.UNDERLINE}{result['target']}{Colors.RESET}")
+            print(f"    {Colors.GRAY}Details: {result['details']}{Colors.RESET}\n")
+    else:
+        print(f"{Colors.GREEN}[*] No vulnerabilities found.{Colors.RESET}")
+    
+    # Save to CSV if requested
+    if output_csv and all_vulnerabilities:
+        csv_file = save_results_to_csv(all_vulnerabilities)
+        if csv_file:
+            print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
+    elif output_csv and not all_vulnerabilities:
+        print("[*] No vulnerabilities to save to CSV.")
+    
+    print(f"\n{Colors.BRIGHT_GREEN}[*] Streaming scan completed.{Colors.RESET}")
+
+async def resume_streaming_scan(state_manager, raw_targets, concurrency, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000):
+    """
+    Resume a streaming scan from saved state.
+    """
+    print(f"{Colors.CYAN}[*] Resuming streaming scan...{Colors.RESET}")
+    
+    # Get previously processed chunks from state
+    completed_chunks = state_manager.state.get("completed_chunks", 0)
+    all_vulnerabilities = state_manager.get_vulnerabilities()
+    
+    print(f"{Colors.CYAN}[*] Previously completed {completed_chunks} chunks with {len(all_vulnerabilities)} vulnerabilities found{Colors.RESET}")
+    
+    # Calculate total IPs for progress tracking
+    total_ips = 0
+    for target in raw_targets:
+        if not target or target.startswith('#'):
+            continue
+        try:
+            import ipaddress
+            network = ipaddress.ip_network(target, strict=False)
+            total_ips += network.num_addresses
+        except:
+            total_ips += 1
+    
+    total_chunks = (total_ips + chunk_size - 1) // chunk_size
+    print(f"{Colors.CYAN}[*] Resuming streaming scan: {total_ips:,} total IPs across {total_chunks} chunks (chunk size: {chunk_size:,}){Colors.RESET}")
+    
+    # Define service ports
+    service_ports = get_service_ports()
+    if module_filter:
+        print(f"{Colors.YELLOW}[*] Module filter: Scanning only {module_filter.capitalize()} services{Colors.RESET}")
+        service_ports = {module_filter: service_ports.get(module_filter, [])}
+    
+    all_ports_to_scan = [port for ports in service_ports.values() for port in ports]
+    if custom_ports:
+        try:
+            custom_port_list = [int(port.strip()) for port in custom_ports.split(',')]
+            all_ports_to_scan.extend(custom_port_list)
+            all_ports_to_scan = list(set(all_ports_to_scan))
+            print(f"{Colors.YELLOW}[*] Added custom ports: {custom_port_list}{Colors.RESET}")
+        except ValueError as e:
+            print(f"{Colors.RED}[!] Error parsing custom ports: {e}. Ignoring custom ports.{Colors.RESET}")
+    
+    chunk_count = completed_chunks
+    processed_ips = chunk_count * chunk_size  # Approximate
+    skipped_ips = 0
+    
+    try:
+        # Process targets in streaming chunks, skipping already completed ones
+        async for ip_chunk in process_targets_streaming(raw_targets, chunk_size):
+            chunk_count += 1
+            
+            # Skip already processed chunks
+            if chunk_count <= completed_chunks:
+                skipped_ips += len(ip_chunk)
+                continue
+                
+            processed_ips = skipped_ips + len(ip_chunk)
+            
+            print(f"\n{Colors.BRIGHT_CYAN}=== Processing Chunk {chunk_count}/{total_chunks} ({len(ip_chunk):,} IPs) ==={Colors.RESET}")
+            print(f"{Colors.CYAN}[*] Overall Progress: {processed_ips:,}/{total_ips:,} IPs ({processed_ips/total_ips*100:.1f}%) | Remaining: {total_ips-processed_ips:,} IPs{Colors.RESET}")
+            
+            # Scan this chunk
+            total_combinations = len(ip_chunk) * len(all_ports_to_scan)
+            print(f"{Colors.CYAN}[*] Scanning chunk {chunk_count}: {len(ip_chunk):,} IPs across {len(all_ports_to_scan)} ports ({total_combinations:,} combinations){Colors.RESET}")
+            open_ports_results = await scan_ports(ip_chunk, all_ports_to_scan, concurrency, state_manager)
+            
+            # Process any found services and run vulnerability scans
+            chunk_vulnerabilities = await process_chunk_services(open_ports_results, service_ports, module_filter, custom_ports)
+            all_vulnerabilities.extend(chunk_vulnerabilities)
+            
+            # Update state with completed chunk
+            state_manager.state["completed_chunks"] = chunk_count
+            for vuln in chunk_vulnerabilities:
+                state_manager.add_vulnerability(vuln)
+            state_manager.save_state()
+            
+            remaining_chunks = total_chunks - chunk_count
+            print(f"{Colors.GREEN}[+] Chunk {chunk_count}/{total_chunks} completed. Found {len(chunk_vulnerabilities)} new vulnerabilities ({len(all_vulnerabilities)} total). {remaining_chunks} chunks remaining.{Colors.RESET}")
+    
+    except KeyboardInterrupt:
+        print(f"\n[!] Streaming scan interrupted. Processed {chunk_count}/{total_chunks} chunks ({processed_ips:,}/{total_ips:,} IPs).")
+        state_manager.save_state()
+        
+    # Print final results
+    await print_final_results(all_vulnerabilities, output_csv)
+    state_manager.mark_completed()
+    return all_vulnerabilities
+
 if __name__ == "__main__":
     # Show logo if no arguments or help is requested
     if len(sys.argv) == 1:
@@ -367,10 +675,12 @@ if __name__ == "__main__":
                         help="Scan only specific service module (default: all modules)")
     parser.add_argument("-p", "--ports", type=str, 
                         help="Additional custom ports to scan (comma-separated, e.g., 8080,8443,9999)")
+    parser.add_argument("--chunk-size", type=int, default=30000,
+                        help="Number of IPs to process per chunk in streaming mode (default: 30000, auto-enabled for 30k+ IPs)")
     args = parser.parse_args()
 
     try:
-        asyncio.run(main(args.targets_file, args.concurrency, args.resume, args.csv, args.module, args.ports))
+        asyncio.run(main(args.targets_file, args.concurrency, args.resume, args.csv, args.module, args.ports, args.chunk_size))
     except KeyboardInterrupt:
         print("\n[*] Scanner terminated by user.")
         sys.exit(0)

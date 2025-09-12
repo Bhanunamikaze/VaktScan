@@ -118,32 +118,44 @@ async def validate_prometheus(ip, port, timeout=5):
     for protocol in protocols:
         try:
             async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
-                # Try main Prometheus page
+                # Try main Prometheus page - look for specific Prometheus indicators
                 response = await client.get(f"{protocol}://{ip}:{port}/")
                 if response.status_code == 200:
                     content = response.text.lower()
-                    if 'prometheus' in content:
+                    # More specific check - look for Prometheus-specific content
+                    if 'prometheus time series database' in content or 'prometheus server' in content:
                         return True
                 
-                # Try metrics endpoint
+                # Try metrics endpoint - most reliable Prometheus indicator
                 response = await client.get(f"{protocol}://{ip}:{port}/metrics")
                 if response.status_code == 200:
                     content = response.text
-                    if 'prometheus_' in content or 'TYPE' in content:
+                    # Look for Prometheus-specific metrics format and actual prometheus_ metrics
+                    if ('prometheus_' in content and '# HELP' in content and '# TYPE' in content) or \
+                       ('# HELP prometheus_' in content):
                         return True
                 
-                # Try API query endpoint
+                # Try API query endpoint - Prometheus-specific API
                 response = await client.get(f"{protocol}://{ip}:{port}/api/v1/query?query=up")
                 if response.status_code == 200:
                     content = response.text.lower()
-                    if 'resulttype' in content or 'metric' in content:
+                    # Look for Prometheus-specific JSON response structure
+                    if '"status":"success"' in content and '"resulttype":"' in content and '"data":{' in content:
                         return True
                 
-                # Try graph endpoint
+                # Try graph endpoint - Prometheus web UI
                 response = await client.get(f"{protocol}://{ip}:{port}/graph")
                 if response.status_code == 200:
                     content = response.text.lower()
-                    if 'prometheus' in content:
+                    # Look for Prometheus-specific UI elements
+                    if 'prometheus graph' in content or 'prometheus expression browser' in content:
+                        return True
+                
+                # Try config endpoint - Prometheus-specific
+                response = await client.get(f"{protocol}://{ip}:{port}/api/v1/status/config")
+                if response.status_code == 200:
+                    content = response.text.lower()
+                    if 'scrape_configs' in content or 'global:' in content:
                         return True
         except:
             continue

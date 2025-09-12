@@ -122,7 +122,7 @@ class ScanStateManager:
         if not self._shutdown:
             # Always save current state (not just when pending)
             self.save_state(force=True)
-            print(f"[*] State checkpoint saved at {time.strftime('%H:%M:%S')}")
+            print(f"\n\033[92m[*] State checkpoint saved at {time.strftime('%H:%M:%S')}\033[0m")
         
         # Schedule next save in 2 minutes
         self._start_background_saver()

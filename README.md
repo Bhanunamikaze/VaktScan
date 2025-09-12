@@ -2,7 +2,7 @@
 
 > **VaktScan** (*pronounced "vahkt-scan"*) - Named after the Nordic word "vakt" meaning "guard" or "watch", representing the vigilant nature of security monitoring.
 
-An advanced, high-performance security scanner designed for comprehensive vulnerability assessment of monitoring and logging infrastructure stacks. VaktScan provides enterprise-grade scanning capabilities with concurrent processing and extensive CVE coverage.
+An advanced, high-performance security scanner designed for comprehensive vulnerability assessment of monitoring and logging infrastructure stacks. VaktScan provides enterprise-grade scanning capabilities with concurrent processing, extensive CVE coverage, and can efficiently scan millions of IP addresses using intelligent streaming technology.
 
 
 ##  Features
@@ -20,14 +20,13 @@ An advanced, high-performance security scanner designed for comprehensive vulner
 - **Severity Classification**: CRITICAL, HIGH, MEDIUM risk categorization with detailed descriptions
 - **Active Payload Testing**: Exploitation attempts for vulnerability confirmation
 - **Service Validation**: Ensures accurate service identification before scanning
-- **SSL/TLS Support**: Handles both secure and insecure connections with proper certificate handling
 
 ###  High-Performance Architecture
 - **Multi-target Support**: IPs, hostnames, domains, and CIDR subnets
 - **Concurrent Processing**: Asyncio-based high-concurrency scanning (configurable up to 2000+ threads)
-- **Smart State Management**: Resume interrupted scans with 2-minute checkpoint intervals
-- **Real-time Progress**: Live scanning progress with ETA and rate calculations
-- **Modular Design**: Easily extensible for new services and vulnerability checks
+- **Streaming Technology**: Memory-efficient scanning of millions of IPs using intelligent chunking (30k IPs per chunk)
+- **Smart State Management**: Resume interrupted scans with 2-minute checkpoint intervals and chunk-level progress tracking
+- **Real-time Progress**: Live scanning progress with ETA, rate calculations, and overall completion status
 
 ###  Professional Reporting
 - **CSV Export**: Enterprise-ready reports with timestamps, severity, and detailed findings
@@ -57,8 +56,9 @@ VaktScan/
 
 - **Python**: 3.8+ (tested on 3.8, 3.9, 3.10, 3.11)
 - **Dependencies**: All bundled in `vendor/` directory (no external installation required)
-- **Memory**: ~50MB RAM per 1000 concurrent connections
+- **Memory**: ~50MB RAM per 1000 concurrent connections (streaming mode uses minimal memory regardless of target count)
 - **Network**: Raw socket access for port scanning
+- **Scalability**: Can scan millions of IP addresses efficiently using streaming chunks
 
 ##  Quick Start
 
@@ -66,6 +66,7 @@ VaktScan/
 ```bash
 git clone https://github.com/Bhanunamikaze/VaktScan.git
 cd VaktScan
+pip install httpx --target=./vendor
 ```
 
 ### 2. Create Targets File
@@ -81,11 +82,11 @@ kibana.internal.com
 
 ### 3. Run Scanner
 ```bash
-# Basic scan
+# Basic scan (auto-detects streaming mode for large target sets)
 python main.py targets.txt
 
 # High-concurrency scan
-python main.py targets.txt -c 500
+python main.py targets.txt -c 1000
 
 # Resume interrupted scan
 python main.py targets.txt --resume
@@ -96,24 +97,26 @@ python main.py targets.txt -m elasticsearch
 # Add custom ports to scan
 python main.py targets.txt -p 8080,8443,9999
 
-# Combined options
-python main.py targets.txt -m grafana -p 3001,3002 -c 200
+# Configure chunk size for streaming mode (default: 30,000 IPs)
+python main.py targets.txt --chunk-size 50000
+
+# Combined options for large-scale scanning
+python main.py targets.txt -m grafana -p 3001,3002 -c 1000 --chunk-size 25000
 ```
 
 ##  Sample Output
 
+### Small-Scale Scan
 ```
 [*] Starting VaktScan - Nordic Security Scanner...
 [*] Parsing targets from targets.txt...
 [+] Successfully resolved 1,250 unique IP addresses.
 [*] Starting concurrent port scan for 1,250 IPs across 8 unique ports...
-[*] Progress: 1,250/10,000 (12.5%) | Rate: 892.3 scans/sec | ETA: 10s
+[*] Progress: 8,750/10,000 (87.5%) | Rate: 892.3 scans/sec | ETA: 1s
 [*] Port scanning completed. Found 45 open ports across 12 services.
 [*] Validated 12 service(s). Starting VaktScan vulnerability assessment...
   -> Running Elasticsearch scans on http://192.168.1.100:9200
   -> Running Grafana scans on http://192.168.1.102:3000
-  -> Running Elasticsearch scans on https://192.168.1.100:9200
-  -> Running Grafana scans on https://192.168.1.102:3000
 
 [CRITICAL] CVE-2021-44228 - Log4Shell RCE | http://192.168.1.100:9200
 [HIGH] CVE-2018-17246 - Kibana File Read | http://192.168.1.101:5601
@@ -121,6 +124,26 @@ python main.py targets.txt -m grafana -p 3001,3002 -c 200
 
 [+] Scan completed. Found 8 vulnerabilities across 3 severity levels.
 [+] Results saved to scan_results_20250910_143022.csv
+```
+
+### Large-Scale Streaming Scan
+```
+[*] Starting VaktScan - Nordic Security Scanner...
+[*] Large target set detected (705,560+ IPs) - using streaming mode
+[*] Starting streaming scan: 705,560 total IPs across 24 chunks (chunk size: 30,000)
+
+=== Processing Chunk 1/24 (30,000 IPs) ===
+[*] Overall Progress: 30,000/705,560 IPs (4.3%) | Remaining: 675,560 IPs
+[*] Scanning chunk 1: 30,000 IPs across 11 ports (330,000 combinations)
+[*] Progress: 165,000/330,000 (50.0%) | Rate: 1,247.3 scans/sec | ETA: 132s
+
+[*] State checkpoint saved at 14:32:15
+
+[+] Chunk 1/24 completed. Found 3 new vulnerabilities (3 total). 23 chunks remaining.
+
+=== Processing Chunk 2/24 (30,000 IPs) ===
+[*] Overall Progress: 60,000/705,560 IPs (8.5%) | Remaining: 645,560 IPs
+...
 ```
 
 ## 🔧 Configuration Options
@@ -136,7 +159,14 @@ Options:
   -m, --module SERVICE    Scan only specific service module:
                           elasticsearch, kibana, grafana, prometheus
   -p, --ports PORTS       Additional custom ports to scan (comma-separated)
+  --chunk-size INT        Number of IPs per chunk in streaming mode (default: 30000)
   -h, --help              Show help message
+
+Streaming Mode:
+  • Automatically enabled for scans with 30,000+ IP addresses
+  • Processes targets in memory-efficient chunks
+  • Supports resumable scanning with chunk-level progress tracking
+  • Ideal for scanning large CIDR ranges and enterprise networks
 ```
 
 ### Target File Format
@@ -149,9 +179,15 @@ Options:
 grafana.company.com
 kibana.internal.net
 
-# CIDR subnets
+# CIDR subnets (supports any size - from /32 to /8)
 192.168.0.0/24
 10.0.0.0/16
+172.16.0.0/12
+
+# Large enterprise networks (streaming mode auto-enabled)
+203.0.113.0/24
+198.51.100.0/24
+# Multiple /16 networks totaling 1M+ IPs
 
 # URLs (protocol and port extracted automatically)  
 http://monitoring.example.com:3000
