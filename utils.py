@@ -91,6 +91,7 @@ async def process_targets_streaming(raw_targets, chunk_size=30000):
         resolution_tasks = [resolve_hostname(h) for h in hostname_targets]
         resolved_results = await asyncio.gather(*resolution_tasks)
 
+        unresolved_count = 0
         for hostname, resolved_ip in zip(hostname_targets, resolved_results):
             if resolved_ip and resolved_ip not in processed_ips:
                 # Add target object for the hostname
@@ -114,7 +115,11 @@ async def process_targets_streaming(raw_targets, chunk_size=30000):
                     yield current_chunk
                     current_chunk = []
             elif not resolved_ip:
-                print(f"[!] Could not resolve hostname: {hostname}")
+                unresolved_count += 1
+                # print(f"[!] Could not resolve hostname: {hostname}")
+        
+        if unresolved_count > 0:
+            print(f"[!] Could not resolve {unresolved_count} hostnames.")
 
     if current_chunk:
         yield current_chunk
