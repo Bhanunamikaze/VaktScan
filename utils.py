@@ -8,8 +8,9 @@ def get_service_ports():
     return {
         "elasticsearch": [9200, 9300],
         "kibana": [5601],
-        "grafana": [3000,3003],
-        "prometheus": [9090, 9100,9101,9102,9103,9104] # Includes node_exporter and other common exporters
+        "grafana": [3000, 3003],
+        "prometheus": [9090, 9100, 9101, 9102, 9103, 9104],
+        "nextjs": [3000, 80, 443, 8080] # Common ports for Next.js applications (React_To_Shell)
     }
 
 async def resolve_hostname(hostname):
@@ -28,101 +29,114 @@ async def resolve_hostname(hostname):
 
 async def process_targets_streaming(raw_targets, chunk_size=30000):
     """
-    Processes targets in streaming fashion to avoid memory exhaustion.
-    Yields chunks of exactly chunk_size IPs (except the last chunk).
+    Processes targets in a streaming fashion.
+    Yields chunks of target objects, where each object contains:
+    - 'scan_address': The address to scan (hostname or IP).
+    - 'display_target': The original target for reporting.
+    - 'resolved_ip': The resolved IP for state management.
     """
     print(f"[*] Processing targets with chunk size: {chunk_size:,}")
-    
+
     current_chunk = []
     total_processed = 0
-    resolution_tasks = []
-    
+    processed_ips = set()
+    hostname_targets = []
+
     for target in raw_targets:
         if not target or target.startswith('#'):
             continue
-        
-        # Check if it's a CIDR notation
+
         try:
             network = ipaddress.ip_network(target, strict=False)
-            network_size = network.num_addresses
-            
-            # Warn for large networks but process them
-            if network_size > 65536:  # Warn for /15 and larger
-                print(f"[*] Processing very large network {target} ({network_size:,} IPs)")
-            elif network_size > 8192:  # Warn for /19 and larger
-                print(f"[*] Processing large network {target} ({network_size:,} IPs)")
-            
-            # Add all IPs from this network to our current chunk, yielding full chunks as needed
+            if network.num_addresses > 65536:
+                print(f"[*] Processing very large network {target} ({network.num_addresses:,} IPs)")
+
             for ip in network.hosts():
-                current_chunk.append(str(ip))
-                total_processed += 1
-                
-                # Yield when we hit the chunk size
-                if len(current_chunk) >= chunk_size:
-                    yield current_chunk
-                    current_chunk = []
-            
-            # Handle single IP networks (like /32)
-            if network.num_addresses == 1:
-                current_chunk.append(str(network.network_address))
-                total_processed += 1
-                
-                if len(current_chunk) >= chunk_size:
-                    yield current_chunk
-                    current_chunk = []
+                ip_str = str(ip)
+                if ip_str not in processed_ips:
+                    current_chunk.append({
+                        "scan_address": ip_str,
+                        "display_target": ip_str,
+                        "resolved_ip": ip_str
+                    })
+                    processed_ips.add(ip_str)
+                    total_processed += 1
+                    if len(current_chunk) >= chunk_size:
+                        yield current_chunk
+                        current_chunk = []
             continue
-            
         except ValueError:
-            pass # Not a valid CIDR, proceed to next checks
+            pass
 
-        # Check if it's a valid IP address
         try:
-            ipaddress.ip_address(target)
-            current_chunk.append(target)
-            total_processed += 1
-            if len(current_chunk) >= chunk_size:
-                yield current_chunk
-                current_chunk = []
-            continue
-        except ValueError:
-            pass # Not a valid IP, assume it's a hostname
-
-        # If not CIDR or IP, assume it's a hostname and schedule for resolution
-        resolution_tasks.append(resolve_hostname(target))
-    
-    # Process any remaining hostnames
-    if resolution_tasks:
-        print(f"[*] Resolving {len(resolution_tasks)} hostnames...")
-        resolved_ips = await asyncio.gather(*resolution_tasks)
-        for ip in resolved_ips:
-            if ip:
-                current_chunk.append(ip)
+            ip_addr = ipaddress.ip_address(target)
+            ip_str = str(ip_addr)
+            if ip_str not in processed_ips:
+                current_chunk.append({
+                    "scan_address": ip_str,
+                    "display_target": ip_str,
+                    "resolved_ip": ip_str
+                })
+                processed_ips.add(ip_str)
                 total_processed += 1
                 if len(current_chunk) >= chunk_size:
                     yield current_chunk
                     current_chunk = []
-    
-    # Yield any remaining IPs in the final chunk
+            continue
+        except ValueError:
+            hostname_targets.append(target)
+
+    if hostname_targets:
+        print(f"[*] Resolving {len(hostname_targets)} hostnames...")
+        resolution_tasks = [resolve_hostname(h) for h in hostname_targets]
+        resolved_results = await asyncio.gather(*resolution_tasks)
+
+        for hostname, resolved_ip in zip(hostname_targets, resolved_results):
+            if resolved_ip and resolved_ip not in processed_ips:
+                # Add target object for the hostname
+                current_chunk.append({
+                    "scan_address": hostname,
+                    "display_target": hostname,
+                    "resolved_ip": resolved_ip
+                })
+                total_processed += 1
+
+                # Add target object for the resolved IP
+                current_chunk.append({
+                    "scan_address": resolved_ip,
+                    "display_target": hostname,
+                    "resolved_ip": resolved_ip
+                })
+                processed_ips.add(resolved_ip)
+                total_processed += 1
+
+                if len(current_chunk) >= chunk_size:
+                    yield current_chunk
+                    current_chunk = []
+            elif not resolved_ip:
+                print(f"[!] Could not resolve hostname: {hostname}")
+
     if current_chunk:
         yield current_chunk
-    
-    print(f"[+] Total IPs processed: {total_processed:,}")
+
+    print(f"[+] Total scan targets generated: {total_processed:,}")
+
 
 async def process_targets(raw_targets):
     """
-    Legacy function for backward compatibility.
-    Now uses streaming processing with safety limits.
+    Processes a list of targets (hostnames, IPs, CIDRs) and returns a list of target objects.
+    Each object contains 'scan_address', 'display_target', and 'resolved_ip'.
     """
-    all_ips = set()
+    all_targets = []
     total_count = 0
     
-    async for ip_chunk in process_targets_streaming(raw_targets, chunk_size=1000):
-        all_ips.update(ip_chunk)
-        total_count += len(ip_chunk)
+    async for target_chunk in process_targets_streaming(raw_targets, chunk_size=1000):
+        all_targets.extend(target_chunk)
+        total_count += len(target_chunk)
         
-        # Safety limit to prevent system freeze
+        # Safety limit
         if total_count > 50000:
-            print(f"[!] Hit safety limit of 50,000 IPs. Use streaming mode for larger scans.")
+            print(f"[!] Hit safety limit of 50,000 targets. Use streaming mode for larger scans.")
             break
-    
-    return list(all_ips)
+            
+    return all_targets

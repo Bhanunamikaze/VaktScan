@@ -12,8 +12,10 @@ An advanced, high-performance security scanner designed for comprehensive vulner
 - **Kibana**: CVE testing (CVE-2018-17246, CVE-2019-7609), UI exposure detection, default credentials, API enumeration
 - **Grafana**: 18+ CVEs, default credentials, directory traversal, XSS vulnerabilities, comprehensive CVE database
 - **Prometheus**: Dashboard exposure, configuration leaks, target enumeration, Node Exporter analysis, pprof endpoints
+- **Next.js (React)**: RCE detection for `react-to-shell` (CVE-2025-55182).
 
 ###  Advanced Vulnerability Detection
+- **Smart Vulnerability Deduplication**: If the same vulnerability is discovered on both a hostname and its corresponding IP, the scanner now treats it as a single finding and reports it against the hostname, providing cleaner and more actionable reports.
 - **30+ CVE Database**: Comprehensive vulnerability coverage with payload testing
 - **Dual Protocol Support**: Automated HTTP and HTTPS testing for complete coverage
 - **Version-Based Detection**: Custom version parsing and vulnerability mapping without external dependencies
@@ -22,6 +24,8 @@ An advanced, high-performance security scanner designed for comprehensive vulner
 - **Service Validation**: Ensures accurate service identification before scanning
 
 ###  High-Performance Architecture
+- **Dual Hostname & IP Scanning**: When a hostname is provided as a target, VaktScan now intelligently scans both the hostname and its resolved IP address, ensuring comprehensive coverage.
+- **Concurrent DNS Resolution**: The target processing engine has been refactored to resolve all hostnames concurrently, dramatically reducing the initial setup time for scans involving many hostname targets.
 - **Multi-target Support**: IPs, hostnames, domains, and CIDR subnets
 - **Concurrent Processing**: Asyncio-based high-concurrency scanning (configurable up to 2000+ threads)
 - **Streaming Technology**: Memory-efficient scanning of millions of IPs using intelligent chunking (30k IPs per chunk)
@@ -49,7 +53,8 @@ VaktScan/
     ├── elastic.py         # Elasticsearch scanner (11+ CVEs)
     ├── kibana.py          # Kibana scanner (4 CVEs + API testing)
     ├── grafana.py         # Grafana scanner (18+ CVEs)
-    └── prometheus.py      # Prometheus scanner (3 CVEs + metrics analysis)
+    ├── prometheus.py      # Prometheus scanner (3 CVEs + metrics analysis)
+    └── react_to_shell.py  # Next.js (React) RCE scanner
 ```
 
 ##  Requirements

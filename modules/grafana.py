@@ -3,7 +3,7 @@ import asyncio
 import json
 import re
 
-async def detect_protocol(ip, port, timeout=3):
+async def detect_protocol(scan_address, port, timeout=3):
     """
     Detects whether a service is running on HTTP or HTTPS.
     Returns the protocol string ('http' or 'https') or None if unreachable.
@@ -13,7 +13,7 @@ async def detect_protocol(ip, port, timeout=3):
     for protocol in protocols:
         try:
             async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
-                response = await client.get(f"{protocol}://{ip}:{port}/")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/")
                 if response.status_code in [200, 401, 403, 302, 404]:  # Any valid HTTP response
                     return protocol
         except:
@@ -826,58 +826,62 @@ async def check_additional_cves(target_url, version_info=None):
     
     return vulnerabilities
 
-async def run_scans(ip, port):
-    """Runs all defined Grafana scans against a target."""
-    # Test both HTTP and HTTPS protocols
-    protocols = ['http', 'https']
+async def run_scans(target_obj, port):
+    """Runs all defined Grafana scans against a target object."""
+    scan_address = target_obj['scan_address']
+    display_target = target_obj['display_target']
+    resolved_ip = target_obj['resolved_ip']
+    
     all_results = []
     
-    for protocol in protocols:
-        target_url = f"{protocol}://{ip}:{port}"
-        print(f"  -> Running Grafana scans on {target_url}")
-        
-        # Get version information first to verify connectivity
-        version_info = await get_grafana_version(target_url)
-        service_version = version_info.get('number', 'Unknown') if version_info else 'Unknown'
-        
-        # Skip this protocol if we can't connect
-        if not version_info:
+    protocol = await detect_protocol(scan_address, port)
+    if not protocol:
+        return []
+
+    target_url = f"{protocol}://{scan_address}:{port}"
+    print(f"  -> Running Grafana scans on {target_url} (for target: {display_target})")
+    
+    version_info = await get_grafana_version(target_url)
+    service_version = version_info.get('number', 'Unknown') if version_info else 'Unknown'
+    
+    if not version_info:
+        return []
+
+    tasks = [
+        check_default_credentials(target_url),
+        check_unauthenticated_access(target_url),
+        check_information_disclosure(target_url),
+        check_additional_cves(target_url, version_info),
+        check_cve_vulnerabilities(target_url)
+    ]
+    
+    results_from_tasks = await asyncio.gather(*tasks)
+    
+    for result_group in results_from_tasks:
+        if not result_group:
             continue
         
-        # Run basic checks concurrently for this protocol
-        tasks = [
-            check_default_credentials(target_url),
-            check_unauthenticated_access(target_url),
-            check_information_disclosure(target_url),
-            check_additional_cves(target_url, version_info)
-        ]
-        check_results = await asyncio.gather(*tasks)
-        
-        for res in check_results:
-            if res:
-                if isinstance(res, list):
-                    # Handle list of vulnerabilities
-                    for vuln in res:
-                        vuln['module'] = 'Grafana'
-                        vuln['service_version'] = service_version
-                        vuln['server'] = ip
-                        vuln['port'] = port
-                    all_results.extend(res)
-                else:
-                    # Handle single vulnerability
-                    res['module'] = 'Grafana'
-                    res['service_version'] = service_version
-                    res['server'] = ip
-                    res['port'] = port
+        if isinstance(result_group, list):
+            for res in result_group:
+                if res:
+                    res.update({
+                        'module': 'Grafana',
+                        'service_version': service_version,
+                        'target': display_target,
+                        'server': scan_address,
+                        'port': port,
+                        'resolved_ip': resolved_ip
+                    })
                     all_results.append(res)
-        
-        # Run comprehensive CVE checks for this protocol
-        cve_results = await check_cve_vulnerabilities(target_url)
-        for cve_result in cve_results:
-            cve_result['module'] = 'Grafana'
-            cve_result['service_version'] = service_version
-            cve_result['server'] = ip
-            cve_result['port'] = port
-            all_results.append(cve_result)
-    
+        elif isinstance(result_group, dict):
+            result_group.update({
+                'module': 'Grafana',
+                'service_version': service_version,
+                'target': display_target,
+                'server': scan_address,
+                'port': port,
+                'resolved_ip': resolved_ip
+            })
+            all_results.append(result_group)
+            
     return all_results

@@ -7,9 +7,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
 
 import httpx
 
-async def validate_elasticsearch(ip, port, timeout=5):
+async def validate_elasticsearch(scan_address, port, timeout=5):
     """
-    Validates if Elasticsearch is running on the given IP:port.
+    Validates if Elasticsearch is running on the given address:port.
     Checks both HTTP and HTTPS protocols.
     Returns True if Elasticsearch is detected, False otherwise.
     """
@@ -19,14 +19,14 @@ async def validate_elasticsearch(ip, port, timeout=5):
         try:
             async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
                 # Try root endpoint
-                response = await client.get(f"{protocol}://{ip}:{port}/")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/")
                 if response.status_code == 200:
                     content = response.text.lower()
                     if '"cluster_name"' in content or '"tagline"' in content and 'elasticsearch' in content:
                         return True
                 
                 # Try _cluster/health endpoint
-                response = await client.get(f"{protocol}://{ip}:{port}/_cluster/health")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/_cluster/health")
                 if response.status_code == 200:
                     content = response.text.lower()
                     if 'cluster_name' in content or 'status' in content:
@@ -35,9 +35,9 @@ async def validate_elasticsearch(ip, port, timeout=5):
             continue
     return False
 
-async def validate_kibana(ip, port, timeout=5):
+async def validate_kibana(scan_address, port, timeout=5):
     """
-    Validates if Kibana is running on the given IP:port.
+    Validates if Kibana is running on the given address:port.
     Checks both HTTP and HTTPS protocols.
     Returns True if Kibana is detected, False otherwise.
     """
@@ -47,30 +47,30 @@ async def validate_kibana(ip, port, timeout=5):
         try:
             async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
                 # Try main Kibana page
-                response = await client.get(f"{protocol}://{ip}:{port}/")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/")
                 if response.status_code == 200:
                     content = response.text.lower()
                     if 'kibana' in content or 'elastic' in content:
                         return True
                 
                 # Try API status endpoint
-                response = await client.get(f"{protocol}://{ip}:{port}/api/status")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/api/status")
                 if response.status_code == 200:
                     content = response.text.lower()
                     if 'kibana' in content or 'version' in content:
                         return True
                 
                 # Try app/kibana endpoint
-                response = await client.get(f"{protocol}://{ip}:{port}/app/kibana")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/app/kibana")
                 if response.status_code in [200, 302]:
                     return True
         except:
             continue
     return False
 
-async def validate_grafana(ip, port, timeout=5):
+async def validate_grafana(scan_address, port, timeout=5):
     """
-    Validates if Grafana is running on the given IP:port.
+    Validates if Grafana is running on the given address:port.
     Checks both HTTP and HTTPS protocols.
     Returns True if Grafana is detected, False otherwise.
     """
@@ -80,21 +80,21 @@ async def validate_grafana(ip, port, timeout=5):
         try:
             async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
                 # Try main Grafana page
-                response = await client.get(f"{protocol}://{ip}:{port}/")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/")
                 if response.status_code == 200:
                     content = response.text.lower()
                     if 'grafana' in content:
                         return True
                 
                 # Try login page
-                response = await client.get(f"{protocol}://{ip}:{port}/login")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/login")
                 if response.status_code == 200:
                     content = response.text.lower()
                     if 'grafana' in content:
                         return True
                 
                 # Try API health endpoint
-                response = await client.get(f"{protocol}://{ip}:{port}/api/health")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/api/health")
                 if response.status_code == 200:
                     content = response.text.lower()
                     if 'database' in content or 'commit' in content:
@@ -107,9 +107,9 @@ async def validate_grafana(ip, port, timeout=5):
             continue
     return False
 
-async def validate_prometheus(ip, port, timeout=5):
+async def validate_prometheus(scan_address, port, timeout=5):
     """
-    Validates if Prometheus is running on the given IP:port.
+    Validates if Prometheus is running on the given address:port.
     Checks both HTTP and HTTPS protocols.
     Returns True if Prometheus is detected, False otherwise.
     """
@@ -119,7 +119,7 @@ async def validate_prometheus(ip, port, timeout=5):
         try:
             async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
                 # Try main Prometheus page - look for specific Prometheus indicators
-                response = await client.get(f"{protocol}://{ip}:{port}/")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/")
                 if response.status_code == 200:
                     content = response.text.lower()
                     # More specific check - look for Prometheus-specific content
@@ -127,7 +127,7 @@ async def validate_prometheus(ip, port, timeout=5):
                         return True
                 
                 # Try metrics endpoint - most reliable Prometheus indicator
-                response = await client.get(f"{protocol}://{ip}:{port}/metrics")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/metrics")
                 if response.status_code == 200:
                     content = response.text
                     # Look for Prometheus-specific metrics format and actual prometheus_ metrics
@@ -136,7 +136,7 @@ async def validate_prometheus(ip, port, timeout=5):
                         return True
                 
                 # Try API query endpoint - Prometheus-specific API
-                response = await client.get(f"{protocol}://{ip}:{port}/api/v1/query?query=up")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/api/v1/query?query=up")
                 if response.status_code == 200:
                     content = response.text.lower()
                     # Look for Prometheus-specific JSON response structure
@@ -144,7 +144,7 @@ async def validate_prometheus(ip, port, timeout=5):
                         return True
                 
                 # Try graph endpoint - Prometheus web UI
-                response = await client.get(f"{protocol}://{ip}:{port}/graph")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/graph")
                 if response.status_code == 200:
                     content = response.text.lower()
                     # Look for Prometheus-specific UI elements
@@ -152,7 +152,7 @@ async def validate_prometheus(ip, port, timeout=5):
                         return True
                 
                 # Try config endpoint - Prometheus-specific
-                response = await client.get(f"{protocol}://{ip}:{port}/api/v1/status/config")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/api/v1/status/config")
                 if response.status_code == 200:
                     content = response.text.lower()
                     if 'scrape_configs' in content or 'global:' in content:
@@ -161,19 +161,45 @@ async def validate_prometheus(ip, port, timeout=5):
             continue
     return False
 
-async def validate_service(service, ip, port):
+async def validate_nextjs(scan_address, port, timeout=5):
     """
-    Validates if a specific service is running on the given IP:port.
+    Validates if a Next.js application is running on the given address:port.
+    """
+    protocols = ['http', 'https']
+    for protocol in protocols:
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+                response = await client.get(f"{protocol}://{scan_address}:{port}/")
+                
+                # Check for x-powered-by header
+                if 'next.js' in response.headers.get('x-powered-by', '').lower():
+                    return True
+
+                # Check for common Next.js patterns in the body
+                if '/_next/' in response.text:
+                    return True
+                
+                if 'react-dom' in response.text:
+                    return True
+
+        except:
+            continue
+    return False
+
+async def validate_service(service, scan_address, port):
+    """
+    Validates if a specific service is running on the given address:port.
     Returns True if the service is detected, False otherwise.
     """
     validators = {
         'elasticsearch': validate_elasticsearch,
         'kibana': validate_kibana,
         'grafana': validate_grafana,
-        'prometheus': validate_prometheus
+        'prometheus': validate_prometheus,
+        'nextjs': validate_nextjs
     }
     
     validator = validators.get(service)
     if validator:
-        return await validator(ip, port)
+        return await validator(scan_address, port)
     return False

@@ -3,7 +3,7 @@ import asyncio
 import json
 import re
 
-async def detect_protocol(ip, port, timeout=3):
+async def detect_protocol(scan_address, port, timeout=3):
     """
     Detects whether a service is running on HTTP or HTTPS.
     Returns the protocol string ('http' or 'https') or None if unreachable.
@@ -13,7 +13,7 @@ async def detect_protocol(ip, port, timeout=3):
     for protocol in protocols:
         try:
             async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
-                response = await client.get(f"{protocol}://{ip}:{port}/")
+                response = await client.get(f"{protocol}://{scan_address}:{port}/")
                 if response.status_code in [200, 401, 403, 302, 404]:  # Any valid HTTP response
                     return protocol
         except:
@@ -68,35 +68,6 @@ CVE_DATABASE = {
             "method": "POST",
             "data": {
                 "query": "SELECT * FROM library ORDER BY page_count DESC"
-            }
-        }
-    },
-    "CVE-2024-23450": {
-        "description": "Document processing in deeply nested pipeline causes node crash", 
-        "severity": "MEDIUM",
-        "affected_versions": [">=7.0.0,<7.17.19", ">=8.0.0,<8.13.0"],
-        "payload": {
-            "path": "/_ingest/pipeline/test",
-            "method": "PUT",
-            "data": {
-                "processors": [
-                    {
-                        "foreach": {
-                            "field": "nested",
-                            "processor": {
-                                "foreach": {
-                                    "field": "_ingest._value.nested2",
-                                    "processor": {
-                                        "set": {
-                                            "field": "_ingest._value.processed",
-                                            "value": True
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                ]
             }
         }
     },
@@ -308,7 +279,6 @@ VERSION_VULNERABILITIES = {
         ]
     }
 }
-
 async def get_elasticsearch_version(target_url):
     """Extract Elasticsearch version from multiple API endpoints."""
     version_info = {}
@@ -659,49 +629,62 @@ async def check_sensitive_paths(target_url):
     return None
 
 
-async def run_scans(ip, port):
-    """Runs all defined Elasticsearch scans against a target."""
-    # Test both HTTP and HTTPS protocols
-    protocols = ['http', 'https']
+async def run_scans(target_obj, port):
+    """Runs all defined Elasticsearch scans against a target object."""
+    scan_address = target_obj['scan_address']
+    display_target = target_obj['display_target']
+    resolved_ip = target_obj['resolved_ip']
+    
     all_results = []
     
-    for protocol in protocols:
-        target_url = f"{protocol}://{ip}:{port}"
-        print(f"  -> Running Elasticsearch scans on {target_url}")
-        
-        # Get version information first to verify connectivity
-        version_info = await get_elasticsearch_version(target_url)
-        service_version = version_info.get('number', 'Unknown') if version_info else 'Unknown'
-        
-        # Skip this protocol if we can't connect
-        if not version_info:
-            continue
-        
-        # Run checks concurrently for this protocol
-        tasks = [
-            check_unauthenticated_access(target_url),
-            check_default_credentials(target_url),
-            check_sensitive_paths(target_url)
-        ]
-        check_results = await asyncio.gather(*tasks)
-        
-        for res in check_results:
-            if res:
-                # Add module, version, server and port info
-                res['module'] = 'Elasticsearch'
-                res['service_version'] = service_version
-                res['server'] = ip
-                res['port'] = port
-                all_results.append(res)
-        
-        # Run CVE checks for this protocol
-        cve_results = await check_cve_vulnerabilities(target_url)
-        for cve_result in cve_results:
-            cve_result['module'] = 'Elasticsearch'
-            cve_result['service_version'] = service_version
-            cve_result['server'] = ip
-            cve_result['port'] = port
-            all_results.append(cve_result)
-    
-    return all_results
+    # Use the detected protocol for the target
+    protocol = await detect_protocol(scan_address, port)
+    if not protocol:
+        return []
 
+    target_url = f"{protocol}://{scan_address}:{port}"
+    print(f"  -> Running Elasticsearch scans on {target_url} (for target: {display_target})")
+    
+    # Get version information once
+    version_info = await get_elasticsearch_version(target_url)
+    service_version = version_info.get('number', 'Unknown') if version_info else 'Unknown'
+    
+    # If we can't connect, no point in continuing
+    if not version_info:
+        return []
+
+    # Run all checks concurrently
+    tasks = [
+        check_unauthenticated_access(target_url),
+        check_default_credentials(target_url),
+        check_sensitive_paths(target_url),
+        check_cve_vulnerabilities(target_url) # This itself runs sub-tasks
+    ]
+    
+    results_from_tasks = await asyncio.gather(*tasks)
+    
+    for result_group in results_from_tasks:
+        if isinstance(result_group, list):
+            for res in result_group:
+                if res:
+                    res.update({
+                        'module': 'Elasticsearch',
+                        'service_version': service_version,
+                        'target': display_target,
+                        'server': scan_address,
+                        'port': port,
+                        'resolved_ip': resolved_ip
+                    })
+                    all_results.append(res)
+        elif isinstance(result_group, dict):
+            result_group.update({
+                'module': 'Elasticsearch',
+                'service_version': service_version,
+                'target': display_target,
+                'server': scan_address,
+                'port': port,
+                'resolved_ip': resolved_ip
+            })
+            all_results.append(result_group)
+            
+    return all_results

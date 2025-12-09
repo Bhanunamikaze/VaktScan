@@ -28,71 +28,27 @@ class Colors:
     UNDERLINE = '\033[4m'
     RESET = '\033[0m'
 
-async def check_port(ip, port, semaphore):
+async def check_port_with_progress(target_obj, port, semaphore, completed_tasks, state_manager=None):
     """
-    Tries to connect to a single port on a given IP.
+    Tries to connect to a single port on a given target with progress tracking.
+    Uses 'scan_address' for connection and 'resolved_ip' for state.
     Returns the port number if open, otherwise None.
     """
-    async with semaphore:
-        try:
-            # Set a timeout for the connection attempt
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip, port),
-                timeout=2.0
-            )
-            writer.close()
-            await writer.wait_closed()
-            return port
-        except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
-            return None
-
-async def progress_reporter(total_tasks, completed_tasks, start_time):
-    """
-    Reports scanning progress in real-time.
-    """
-    last_completed = 0
-    last_update_time = start_time
+    scan_address = target_obj['scan_address']
+    resolved_ip = target_obj['resolved_ip']
     
-    # Wait for some progress before showing initial message
-    
-    while completed_tasks[0] < total_tasks:
-        await asyncio.sleep(0.1)  # Very frequent checks for high concurrency
-        current_time = time.time()
-        elapsed = current_time - start_time
-        completed = completed_tasks[0]
-        
-        # Update every 0.2 seconds or if any progress made
-        time_since_update = current_time - last_update_time
-        
-        if (time_since_update >= 0.2 or completed != last_completed) and completed > 0:
-            progress = (completed / total_tasks) * 100
-            rate = completed / elapsed if elapsed > 0 else 0
-            eta = (total_tasks - completed) / rate if rate > 0 else 0
-            
-            # Force immediate display
-            sys.stdout.write(f"\r[*] Progress: {completed:,}/{total_tasks:,} ({progress:.1f}%) | Rate: {rate:.1f} scans/sec | ETA: {eta:.0f}s")
-            sys.stdout.flush()
-            
-            last_completed = completed
-            last_update_time = current_time
-
-async def check_port_with_progress(ip, port, semaphore, completed_tasks, state_manager=None):
-    """
-    Tries to connect to a single port on a given IP with progress tracking.
-    Returns the port number if open, otherwise None.
-    """
     async with semaphore:
         try:
             _, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip, port),
+                asyncio.open_connection(scan_address, port),
                 timeout=2.0
             )
             writer.close()
             await writer.wait_closed()
             result = port
-            # Save open port immediately
+            # Save open port immediately using the resolved IP for state consistency
             if state_manager:
-                state_manager.add_open_port(ip, port)
+                state_manager.add_open_port(resolved_ip, port)
         except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
             result = None
         finally:
@@ -102,86 +58,85 @@ async def check_port_with_progress(ip, port, semaphore, completed_tasks, state_m
                 state_manager.update_port_scan_progress(completed_tasks[0])
         return result
 
-async def scan_ports(ips, ports, concurrency, state_manager=None):
+async def progress_reporter(total_tasks, completed_tasks, start_time):
     """
-    Scans a list of IPs for a list of ports concurrently with progress reporting.
-    Returns a dictionary with results for each IP.
+    Reports scanning progress in real-time.
+    """
+    while completed_tasks[0] < total_tasks:
+        await asyncio.sleep(0.1)
+        current_time = time.time()
+        elapsed = current_time - start_time
+        completed = completed_tasks[0]
+        
+        if completed > 0:
+            progress = (completed / total_tasks) * 100
+            rate = completed / elapsed if elapsed > 0 else 0
+            eta = (total_tasks - completed) / rate if rate > 0 else 0
+            
+            sys.stdout.write(f"\r[*] Progress: {completed:,}/{total_tasks:,} ({progress:.1f}%) | Rate: {rate:.1f} scans/sec | ETA: {eta:.0f}s")
+            sys.stdout.flush()
+
+async def scan_ports(targets, ports, concurrency, state_manager=None):
+    """
+    Scans a list of target objects for a list of ports concurrently.
+    Returns a list of tuples, where each tuple contains (target_object, open_ports_data).
     """
     semaphore = asyncio.Semaphore(concurrency)
-    results = {ip: {'open_ports': []} for ip in ips}
     tasks = []
     progress_task = None
     
-    total_tasks = len(ips) * len(ports)
+    total_tasks = len(targets) * len(ports)
     completed_tasks = [0]
     start_time = time.time()
     
-    print(f"{Colors.CYAN}[*] Scanning {len(ips)} IPs across {len(ports)} ports ({total_tasks:,} total combinations){Colors.RESET}")
+    print(f"{Colors.CYAN}[*] Scanning {len(targets)} targets across {len(ports)} ports ({total_tasks:,} total combinations){Colors.RESET}")
     print(f"{Colors.CYAN}[*] Concurrency level: {concurrency}{Colors.RESET}")
-    print()  # Add blank line for progress updates
+    print()
     
+    # Associate each task with its target object
+    for target_obj in targets:
+        for port in ports:
+            task = asyncio.create_task(check_port_with_progress(target_obj, port, semaphore, completed_tasks, state_manager))
+            tasks.append((target_obj, port, task))
+            
     try:
-        # Start progress reporter first
         progress_task = asyncio.create_task(progress_reporter(total_tasks, completed_tasks, start_time))
         
-        # Give progress reporter a moment to initialize and show initial state
-        await asyncio.sleep(0.1)
-        
-        # Create all scanning tasks
-        for ip in ips:
-            for port in ports:
-                tasks.append(asyncio.create_task(check_port_with_progress(ip, port, semaphore, completed_tasks, state_manager)))
-        
-        print(f"{Colors.CYAN}[*] Starting scan of {len(tasks)} tasks...{Colors.RESET}")
-        
         # Wait for all scanning tasks to complete
-        scan_results = await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*(task for _, _, task in tasks), return_exceptions=True)
         
     except KeyboardInterrupt:
-        print(f"\n[!] Scan interrupted by user. Cleaning up {len(tasks)} tasks...")
-        
-        # Cancel all running tasks
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        
-        # Wait for tasks to be cancelled
+        print(f"\n[!] Scan interrupted by user. Cleaning up...")
+        for _, _, task in tasks:
+            task.cancel()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        
-        print("[!] Cleanup completed.")
-        return results
-        
-    except Exception as e:
-        print(f"\n[!] Error during scanning: {e}")
-        return results
+            await asyncio.gather(*(task for _, _, task in tasks), return_exceptions=True)
+        return []
         
     finally:
-        # Always clean up progress reporter
         if progress_task and not progress_task.done():
             progress_task.cancel()
-            try:
-                await progress_task
-            except asyncio.CancelledError:
-                pass
-    
-    # Final progress update - clear the line first
+
     elapsed = time.time() - start_time
     rate = total_tasks / elapsed if elapsed > 0 else 0
     print(f"\r{Colors.GREEN}[+] Port scan completed: {total_tasks:,} combinations in {elapsed:.1f}s ({rate:.1f} scans/sec){Colors.RESET}")
-    print()  # Add blank line after completion
+    print()
     
     # Process results
-    task_index = 0
+    results_map = {tuple(target.items()): {'open_ports': []} for target in targets}
     open_ports_found = 0
-    for ip in ips:
-        for port in ports:
-            if task_index < len(scan_results):
-                result = scan_results[task_index]
-                if isinstance(result, int) and result == port:
-                    results[ip]['open_ports'].append(port)
-                    open_ports_found += 1
-            task_index += 1
-    
-    print(f"{Colors.GREEN}[+] Found {open_ports_found} open ports across {len([ip for ip, data in results.items() if data['open_ports']])} hosts{Colors.RESET}")
-    return results
+
+    for target_obj, port, task in tasks:
+        target_key = tuple(target_obj.items())
+        result = task.result()
+        if isinstance(result, int) and result == port:
+            results_map[target_key]['open_ports'].append(port)
+            open_ports_found += 1
+            
+    # Convert the map back to the desired list of tuples format
+    final_results = []
+    for target_items, data in results_map.items():
+        final_results.append((dict(target_items), data))
+
+    print(f"{Colors.GREEN}[+] Found {open_ports_found} open ports across {len([d for _, d in final_results if d['open_ports']])} targets{Colors.RESET}")
+    return final_results
