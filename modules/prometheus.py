@@ -596,7 +596,8 @@ async def run_scans(target_obj, port):
                         'target': display_target,
                         'server': scan_address,
                         'port': port,
-                        'resolved_ip': resolved_ip
+                        'resolved_ip': resolved_ip,
+                        'url': res.get('target')
                     })
                     all_results.append(res)
         elif isinstance(result_group, dict):
@@ -606,7 +607,8 @@ async def run_scans(target_obj, port):
                 'target': display_target,
                 'server': scan_address,
                 'port': port,
-                'resolved_ip': resolved_ip
+                'resolved_ip': resolved_ip,
+                'url': result_group.get('target')
             })
             all_results.append(result_group)
 
@@ -619,7 +621,8 @@ async def run_scans(target_obj, port):
                 'target': display_target,
                 'server': scan_address,
                 'port': port,
-                'resolved_ip': resolved_ip
+                'resolved_ip': resolved_ip,
+                'url': ne_result.get('target')
             })
             all_results.append(ne_result)
             

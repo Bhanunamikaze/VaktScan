@@ -5,6 +5,7 @@ import os
 import signal
 import csv
 import time
+import ipaddress
 
 # Add vendor directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
@@ -92,7 +93,7 @@ def save_results_to_csv(vulnerabilities, filename=None):
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         filename = f"scan_results_{timestamp}.csv"
     
-    csv_headers = ['Timestamp', 'Status', 'Vulnerability', 'Target', 'Server', 'Port', 'Module', 'Service_Version', 'Severity', 'Details']
+    csv_headers = ['Timestamp', 'Status', 'Vulnerability', 'Hostname', 'IP Address', 'Port', 'URL', 'Module', 'Service_Version', 'Severity', 'Details']
     
     try:
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
@@ -102,13 +103,22 @@ def save_results_to_csv(vulnerabilities, filename=None):
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             
             for vuln in vulnerabilities:
+                hostname = vuln.get('target', 'N/A')
+                try:
+                    # If the target is a valid IP, it's not a hostname
+                    ipaddress.ip_address(hostname)
+                    hostname = ''
+                except ValueError:
+                    pass
+
                 writer.writerow([
                     timestamp,
                     vuln.get('status', 'UNKNOWN'),
                     vuln.get('vulnerability', 'N/A'),
-                    vuln.get('target', 'N/A'),
-                    vuln.get('server', 'N/A'),
+                    hostname,
+                    vuln.get('resolved_ip', 'N/A'),
                     vuln.get('port', 'N/A'),
+                    vuln.get('url', 'N/A'),
                     vuln.get('module', 'N/A'),
                     vuln.get('service_version', 'N/A'),
                     vuln.get('severity', 'N/A'),

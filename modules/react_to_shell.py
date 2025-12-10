@@ -163,6 +163,7 @@ async def _send_exploit(target_url, body, content_type, check_func, scan_type):
                         "status": "VULNERABLE",
                         "vulnerability": f"CVE-2025-55182 - React2Shell ({scan_type})",
                         "target": test_url,
+                        "url": test_url,
                         "details": f"Target vulnerable to Next.js RCE. Method: {scan_type} successful.",
                         "severity": severity
                     }
