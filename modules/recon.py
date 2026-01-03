@@ -51,6 +51,7 @@ class ReconScanner:
         os.makedirs(self.domain_dir, exist_ok=True)
 
         self.dir_enumerator = DirEnumerator(self.domain, wordlist, output_dir=self.domain_dir)
+        self._ansi_regex = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
 
     def check_tools(self):
         """Verifies that required tools are installed in PATH."""
@@ -339,15 +340,15 @@ class ReconScanner:
             print(f"{Colors.YELLOW}[!] Skipping privileged tools: {', '.join(sorted(disabled))}{Colors.RESET}")
 
         tasks = []
-       # if "amass" not in missing: tasks.append(self.run_amass())
-       # if "subfinder" not in missing: tasks.append(self.run_subfinder())
-       # if "assetfinder" not in missing: tasks.append(self.run_assetfinder())
-       # if "findomain" not in missing: tasks.append(self.run_findomain())
-       # if "sublist3r" not in missing: tasks.append(self.run_sublist3r())
+        if "amass" not in missing: tasks.append(self.run_amass())
+        if "subfinder" not in missing: tasks.append(self.run_subfinder())
+        if "assetfinder" not in missing: tasks.append(self.run_assetfinder())
+        if "findomain" not in missing: tasks.append(self.run_findomain())
+        if "sublist3r" not in missing: tasks.append(self.run_sublist3r())
         if "knockpy" not in missing: tasks.append(self.run_knockpy())
         if "bbot" not in missing and "bbot" not in disabled: tasks.append(self.run_bbot())
-        #if "censys" not in missing: tasks.append(self.run_censys())
-        #if "crtsh" not in missing: tasks.append(self.run_crtsh())
+        if "censys" not in missing: tasks.append(self.run_censys())
+        if "crtsh" not in missing: tasks.append(self.run_crtsh())
         
         # Run passive tools concurrently
         if tasks:
@@ -377,41 +378,39 @@ class ReconScanner:
     def _parse_knockpy_payload(self, payload):
         if not payload:
             return None
-        trimmed = payload.strip()
-        if not trimmed:
+        cleaned = self._ansi_regex.sub('', payload)
+        cleaned = cleaned.strip()
+        if not cleaned:
             return None
 
-        # Knockpy prints progress bars/noise before the JSON list.
         markers = ["[{'domain'", '[{"domain"', "[{'Domain'", '[{"Domain"']
         start_idx = -1
         for marker in markers:
-            idx = trimmed.find(marker)
+            idx = cleaned.find(marker)
             if idx != -1:
-                start_idx = trimmed.rfind('[', 0, idx + 1)
+                start_idx = cleaned.rfind('[', 0, idx + 1)
                 if start_idx == -1:
                     start_idx = idx
                 break
         if start_idx == -1:
-            start_idx = trimmed.find('[')
+            start_idx = cleaned.find('[')
 
         if start_idx > 0:
-            trimmed = trimmed[start_idx:]
+            cleaned = cleaned[start_idx:]
 
-        end_idx = trimmed.rfind(']')
+        end_idx = cleaned.rfind(']')
         if end_idx != -1:
-            trimmed = trimmed[:end_idx + 1]
+            cleaned = cleaned[:end_idx + 1]
 
-        if not trimmed.startswith('['):
+        if not cleaned.startswith('['):
             return None
 
-        # Prefer JSON parsing if knockpy outputs proper JSON
         try:
-            return json.loads(trimmed)
+            return json.loads(cleaned)
         except json.JSONDecodeError:
             pass
 
-        # Fallback to Python literal parsing (handles single quotes)
         try:
-            return ast.literal_eval(trimmed)
+            return ast.literal_eval(cleaned)
         except Exception:
             return None
