@@ -6,6 +6,7 @@ import shlex
 import shutil
 import subprocess
 from datetime import datetime
+from pathlib import Path
 
 from .dir_enum import DirEnumerator
 
@@ -191,19 +192,22 @@ class ReconScanner:
             cmd = f"sudo -n {cmd}"
         results = await self._run_command(cmd, "bbot")
 
-        target_files = []
         if os.path.isdir(outdir):
-            for root, _, files in os.walk(outdir):
-                for filename in files:
-                    lower = filename.lower()
-                    if lower in ("subdomains.txt", "output.txt"):
-                        target_files.append(os.path.join(root, filename))
+            path_obj = Path(outdir)
+            candidates = list(path_obj.rglob("subdomains.txt")) + list(path_obj.rglob("output.txt"))
+            if candidates:
+                candidates.sort(key=lambda p: (p.name != "subdomains.txt", -p.stat().st_mtime))
+                collected = False
+                for fpath in candidates:
+                    try:
+                        self._collect_results(str(fpath))
+                        collected = True
+                    except Exception:
+                        continue
+                if collected:
+                    return
 
-        if target_files:
-            for filepath in target_files:
-                self._collect_results(filepath)
-        else:
-            self._collect_from_lines(results)
+        self._collect_from_lines(results)
 
     async def run_censys(self):
         binary = shlex.quote(self.tools.get("censys", "censys"))
