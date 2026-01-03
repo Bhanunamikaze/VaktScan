@@ -3,6 +3,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 from datetime import datetime
 
 from .dir_enum import DirEnumerator
@@ -37,6 +38,8 @@ class ReconScanner:
             "crtsh": "crtsh"
         }
         self.domain_pattern = re.compile(r"(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}")
+        self.sudo_ready = os.geteuid() == 0 if hasattr(os, "geteuid") else False
+        self.sudo_tools = {"bbot"}
 
         os.makedirs(self.output_dir, exist_ok=True)
         safe_domain = re.sub(r"[^a-z0-9._-]", "_", self.domain)
@@ -61,6 +64,23 @@ class ReconScanner:
                         continue
                 missing.append(name)
         return missing
+
+    def ensure_sudo_session(self):
+        """Prompt once for sudo if required tools need elevation."""
+        if self.sudo_ready or os.name != "posix":
+            return True
+        if not shutil.which("sudo"):
+            print(f"{Colors.YELLOW}[!] sudo not available. Skipping tools that require it.{Colors.RESET}")
+            return False
+        print(f"{Colors.CYAN}[*] Elevated privileges required for: {', '.join(sorted(self.sudo_tools))}.{Colors.RESET}")
+        print(f"{Colors.CYAN}[*] Please enter your sudo password once to continue.{Colors.RESET}")
+        try:
+            subprocess.run(["sudo", "-v"], check=True)
+            self.sudo_ready = True
+            return True
+        except subprocess.CalledProcessError:
+            print(f"{Colors.RED}[!] sudo authentication failed. Skipping privileged tools.{Colors.RESET}")
+            return False
 
     async def _run_command(self, cmd, tool_name):
         """Helper to run async subprocess commands."""
@@ -147,6 +167,11 @@ class ReconScanner:
             f"{binary} -t {shlex.quote(self.domain)} -p subdomain-enum "
             f"-o {shlex.quote(outdir)} -y --force"
         )
+        if os.name == "posix" and not self.sudo_ready:
+            print(f"{Colors.YELLOW}[!] sudo session not available. Skipping bbot.{Colors.RESET}")
+            return
+        if os.name == "posix" and not (hasattr(os, "geteuid") and os.geteuid() == 0):
+            cmd = f"sudo -n {cmd}"
         results = await self._run_command(cmd, "bbot")
 
         target_files = []
@@ -235,6 +260,12 @@ class ReconScanner:
             print(f"{Colors.YELLOW}[!] Warning: The following tools were not found in PATH: {', '.join(missing)}{Colors.RESET}")
             print(f"{Colors.YELLOW}[!] Scanning will proceed with available tools.{Colors.RESET}")
 
+        disabled = set()
+        sudo_needed = [tool for tool in self.sudo_tools if tool not in missing]
+        if sudo_needed and not self.ensure_sudo_session():
+            disabled.update(sudo_needed)
+            print(f"{Colors.YELLOW}[!] Skipping privileged tools: {', '.join(sorted(disabled))}{Colors.RESET}")
+
         tasks = []
         if "amass" not in missing: tasks.append(self.run_amass())
         if "subfinder" not in missing: tasks.append(self.run_subfinder())
@@ -242,7 +273,7 @@ class ReconScanner:
         if "findomain" not in missing: tasks.append(self.run_findomain())
         if "sublist3r" not in missing: tasks.append(self.run_sublist3r())
         if "knockpy" not in missing: tasks.append(self.run_knockpy())
-        if "bbot" not in missing: tasks.append(self.run_bbot())
+        if "bbot" not in missing and "bbot" not in disabled: tasks.append(self.run_bbot())
         if "censys" not in missing: tasks.append(self.run_censys())
         if "crtsh" not in missing: tasks.append(self.run_crtsh())
         
