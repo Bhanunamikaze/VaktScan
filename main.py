@@ -639,22 +639,65 @@ if __name__ == "__main__":
     if len(sys.argv) == 1 or '-h' in sys.argv or '--help' in sys.argv:
         print_logo()
     
-    parser = argparse.ArgumentParser(description="Security scanner for ELK, Grafana, Prometheus, and Next.js stacks.")
-    # Made targets_file optional (nargs='?') to allow recon-only mode
-    parser.add_argument("targets_file", nargs='?', help="Path to a file containing targets (IPs, hostnames).")
-    parser.add_argument("-c", "--concurrency", type=int, default=100, help="Number of concurrent tasks to run.")
-    parser.add_argument("-r", "--resume", action="store_true", help="Resume an interrupted scan.")
-    parser.add_argument("--csv", action="store_true", help="Save results to CSV file.")
-    parser.add_argument("-m", "--module", choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs"], 
-                        help="Scan only specific service module")
-    parser.add_argument("-p", "--ports", type=str, help="Additional custom ports to scan")
-    parser.add_argument("--chunk-size", type=int, default=30000, help="Streaming chunk size")
-    
-    # New Recon Arguments
-    parser.add_argument("--recon", metavar="DOMAIN", help="Perform subdomain enumeration on this domain")
-    parser.add_argument("--wordlist", help="Wordlist for active ffuf enumeration")
-    parser.add_argument("--scan-found", action="store_true", help="Automatically feed found subdomains into VaktScan")
-    parser.add_argument("--nmap", action="store_true", help="Run nmap -sCV -Pn on found open ports (Requires --recon)")
+    parser = argparse.ArgumentParser(
+        description="VaktScan - Attack Surface Scanner for ELK, Grafana, Prometheus, Next.js stacks."
+    )
+    parser.add_argument(
+        "targets_file",
+        nargs='?',
+        help="Targets file (IPs/hostnames/CIDRs). Optional when using --recon."
+    )
+    parser.add_argument(
+        "-c", "--concurrency",
+        type=int,
+        default=100,
+        help="Concurrency level for network operations (default: 100)."
+    )
+    parser.add_argument(
+        "-r", "--resume",
+        action="store_true",
+        help="Resume an interrupted infrastructure scan."
+    )
+    parser.add_argument(
+        "--csv",
+        action="store_true",
+        help="Save consolidated vulnerability results to CSV."
+    )
+    parser.add_argument(
+        "-m", "--module",
+        choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs"],
+        help="Only scan the specified service module."
+    )
+    parser.add_argument(
+        "-p", "--ports",
+        type=str,
+        help="Additional comma-separated ports to scan (e.g., 8080,8443,9999)."
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=30000,
+        help="Chunk size for streaming mode (default: 30000)."
+    )
+    parser.add_argument(
+        "--recon",
+        metavar="DOMAIN",
+        help="Run subdomain enumeration and passive recon on DOMAIN."
+    )
+    parser.add_argument(
+        "--wordlist",
+        help="Wordlist for ffuf-based VHost fuzzing during recon (--recon required)."
+    )
+    parser.add_argument(
+        "--scan-found",
+        action="store_true",
+        help="Automatically probe recon subdomains via httpx → dirsearch → nuclei."
+    )
+    parser.add_argument(
+        "--nmap",
+        action="store_true",
+        help="After recon, run a full 1-65535 port scan and nmap -sCV -Pn on alive hosts."
+    )
 
     args = parser.parse_args()
 

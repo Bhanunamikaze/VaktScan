@@ -113,7 +113,16 @@ python main.py targets.txt -c 1000
 # Resume interrupted scan
 python main.py targets.txt --resume
 
-# Scan specific service only
+# Run recon (passive + optional active chain)
+python main.py --recon squareup.com --wordlist wordlist.txt
+
+# Recon + auto follow-up (httpx → dirsearch → nuclei)
+python main.py --recon squareup.com --wordlist wordlist.txt --scan-found
+
+# Recon + follow-up + full-range Nmap on alive hosts
+python main.py --recon squareup.com --wordlist wordlist.txt --scan-found --nmap
+
+# Traditional service-only scan
 python main.py targets.txt -m elasticsearch
 
 # Add custom ports to scan
@@ -175,14 +184,18 @@ python main.py targets.txt -m grafana -p 3001,3002 -c 1000 --chunk-size 25000
 python main.py targets.txt [OPTIONS]
 
 Options:
-  -c, --concurrency INT    Set concurrency level (default: 100, max: 2000)
-  -r, --resume            Resume from previous interrupted scan
-  --csv                   Save results to CSV file
-  -m, --module SERVICE    Scan only specific service module:
-                          elasticsearch, kibana, grafana, prometheus
-  -p, --ports PORTS       Additional custom ports to scan (comma-separated)
-  --chunk-size INT        Number of IPs per chunk in streaming mode (default: 30000)
-  -h, --help              Show help message
+  targets_file            File with IPs/hosts/CIDRs (omit when using --recon)
+  -c, --concurrency INT   Set concurrency level (default: 100, max: 2000)
+  -r, --resume            Resume an interrupted infrastructure scan
+  --csv                   Save consolidated results to CSV
+  -m, --module SERVICE    Scan only elasticsearch|kibana|grafana|prometheus|nextjs
+  -p, --ports PORTS       Extra comma-separated ports to scan
+  --chunk-size INT        Chunk size for streaming mode (default: 30000)
+  --recon DOMAIN          Run passive/active subdomain enumeration for DOMAIN
+  --wordlist PATH         Wordlist for ffuf VHost fuzzing during recon
+  --scan-found            Immediately probe recon results (httpx→dirsearch→nuclei)
+  --nmap                  Full 1-65535 port scan on recon hosts followed by nmap -sCV -Pn
+  -h, --help              Show help
 
 Streaming Mode:
   • Automatically enabled for scans with 30,000+ IP addresses
@@ -214,6 +227,10 @@ kibana.internal.net
 # URLs (protocol and port extracted automatically)  
 http://monitoring.example.com:3000
 https://logs.company.com:5601
+
+# Recon-only mode (domains)
+squareup.com
+api.squareup.com
 ```
 
 ### Service Port Mapping
