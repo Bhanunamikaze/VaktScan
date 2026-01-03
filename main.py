@@ -61,8 +61,13 @@ class Colors:
         Colors.BRIGHT_BLUE = Colors.BRIGHT_MAGENTA = Colors.BRIGHT_CYAN = ''
         Colors.BOLD = Colors.DIM = Colors.UNDERLINE = Colors.RESET = ''
 
+LOGO_PRINTED = False
+
 def print_logo():
     """Display VaktScan ASCII logo with colors."""
+    global LOGO_PRINTED
+    if LOGO_PRINTED:
+        return
     # Check if output is to terminal for color support
     if not sys.stdout.isatty():
         Colors.disable()
@@ -86,6 +91,7 @@ def print_logo():
 {Colors.BRIGHT_CYAN}╚════════════════════════════════════════════════════════════════════════╝{Colors.RESET}
 """
     print(logo)
+    LOGO_PRINTED = True
 
 def save_port_scan_csv(scan_results, domain):
     """
