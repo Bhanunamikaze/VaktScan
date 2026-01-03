@@ -229,28 +229,37 @@ class ReconScanner:
         outdir = os.path.join(self.domain_dir, "bbot_results")
         os.makedirs(outdir, exist_ok=True)
         binary = shlex.quote(self.tools.get("bbot", "bbot"))
-        cmd = (
+        base_cmd = (
             f"{binary} -t {shlex.quote(self.domain)} -p subdomain-enum "
             f"-o {shlex.quote(outdir)} -y --force"
         )
         if os.name == "posix" and not self.sudo_ready:
             print(f"{Colors.YELLOW}[!] sudo session not available. Skipping bbot.{Colors.RESET}")
             return
-        if os.name == "posix" and not (hasattr(os, "geteuid") and os.geteuid() == 0):
-            cmd = f"sudo -n {cmd}"
+        sudo_prefix = "sudo -n " if os.name == "posix" and not (hasattr(os, "geteuid") and os.geteuid() == 0) else ""
+        cmd = f"{sudo_prefix}{base_cmd}"
+        log_file = os.path.join(self.domain_dir, f"bbot_{self.domain}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
         results = await self._run_command(cmd, "bbot")
+        if results:
+            try:
+                with open(log_file, 'w') as f:
+                    f.write("\n".join(results))
+            except OSError:
+                pass
 
         saved_reports = []
         if os.path.isdir(outdir):
             path_obj = Path(outdir)
-            candidates = list(path_obj.rglob("subdomains.txt")) + list(path_obj.rglob("output.txt"))
-            if candidates:
-                # Prioritize subdomains.txt, newest first
+            run_dirs = sorted([p for p in path_obj.iterdir() if p.is_dir()], key=lambda p: -p.stat().st_mtime)
+            for run_dir in run_dirs[:5]:  # limit traversal depth
+                candidates = list(run_dir.rglob("subdomains.txt")) + list(run_dir.rglob("output.txt"))
+                if not candidates:
+                    continue
                 candidates.sort(key=lambda p: (p.name != "subdomains.txt", -p.stat().st_mtime))
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 for idx, fpath in enumerate(candidates, start=1):
                     try:
-                        dest_name = f"bbot_{self.domain}_{timestamp}_{idx}_{fpath.name}"
+                        dest_name = f"bbot_{self.domain}_{timestamp}_{run_dir.name}_{idx}_{fpath.name}"
                         dest_path = os.path.join(self.domain_dir, dest_name)
                         shutil.copy2(fpath, dest_path)
                         self._collect_results(dest_path)
@@ -258,13 +267,23 @@ class ReconScanner:
                     except Exception as exc:
                         print(f"{Colors.YELLOW}[!] Failed to copy bbot result {fpath}: {exc}{Colors.RESET}")
                         continue
+                if saved_reports:
+                    break
         if saved_reports:
             print(f"{Colors.GRAY}[*] bbot reports copied to:{Colors.RESET}")
             for path in saved_reports:
                 print(f"    {path}")
             return
 
-        self._collect_from_lines(results)
+        log_data = []
+        if os.path.exists(log_file):
+            try:
+                log_data = Path(log_file).read_text().splitlines()
+            except OSError:
+                log_data = []
+        if not log_data:
+            log_data = results
+        self._collect_from_lines(log_data)
 
     async def run_censys(self):
         binary = shlex.quote(self.tools.get("censys", "censys"))
