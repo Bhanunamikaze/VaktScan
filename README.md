@@ -1,4 +1,4 @@
-# VaktScan - Attack Surface Scanner
+# VaktScan - Attack Surface Mapper & Vulnerability Scanner
 
 > **VaktScan** (*pronounced "vahkt-scan"*) - Named after the Nordic word "vakt" meaning "guard" or "watch", representing the vigilant nature of security monitoring.
 
@@ -114,13 +114,13 @@ python main.py targets.txt -c 1000
 python main.py targets.txt --resume
 
 # Run recon (passive + optional active chain)
-python main.py --recon squareup.com --wordlist wordlist.txt
+python main.py --recon target.com --wordlist wordlist.txt
 
-# Recon + auto follow-up (web-port scan → httpx → dirsearch → nuclei)
-python main.py --recon squareup.com --wordlist wordlist.txt --scan-found
+# Attack surface recon + auto follow-up (web-port scan → httpx → dirsearch → nuclei)
+python main.py --recon target.com --wordlist wordlist.txt --scan-found
 
 # Recon + follow-up + full-range Nmap on alive hosts
-python main.py --recon squareup.com --wordlist wordlist.txt --scan-found --nmap
+python main.py --recon target.com --wordlist wordlist.txt --scan-found --nmap
 
 # Traditional service-only scan
 python main.py targets.txt -m elasticsearch
@@ -229,8 +229,8 @@ http://monitoring.example.com:3000
 https://logs.company.com:5601
 
 # Recon-only mode (domains)
-squareup.com
-api.squareup.com
+target.com
+api.target.com
 ```
 
 ### Service Port Mapping
