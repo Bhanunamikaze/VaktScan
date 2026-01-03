@@ -65,6 +65,23 @@ VaktScan/
 - **Network**: Raw socket access for port scanning
 - **Scalability**: Can scan millions of IP addresses efficiently using streaming chunks
 
+## Recon Module Tooling
+
+The optional recon/HTTP probing helpers (`modules/recon.py`, `modules/dir_enum.py`, `modules/httpx_runner.py`, and `modules/nmap_runner.py`) call out to several third-party binaries such as `amass`, `subfinder`, `assetfinder`, `findomain`, `sublist3r`, `knockpy`, `bbot`, `censys`, `crtsh`, `ffuf`, `httpx`, and `nmap`. Use the provided helper to check/install them:
+
+```bash
+# View status only
+python scripts/setup_recon_tools.py
+
+# Attempt to install every missing binary (requires sudo + Go for ffuf/httpx/assetfinder)
+python scripts/setup_recon_tools.py --install
+
+# Limit to specific tools
+python scripts/setup_recon_tools.py --install --tools amass ffuf httpx bbot
+```
+
+The script mirrors the setup flow used by the Xeref project and reports installation commands you can run manually if you prefer tight control over your environment.
+
 ##  Quick Start
 
 ### 1. Clone Repository

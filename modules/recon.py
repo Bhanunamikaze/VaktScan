@@ -1,8 +1,11 @@
 import asyncio
-import shutil
 import os
-import sys
+import re
+import shlex
+import shutil
 from datetime import datetime
+
+from .dir_enum import DirEnumerator
 
 # Color codes (matching main.py)
 class Colors:
@@ -11,25 +14,36 @@ class Colors:
     YELLOW = '\033[93m'
     BLUE = '\033[94m'
     CYAN = '\033[96m'
+    GRAY = '\033[90m'
+    BOLD = '\033[1m'
     RESET = '\033[0m'
 
 class ReconScanner:
     def __init__(self, domain, output_dir="recon_results", wordlist=None):
-        self.domain = domain
+        self.domain = domain.strip().lower()
         self.output_dir = output_dir
         self.wordlist = wordlist
         self.subdomains = set()
+        self.raw_candidates = []
         self.tools = {
             "amass": "amass",
             "subfinder": "subfinder",
             "assetfinder": "assetfinder",
             "findomain": "findomain",
             "sublist3r": "sublist3r",
-            "ffuf": "ffuf"
+            "knockpy": "knockpy",
+            "bbot": "bbot",
+            "censys": "censys",
+            "crtsh": "crtsh"
         }
-        
-        if not os.path.exists(self.output_dir):
-            os.makedirs(self.output_dir)
+        self.domain_pattern = re.compile(r"(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}")
+
+        os.makedirs(self.output_dir, exist_ok=True)
+        safe_domain = re.sub(r"[^a-z0-9._-]", "_", self.domain)
+        self.domain_dir = os.path.join(self.output_dir, safe_domain or "domain")
+        os.makedirs(self.domain_dir, exist_ok=True)
+
+        self.dir_enumerator = DirEnumerator(self.domain, wordlist, output_dir=self.domain_dir)
 
     def check_tools(self):
         """Verifies that required tools are installed in PATH."""
@@ -40,6 +54,11 @@ class ReconScanner:
                 if name == "sublist3r" and shutil.which("sublist3r.py"):
                     self.tools["sublist3r"] = "sublist3r.py"
                     continue
+                if name == "bbot":
+                    local_bbot = os.path.expanduser("~/.local/bin/bbot")
+                    if os.path.exists(local_bbot):
+                        self.tools["bbot"] = local_bbot
+                        continue
                 missing.append(name)
         return missing
 
@@ -72,13 +91,13 @@ class ReconScanner:
 
     async def run_amass(self):
         # Amass passive enum
-        outfile = os.path.join(self.output_dir, f"amass_{self.domain}.txt")
+        outfile = os.path.join(self.domain_dir, f"amass_{self.domain}.txt")
         cmd = f"amass enum -passive -d {self.domain} -o {outfile} -silent"
         await self._run_command(cmd, "Amass")
         self._collect_results(outfile)
 
     async def run_subfinder(self):
-        outfile = os.path.join(self.output_dir, f"subfinder_{self.domain}.txt")
+        outfile = os.path.join(self.domain_dir, f"subfinder_{self.domain}.txt")
         cmd = f"subfinder -d {self.domain} -o {outfile} -silent"
         await self._run_command(cmd, "Subfinder")
         self._collect_results(outfile)
@@ -91,53 +110,74 @@ class ReconScanner:
             self._add_subdomain(line)
 
     async def run_findomain(self):
-        outfile = os.path.join(self.output_dir, f"findomain_{self.domain}.txt")
+        outfile = os.path.join(self.domain_dir, f"findomain_{self.domain}.txt")
         # Findomain requires -q for quiet
         cmd = f"findomain -t {self.domain} -u {outfile} -q"
         await self._run_command(cmd, "Findomain")
         self._collect_results(outfile)
 
     async def run_sublist3r(self):
-        outfile = os.path.join(self.output_dir, f"sublist3r_{self.domain}.txt")
+        outfile = os.path.join(self.domain_dir, f"sublist3r_{self.domain}.txt")
         cmd = f"sublist3r -d {self.domain} -o {outfile}"
         await self._run_command(cmd, "Sublist3r")
         self._collect_results(outfile)
 
-    async def run_ffuf_fuzzing(self):
-        """Use ffuf to brute force subdomains/vhosts."""
-        if not self.wordlist:
-            print(f"{Colors.YELLOW}[!] No wordlist provided. Skipping active ffuf fuzzing.{Colors.RESET}")
-            return
+    async def run_knockpy(self):
+        outdir = os.path.join(self.domain_dir, "knockpy_results")
+        os.makedirs(outdir, exist_ok=True)
+        binary = shlex.quote(self.tools.get("knockpy", "knockpy"))
+        cmd = f"{binary} {shlex.quote(self.domain)} -o {shlex.quote(outdir)}"
+        results = await self._run_command(cmd, "Knockpy")
 
-        outfile = os.path.join(self.output_dir, f"ffuf_{self.domain}.json")
-        print(f"{Colors.CYAN}[*] Running ffuf for active subdomain fuzzing (this may take time)...{Colors.RESET}")
-        
-        # Fuzz Host header for VHost discovery/subdomain enumeration
-        # -mc 200,301,302,403 filters for interesting codes
-        # -ac Auto-calibrate to filter out false positives
+        harvested = False
+        if os.path.isdir(outdir):
+            for root, _, files in os.walk(outdir):
+                for filename in files:
+                    if filename.endswith(".txt"):
+                        harvested = True
+                        self._collect_results(os.path.join(root, filename))
+        if not harvested:
+            self._collect_from_lines(results)
+
+    async def run_bbot(self):
+        outdir = os.path.join(self.domain_dir, "bbot_results")
+        os.makedirs(outdir, exist_ok=True)
+        binary = shlex.quote(self.tools.get("bbot", "bbot"))
         cmd = (
-            f"ffuf -u https://{self.domain} -H 'Host: FUZZ.{self.domain}' "
-            f"-w {self.wordlist} -o {outfile} -of json -mc 200,301,302,403 -ac -s"
+            f"{binary} -t {shlex.quote(self.domain)} -p subdomain-enum "
+            f"-o {shlex.quote(outdir)} -y --force"
         )
-        
-        await self._run_command(cmd, "ffuf")
-        
-        # Parse ffuf JSON output
-        try:
-            import json
-            if os.path.exists(outfile):
-                with open(outfile, 'r') as f:
-                    data = json.load(f)
-                    if 'results' in data:
-                        count = 0
-                        for result in data['results']:
-                            sub = result['input']['FUZZ']
-                            full_domain = f"{sub}.{self.domain}"
-                            if self._add_subdomain(full_domain):
-                                count += 1
-                        print(f"{Colors.GREEN}[+] ffuf found {count} new subdomains/vhosts.{Colors.RESET}")
-        except Exception as e:
-            print(f"{Colors.RED}[!] Error parsing ffuf output: {e}{Colors.RESET}")
+        results = await self._run_command(cmd, "bbot")
+
+        target_files = []
+        if os.path.isdir(outdir):
+            for root, _, files in os.walk(outdir):
+                for filename in files:
+                    lower = filename.lower()
+                    if lower in ("subdomains.txt", "output.txt"):
+                        target_files.append(os.path.join(root, filename))
+
+        if target_files:
+            for filepath in target_files:
+                self._collect_results(filepath)
+        else:
+            self._collect_from_lines(results)
+
+    async def run_censys(self):
+        binary = shlex.quote(self.tools.get("censys", "censys"))
+        query = shlex.quote(f"names: {self.domain}")
+        cmd = (
+            f"{binary} search {query} --index-type hosts "
+            "--per-page 500 --virtual-hosts INCLUDE --no-color"
+        )
+        results = await self._run_command(cmd, "Censys")
+        self._collect_from_lines(results)
+
+    async def run_crtsh(self):
+        binary = shlex.quote(self.tools.get("crtsh", "crtsh"))
+        cmd = f"{binary} -d {shlex.quote(self.domain)} -r"
+        results = await self._run_command(cmd, "crtsh")
+        self._collect_from_lines(results)
 
     def _collect_results(self, filepath):
         if os.path.exists(filepath):
@@ -148,17 +188,46 @@ class ReconScanner:
             except Exception:
                 pass
 
+    def _collect_from_lines(self, lines):
+        if not lines:
+            return
+        for line in lines:
+            self._add_subdomain(line)
+
+    def _extract_candidates(self, text):
+        matches = []
+        if not text:
+            return matches
+        lower_text = text.lower()
+        seen = set()
+        for match in self.domain_pattern.findall(lower_text):
+            match = match.strip(".")
+            if match == self.domain or match.endswith(f".{self.domain}"):
+                if match not in seen:
+                    seen.add(match)
+                    matches.append(match)
+        return matches
+
     def _add_subdomain(self, sub):
+        if not sub:
+            return False
+        added = False
         sub = sub.strip()
-        # Basic validation to ensure it looks like a subdomain of our target
-        if sub and self.domain in sub:
-            # Remove protocol if present
-            if "://" in sub:
-                sub = sub.split("://")[1]
-            if sub not in self.subdomains:
-                self.subdomains.add(sub)
-                return True
-        return False
+        if not sub:
+            return False
+        candidates = self._extract_candidates(sub)
+        for candidate in candidates:
+            self.raw_candidates.append(candidate)
+            if candidate not in self.subdomains:
+                self.subdomains.add(candidate)
+                added = True
+        return added
+
+    def _write_list(self, path, values):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            for value in values:
+                f.write(f"{value}\n")
 
     async def run_all(self):
         missing = self.check_tools()
@@ -172,25 +241,32 @@ class ReconScanner:
         if "assetfinder" not in missing: tasks.append(self.run_assetfinder())
         if "findomain" not in missing: tasks.append(self.run_findomain())
         if "sublist3r" not in missing: tasks.append(self.run_sublist3r())
+        if "knockpy" not in missing: tasks.append(self.run_knockpy())
+        if "bbot" not in missing: tasks.append(self.run_bbot())
+        if "censys" not in missing: tasks.append(self.run_censys())
+        if "crtsh" not in missing: tasks.append(self.run_crtsh())
         
         # Run passive tools concurrently
         if tasks:
             await asyncio.gather(*tasks)
         
-        # Run active ffuf scanning sequentially after passive tools (to avoid network congestion)
-        if "ffuf" not in missing:
-            await self.run_ffuf_fuzzing()
+        # Run ffuf-based enumeration via the standalone DirEnumerator
+        if self.wordlist:
+            new_subs = await self.dir_enumerator.fuzz_subdomains()
+            for sub in new_subs:
+                self._add_subdomain(sub)
 
-        # Save final aggregated list
+        # Save combined + deduplicated results inside the domain output directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        final_file = f"all_subdomains_{self.domain}_{timestamp}.txt"
-        
-        with open(final_file, 'w') as f:
-            for sub in sorted(self.subdomains):
-                f.write(f"{sub}\n")
+        raw_file = os.path.join(self.domain_dir, f"raw_subdomains_{timestamp}.txt")
+        final_file = os.path.join(self.domain_dir, f"all_subdomains_{timestamp}.txt")
+
+        self._write_list(raw_file, self.raw_candidates)
+        self._write_list(final_file, sorted(self.subdomains))
         
         print(f"\n{Colors.GREEN}[+] Enumeration complete!{Colors.RESET}")
         print(f"{Colors.GREEN}[+] Found {len(self.subdomains)} unique subdomains.{Colors.RESET}")
+        print(f"{Colors.GRAY}[*] Raw combined output: {raw_file}{Colors.RESET}")
         print(f"{Colors.GREEN}[+] Results saved to: {Colors.BOLD}{final_file}{Colors.RESET}")
         
-        return final_file, list(self.subdomains)
+        return final_file, sorted(self.subdomains)

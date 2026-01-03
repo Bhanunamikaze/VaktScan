@@ -232,7 +232,7 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
     # --- RECONNAISSANCE MODE ---
     if recon_domain:
         print(f"{Colors.CYAN}[*] Starting Reconnaissance Mode for: {Colors.BOLD}{recon_domain}{Colors.RESET}")
-        print(f"{Colors.GRAY}[*] Tools: Amass, Subfinder, Assetfinder, Findomain, Sublist3r, ffuf{Colors.RESET}")
+        print(f"{Colors.GRAY}[*] Tools: Amass, Subfinder, Assetfinder, Findomain, Sublist3r, Knockpy, bbot, Censys, crtsh + DirEnumerator(ffuf){Colors.RESET}")
         
         scanner = recon.ReconScanner(recon_domain, wordlist=wordlist)
         results_file, subdomains = await scanner.run_all()
