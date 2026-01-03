@@ -168,11 +168,25 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
         name="httpx",
         binary="httpx",
         install_cmd=(
-            "go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest && "
-            "sudo install -m 755 \"$(go env GOPATH)/bin/httpx\" /usr/local/bin/httpx"
+            "tmpdir=$(mktemp -d) && "
+            "arch=$(uname -m) && "
+            "case \"$arch\" in "
+            "x86_64|amd64) asset=\"httpx_1.7.4_linux_amd64.zip\" ;; "
+            "aarch64|arm64) asset=\"httpx_1.7.4_linux_arm64.zip\" ;; "
+            "armv7l|armv7) asset=\"httpx_1.7.4_linux_arm.zip\" ;; "
+            "armv6l|armv6) asset=\"httpx_1.7.4_linux_arm.zip\" ;; "
+            "i386|i686) asset=\"httpx_1.7.4_linux_386.zip\" ;; "
+            "*) echo \"Unsupported architecture: $arch\" && exit 1 ;; "
+            "esac && "
+            "curl -sL \"https://github.com/projectdiscovery/httpx/releases/download/v1.7.4/$asset\" "
+            "-o \"$tmpdir/$asset\" && "
+            "unzip -q \"$tmpdir/$asset\" -d \"$tmpdir\" && "
+            "bin_path=$(find \"$tmpdir\" -type f -name httpx -perm -111 | head -n 1) && "
+            "[ -n \"$bin_path\" ] || { echo 'httpx binary not found in archive'; exit 1; } && "
+            "sudo install -m 755 \"$bin_path\" /usr/local/bin/httpx && "
+            "rm -rf \"$tmpdir\""
         ),
-        description="ProjectDiscovery httpx for HTTP probing in httpx_runner.",
-        requires_go=True,
+        description="ProjectDiscovery httpx v1.7.4 binary download (architecture-aware).",
     ),
     "nmap": ToolSpec(
         name="nmap",

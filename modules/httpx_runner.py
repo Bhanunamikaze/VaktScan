@@ -1,8 +1,9 @@
 import asyncio
-import json
-import shutil
-import os
 import csv
+import json
+import os
+import shutil
+import subprocess
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -11,13 +12,62 @@ class HTTPXRunner:
         self.output_dir = output_dir
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
-        self.binary = "httpx"
-        self.check_installed()
+        self.binary = self._resolve_binary()
 
-    def check_installed(self):
-        """Checks if httpx is available in the system PATH."""
-        if not shutil.which(self.binary):
-             self.binary = None
+    def _resolve_binary(self):
+        """Prefer the ProjectDiscovery binary (v1.7.4+) over any python httpx CLI."""
+        candidates = [
+            os.environ.get("VAKT_HTTPX_BIN"),
+            "/usr/local/bin/httpx",
+            "/opt/homebrew/bin/httpx",
+            shutil.which("httpx"),
+            shutil.which("pd-httpx"),
+        ]
+        seen = set()
+        for cand in candidates:
+            path = self._normalize_path(cand)
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            if self._is_projectdiscovery_httpx(path):
+                return path
+        fallback = shutil.which("httpx")
+        if fallback:
+            print("\033[93m[!] ProjectDiscovery httpx not found. Falling back to system httpx at: "
+                  f"{fallback}\033[0m")
+            if "-l, -list" not in self._get_help_output(fallback):
+                print("\033[91m[!] System httpx does not support the required CLI flags. "
+                      "Please install the ProjectDiscovery httpx binary.\033[0m")
+                return None
+            return fallback
+        return None
+
+    def _normalize_path(self, candidate):
+        if not candidate:
+            return None
+        expanded = os.path.expanduser(candidate)
+        if os.path.isabs(expanded):
+            return expanded if os.path.exists(expanded) else None
+        return shutil.which(expanded)
+
+    def _is_projectdiscovery_httpx(self, path):
+        try:
+            result = subprocess.run(
+                [path, "--help"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            help_text = (result.stdout or "") + (result.stderr or "")
+            if "Usage:" in help_text and "[flags]" in help_text:
+                return True
+            if "-l, -list" in help_text:
+                return True
+            if "<URL> [OPTIONS]" in help_text:
+                return False
+        except Exception:
+            pass
+        return False
 
     async def run_httpx(self, targets, concurrency=100):
         """

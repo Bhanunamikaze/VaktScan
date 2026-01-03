@@ -290,7 +290,7 @@ class ReconScanner:
         seen = set()
         for match in self.domain_pattern.findall(lower_text):
             match = match.strip(".")
-            if match == self.domain or match.endswith(f".{self.domain}"):
+            if match == self.domain or match.endswith(f".{self.domain}") or match.endswith(self.domain):
                 if match not in seen:
                     seen.add(match)
                     matches.append(match)
@@ -303,7 +303,17 @@ class ReconScanner:
         sub = sub.strip()
         if not sub:
             return False
-        candidates = self._extract_candidates(sub)
+
+        direct_candidates = []
+        cleaned = sub.lower().strip(' "\'')
+        cleaned = cleaned.lstrip('.')
+        if cleaned.endswith(self.domain):
+            direct_candidates.append(cleaned)
+            # also consider without leading "www."
+            if cleaned.startswith("www.") and cleaned[4:] not in direct_candidates:
+                direct_candidates.append(cleaned[4:])
+
+        candidates = direct_candidates + self._extract_candidates(sub)
         for candidate in candidates:
             self.raw_candidates.append(candidate)
             if candidate not in self.subdomains:
