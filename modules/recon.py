@@ -128,7 +128,14 @@ class ReconScanner:
         # Amass passive enum
         outfile = os.path.join(self.domain_dir, f"amass_{self.domain}.txt")
         cmd = f"amass enum -passive -d {self.domain} -o {outfile} -silent"
-        await self._run_command(cmd, "Amass")
+        results = await self._run_command(cmd, "Amass")
+        if not os.path.exists(outfile) and results:
+            try:
+                with open(outfile, "w") as f:
+                    f.write("\n".join(results))
+                print(f"{Colors.GRAY}[*] Amass fallback output saved to {outfile}{Colors.RESET}")
+            except OSError as exc:
+                print(f"{Colors.YELLOW}[!] Failed to write Amass fallback file: {exc}{Colors.RESET}")
         self._collect_results(outfile)
 
     async def run_subfinder(self):
@@ -172,26 +179,33 @@ class ReconScanner:
             print(f"{Colors.YELLOW}[!] Knockpy produced no output.{Colors.RESET}")
             return
         
-        # Save the JSON output
-        json_outfile = os.path.join(self.domain_dir, f"knockpy_{self.domain}.json")
         raw_text = "\n".join(results).strip()
-        
-        try:
-            with open(json_outfile, 'w') as f:
-                f.write(raw_text)
-            #print(f"{Colors.GREEN}[+] Knockpy output saved to: {json_outfile}{Colors.RESET}")
-        except OSError as e:
-            print(f"{Colors.YELLOW}[!] Failed to write knockpy output: {e}{Colors.RESET}")
-        
-        # Parse the JSON payload
+        if raw_text:
+            json_outfile = os.path.join(self.domain_dir, f"knockpy_{self.domain}.json")
+            try:
+                with open(json_outfile, 'w') as f:
+                    f.write(raw_text)
+            except OSError as e:
+                print(f"{Colors.YELLOW}[!] Failed to write knockpy JSON: {e}{Colors.RESET}")
+
         parsed = self._parse_knockpy_payload(raw_text)
         if parsed:
+            domains = []
             for entry in parsed:
                 if isinstance(entry, dict):
                     domain = entry.get("domain", "") or entry.get("Domain", "")
                     if domain:
                         self._add_subdomain(domain)
-            #print(f"{Colors.GREEN}[+] Knockpy found {len(parsed)} entries.{Colors.RESET}")
+                        domains.append(domain)
+            if domains:
+                txt_out = os.path.join(self.domain_dir, f"knockpy_{self.domain}.txt")
+                try:
+                    with open(txt_out, "w") as f:
+                        for d in sorted(set(domains)):
+                            f.write(f"{d}\n")
+                except OSError as exc:
+                    print(f"{Colors.YELLOW}[!] Failed to write knockpy domain list: {exc}{Colors.RESET}")
+            return
         else:
             # Fallback: try to extract domains from raw output
             self._collect_from_lines(results)
