@@ -1,4 +1,5 @@
 import asyncio
+import getpass
 import os
 import re
 import shlex
@@ -73,9 +74,22 @@ class ReconScanner:
             print(f"{Colors.YELLOW}[!] sudo not available. Skipping tools that require it.{Colors.RESET}")
             return False
         print(f"{Colors.CYAN}[*] Elevated privileges required for: {', '.join(sorted(self.sudo_tools))}.{Colors.RESET}")
-        print(f"{Colors.CYAN}[*] Please enter your sudo password once to continue.{Colors.RESET}")
         try:
-            subprocess.run(["sudo", "-v"], check=True)
+            password = getpass.getpass(prompt="sudo password (input hidden): ")
+        except Exception:
+            password = ""
+        if not password:
+            print(f"{Colors.YELLOW}[!] No sudo password provided. Privileged tools will be skipped.{Colors.RESET}")
+            return False
+        try:
+            subprocess.run(
+                ["sudo", "-S", "-v"],
+                input=f"{password}\n",
+                check=True,
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             self.sudo_ready = True
             return True
         except subprocess.CalledProcessError:
