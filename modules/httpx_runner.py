@@ -154,13 +154,14 @@ class HTTPXRunner:
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"httpx_alive_{domain_label}_{timestamp}.csv"
+        filepath = os.path.join(self.output_dir, filename)
         
         # requested columns: IP, Domain, Port
         # added useful context: URL, Status, Title
         headers = ['IP Address', 'Domain', 'Port', 'URL', 'Status Code', 'Title', 'Technologies']
 
         try:
-            with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+            with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(headers)
                 
@@ -185,8 +186,8 @@ class HTTPXRunner:
 
                     writer.writerow([ip, domain, port, url, status, title, tech])
             
-            print(f"\033[92m[+] Alive services CSV saved to: \033[1m{filename}\033[0m")
-            return filename
+            print(f"\033[92m[+] Alive services CSV saved to: \033[1m{filepath}\033[0m")
+            return filepath
         except Exception as e:
             print(f"\033[91m[!] Error saving httpx CSV: {e}\033[0m")
             return None

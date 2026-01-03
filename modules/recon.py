@@ -170,9 +170,18 @@ class ReconScanner:
     async def run_knockpy(self):
         """Fixed knockpy - captures JSON directly from stdout"""
         binary = shlex.quote(self.tools.get("knockpy", "knockpy"))
-        # Use --silent json to get output directly on stdout
-        cmd = f"{binary} -d {shlex.quote(self.domain)} --recon --json"
-        
+        storage_dir = Path(self.domain_dir)
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        search_roots = [Path('.'), storage_dir]
+        existing_knock_files = set()
+        for root in search_roots:
+            existing_knock_files.update(root.glob(f"{self.domain}_*.json"))
+
+        # Use --silent json to get output directly on stdout and save artifacts under recon_results/<domain>
+        cmd = (
+            f"{binary} -d {shlex.quote(self.domain)} --recon --json "
+            f"--save {shlex.quote(str(storage_dir))}"
+        )
         results = await self._run_command(cmd, "Knockpy")
         
         if not results:
@@ -209,6 +218,22 @@ class ReconScanner:
         else:
             # Fallback: try to extract domains from raw output
             self._collect_from_lines(results)
+
+        # Move any external JSON files dropped by knockpy into the domain directory
+        new_knock_files = []
+        for root in search_roots:
+            for fpath in root.glob(f"{self.domain}_*.json"):
+                if fpath not in existing_knock_files:
+                    new_knock_files.append(fpath)
+
+        for fpath in new_knock_files:
+            if fpath.parent == storage_dir:
+                continue
+            dest_path = storage_dir / fpath.name
+            try:
+                shutil.move(str(fpath), dest_path)
+            except Exception:
+                continue
 
 
     async def run_bbot(self):

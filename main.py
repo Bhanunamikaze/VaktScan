@@ -82,11 +82,11 @@ def print_logo():
 {Colors.BRIGHT_CYAN}║{Colors.RESET}   {Colors.BRIGHT_BLUE}╚████╔╝ ██║  ██║██║  ██╗   ██║   ███████║╚██████╗██║  ██║██║ ╚████║{Colors.RESET}  {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}    {Colors.BRIGHT_BLUE}╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝{Colors.RESET}  {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                                                                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
-{Colors.BRIGHT_CYAN}║{Colors.RESET}                  {Colors.BRIGHT_YELLOW}    Attack Surface Scanner   {Colors.RESET}                         {Colors.BRIGHT_CYAN}║{Colors.RESET}
+{Colors.BRIGHT_CYAN}║{Colors.RESET}                  {Colors.BRIGHT_YELLOW}        Attack Surface Scanner   {Colors.RESET}                     {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                         {Colors.BRIGHT_MAGENTA}   Nordic Vigilance   {Colors.RESET}                         {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                                                                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
-{Colors.BRIGHT_CYAN}║{Colors.RESET}      {Colors.GREEN}Recon & Port Scans{Colors.RESET} • {Colors.GREEN}CVE Detection{Colors.RESET} • {Colors.GREEN}Vuln Exploits{Colors.RESET}      {Colors.BRIGHT_CYAN}║{Colors.RESET}
-{Colors.BRIGHT_CYAN}║{Colors.RESET}                     {Colors.RED}httpx/ffuf{Colors.RESET} • {Colors.YELLOW}Nuclei/Nmap{Colors.RESET}                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
+{Colors.BRIGHT_CYAN}║{Colors.RESET}      {Colors.GREEN}Recon & Port Scans{Colors.RESET} • {Colors.GREEN}CVE Detection{Colors.RESET} • {Colors.GREEN}Vuln Detection{Colors.RESET} • {Colors.GREEN}Dir Enum{Colors.RESET}    {Colors.BRIGHT_CYAN}║{Colors.RESET}
+{Colors.BRIGHT_CYAN}║{Colors.RESET}                     {Colors.YELLOW}Web Service Detection {Colors.RESET} • {Colors.YELLOW}Vuln Exploits             {Colors.RESET}{Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                                                                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}╚════════════════════════════════════════════════════════════════════════╝{Colors.RESET}
 """
@@ -297,6 +297,26 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
             else:
                 print(f"{Colors.YELLOW}[!] No open ports discovered during recon port scan; skipping Nmap.{Colors.RESET}")
 
+def load_subdomains_file(file_path):
+    """
+    Load subdomains from a user-provided file, stripping blanks/comments.
+    """
+    entries = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                entries.append(line.lower())
+    except OSError as exc:
+        print(f"{Colors.RED}[!] Unable to read subdomain file '{file_path}': {exc}{Colors.RESET}")
+        sys.exit(1)
+
+    if not entries:
+        print(f"{Colors.YELLOW}[!] Subdomain file '{file_path}' did not contain any usable entries.{Colors.RESET}")
+    return entries
+
 def deduplicate_vulnerabilities(vulnerabilities):
     """
     Deduplicates a list of vulnerabilities.
@@ -326,7 +346,7 @@ def deduplicate_vulnerabilities(vulnerabilities):
 
     return list(unique_vulns.values())
 
-async def main(targets_file, concurrency, resume=False, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000, recon_domain=None, wordlist=None, scan_found=False, nmap_enabled=False):
+async def main(targets_file, concurrency, resume=False, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000, recon_domain=None, wordlist=None, scan_found=False, nmap_enabled=False, subdomains_file=None):
     """
     Main orchestrator for the scanning tool.
     """
@@ -349,12 +369,27 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
     if nmap_enabled and not recon_domain:
         print(f"{Colors.RED}[!] Error: --nmap cannot be used without --recon.{Colors.RESET}")
         sys.exit(1)
+    if subdomains_file and not recon_domain:
+        print(f"{Colors.RED}[!] Error: --sub-domains requires --recon to be specified.{Colors.RESET}")
+        sys.exit(1)
 
     # --- RECONNAISSANCE MODE ---
     if recon_domain:
         print(f"{Colors.CYAN}[*] Starting Reconnaissance Mode for: {Colors.BOLD}{recon_domain}{Colors.RESET}")
+
+        if subdomains_file:
+            subdomains = load_subdomains_file(subdomains_file)
+            if not subdomains:
+                print(f"{Colors.RED}[!] No usable subdomains found in '{subdomains_file}'. Nothing to probe.{Colors.RESET}")
+                return
+            safe_domain = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in recon_domain.lower())
+            domain_output_dir = os.path.join("recon_results", safe_domain or "domain")
+            os.makedirs(domain_output_dir, exist_ok=True)
+            print(f"{Colors.GRAY}[*] Using provided subdomain list '{subdomains_file}'. Skipping passive recon and starting with HTTP probing.{Colors.RESET}")
+            await run_recon_followups(subdomains, recon_domain, domain_output_dir, concurrency, nmap_enabled, wordlist)
+            return
+
         print(f"{Colors.GRAY}[*] Tools: Amass, Subfinder, Assetfinder, Findomain, Sublist3r, Knockpy, bbot, Censys, crtsh + DirEnumerator(ffuf){Colors.RESET}")
-        
         scanner = recon.ReconScanner(recon_domain, wordlist=wordlist)
         results_file, subdomains = await scanner.run_all()
         domain_output_dir = os.path.dirname(results_file)
@@ -749,6 +784,12 @@ if __name__ == "__main__":
         help="Wordlist for ffuf-based VHost fuzzing during recon (--recon required)."
     )
     parser.add_argument(
+        "--sub-domains",
+        metavar="FILE",
+        dest="sub_domains_file",
+        help="File containing newline-separated subdomains to probe directly (requires --recon)."
+    )
+    parser.add_argument(
         "--scan-found",
         action="store_true",
         help="Automatically probe recon subdomains via httpx → dirsearch → nuclei."
@@ -773,7 +814,8 @@ if __name__ == "__main__":
             args.recon,
             args.wordlist,
             args.scan_found,
-            args.nmap
+            args.nmap,
+            args.sub_domains_file
         ))
     except KeyboardInterrupt:
         print("\n[*] Scanner terminated by user.")

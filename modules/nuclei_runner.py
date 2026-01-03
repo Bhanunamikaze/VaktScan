@@ -71,7 +71,8 @@ class NucleiRunner:
         # Create input file for nuclei
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         input_file = os.path.join(self.output_dir, f"nuclei_targets_{timestamp}.txt")
-        json_output = os.path.join(self.output_dir, f"nuclei_results_{timestamp}.json")
+        json_output_tmp = os.path.join(self.output_dir, f"nuclei_raw_{timestamp}.json")
+        final_json_output = os.path.join(self.output_dir, f"nuclei_results_{timestamp}.json")
 
         try:
             with open(input_file, 'w') as f:
@@ -92,10 +93,11 @@ class NucleiRunner:
             "-severity critical,high,medium "
             "-json "
             "-nc "
-            f"-o {json_output}"
+            f"-o {json_output_tmp}"
         )
 
         print(f"\033[96m[*] Running nuclei on {len(targets)} alive services...\033[0m")
+        print(f"\033[90m[*] Nuclei targets file: {input_file}\033[0m")
 
         try:
             process = await asyncio.create_subprocess_shell(
@@ -106,13 +108,13 @@ class NucleiRunner:
             stdout, stderr = await process.communicate()
 
             # Check if output file exists (Nuclei might not create it if no vulns found)
-            if not os.path.exists(json_output):
+            if not os.path.exists(json_output_tmp):
                 if stderr and b"error" in stderr.lower():
                      print(f"\033[93m[!] Nuclei warning/error: {stderr.decode().strip()}\033[0m")
                 return []
 
             vulnerabilities = []
-            with open(json_output, 'r') as f:
+            with open(json_output_tmp, 'r') as f:
                 for line in f:
                     if not line.strip(): continue
                     try:
@@ -141,14 +143,19 @@ class NucleiRunner:
             # Cleanup
             try:
                 os.remove(input_file)
-                os.remove(json_output)
             except OSError:
                 pass
+
+            try:
+                shutil.move(json_output_tmp, final_json_output)
+            except Exception:
+                final_json_output = json_output_tmp
 
             if vulnerabilities:
                 print(f"\033[92m[+] Nuclei found {len(vulnerabilities)} vulnerabilities/info items.\033[0m")
             else:
                 print(f"\033[92m[+] Nuclei scan complete. No vulnerabilities found.\033[0m")
+            print(f"\033[90m[*] Nuclei raw results saved to: {final_json_output}\033[0m")
             
             return vulnerabilities
 

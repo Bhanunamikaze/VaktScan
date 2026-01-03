@@ -12,6 +12,12 @@ An advanced, high-performance security scanner designed for comprehensive vulner
 - **Web Service Validation**: Common web port sweep (30+ ports) per host, automatic URL generation (HTTP/HTTPS) for live service detection, ProjectDiscovery httpx integration for responsive target enumeration.
 - **Vulnerability Scanning**: Service-specific modules for Elasticsearch, Kibana, Grafana, Prometheus, and Next.js plus ProjectDiscovery nuclei (with severity filtering and tuned rate limits) for broader HTTP exposure assessment.
 - **Optional Deepening**: Automatic Nmap `-sCV -Pn` on recon findings (`--nmap`) and CSV reporting for port scan snapshots.
+- **Service Modules**: 
+  - **Elasticsearch**: 11+ CVEs (2014-2024), version leaks, auth bypass checks, sensitive endpoint exposure.
+  - **Kibana**: CVE-2018-17246, CVE-2019-7609, default credentials, API enumeration, UI exposure detection.
+  - **Grafana**: 18+ CVEs, default creds, path traversal, XSS, plugin misconfigurations.
+  - **Prometheus**: Dashboard exposure, configuration leaks, target enumeration, Node Exporter analysis, pprof exposure.
+  - **Next.js (React)**: react-to-shell RCE (CVE-2025-55182) and associated supply chain checks.
 
 ###  Advanced Vulnerability Detection
 - **Smart Vulnerability Deduplication**: If the same vulnerability is discovered on both a hostname and its corresponding IP, the scanner now treats it as a single finding and reports it against the hostname, providing cleaner and more actionable reports.
@@ -118,6 +124,9 @@ python main.py --recon target.com --wordlist wordlist.txt
 # Attack surface recon + auto follow-up (web-port scan → httpx → dirsearch → nuclei)
 python main.py --recon target.com --wordlist wordlist.txt --scan-found
 
+# Skip passive recon and probe an existing subdomain list directly
+python main.py --recon target.com --sub-domains subs.txt
+
 # Recon + follow-up + full-range Nmap on alive hosts
 python main.py --recon target.com --wordlist wordlist.txt --scan-found --nmap
 
@@ -192,6 +201,7 @@ Options:
   --chunk-size INT        Chunk size for streaming mode (default: 30000)
   --recon DOMAIN          Run passive/active subdomain enumeration for DOMAIN
   --wordlist PATH         Wordlist for ffuf VHost fuzzing during recon
+  --sub-domains FILE      Provide newline-separated subdomains to probe (requires --recon)
   --scan-found            Immediately probe recon results (httpx→dirsearch→nuclei)
   --nmap                  Full 1-65535 port scan on recon hosts followed by nmap -sCV -Pn
   -h, --help              Show help
