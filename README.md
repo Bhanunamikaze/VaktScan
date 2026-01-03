@@ -116,7 +116,7 @@ python main.py targets.txt --resume
 # Run recon (passive + optional active chain)
 python main.py --recon squareup.com --wordlist wordlist.txt
 
-# Recon + auto follow-up (httpx → dirsearch → nuclei)
+# Recon + auto follow-up (web-port scan → httpx → dirsearch → nuclei)
 python main.py --recon squareup.com --wordlist wordlist.txt --scan-found
 
 # Recon + follow-up + full-range Nmap on alive hosts
