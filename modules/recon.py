@@ -240,20 +240,29 @@ class ReconScanner:
             cmd = f"sudo -n {cmd}"
         results = await self._run_command(cmd, "bbot")
 
+        saved_reports = []
         if os.path.isdir(outdir):
             path_obj = Path(outdir)
             candidates = list(path_obj.rglob("subdomains.txt")) + list(path_obj.rglob("output.txt"))
             if candidates:
+                # Prioritize subdomains.txt, newest first
                 candidates.sort(key=lambda p: (p.name != "subdomains.txt", -p.stat().st_mtime))
-                collected = False
-                for fpath in candidates:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                for idx, fpath in enumerate(candidates, start=1):
                     try:
-                        self._collect_results(str(fpath))
-                        collected = True
-                    except Exception:
+                        dest_name = f"bbot_{self.domain}_{timestamp}_{idx}_{fpath.name}"
+                        dest_path = os.path.join(self.domain_dir, dest_name)
+                        shutil.copy2(fpath, dest_path)
+                        self._collect_results(dest_path)
+                        saved_reports.append(dest_path)
+                    except Exception as exc:
+                        print(f"{Colors.YELLOW}[!] Failed to copy bbot result {fpath}: {exc}{Colors.RESET}")
                         continue
-                if collected:
-                    return
+        if saved_reports:
+            print(f"{Colors.GRAY}[*] bbot reports copied to:{Colors.RESET}")
+            for path in saved_reports:
+                print(f"    {path}")
+            return
 
         self._collect_from_lines(results)
 
