@@ -140,8 +140,11 @@ class ReconScanner:
         # Assetfinder outputs to stdout
         cmd = f"assetfinder --subs-only {self.domain}"
         results = await self._run_command(cmd, "Assetfinder")
-        for line in results:
-            self._add_subdomain(line)
+        outfile = os.path.join(self.domain_dir, f"assetfinder_{self.domain}.txt")
+        with open(outfile, 'w') as f:
+            for line in results:
+                f.write(f"{line}\n")
+                self._add_subdomain(line)
 
     async def run_findomain(self):
         outfile = os.path.join(self.domain_dir, f"findomain_{self.domain}.txt")
@@ -210,13 +213,17 @@ class ReconScanner:
             "--per-page 500 --virtual-hosts INCLUDE --no-color"
         )
         results = await self._run_command(cmd, "Censys")
-        self._collect_from_lines(results)
+        outfile = os.path.join(self.domain_dir, f"censys_{self.domain}.txt")
+        self._write_list(outfile, results)
+        self._collect_results(outfile)
 
     async def run_crtsh(self):
         binary = shlex.quote(self.tools.get("crtsh", "crtsh"))
         cmd = f"{binary} -d {shlex.quote(self.domain)} -r"
         results = await self._run_command(cmd, "crtsh")
-        self._collect_from_lines(results)
+        outfile = os.path.join(self.domain_dir, f"crtsh_{self.domain}.txt")
+        self._write_list(outfile, results)
+        self._collect_results(outfile)
 
     def _collect_results(self, filepath):
         if os.path.exists(filepath):
