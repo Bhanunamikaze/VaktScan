@@ -14,7 +14,20 @@ from utils import process_targets, process_targets_streaming, get_service_ports
 from port_scanner import scan_ports
 from service_validator import validate_service
 from scan_state import ScanStateManager
-from modules import elastic, kibana, grafana, prometheus, react_to_shell, recon, httpx_runner, nuclei_runner, nmap_runner, dir_enum
+from modules import (
+    elastic,
+    kibana,
+    grafana,
+    prometheus,
+    react_to_shell,
+    recon,
+    httpx_runner,
+    nuclei_runner,
+    nmap_runner,
+    dir_enum,
+    gau_runner,
+    waybackurls_runner,
+)
 
 # Map service names to their corresponding modules
 SERVICE_TO_MODULE = {
@@ -198,30 +211,114 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
     service_ports = get_service_ports()
     common_web_ports = sorted(set(service_ports.get("web", [])))
     port_scan_results = await scan_ports(recon_targets, common_web_ports, concurrency, state_manager=None)
-
     probe_urls = []
+    nmap_followup_task = None
+
+    async def _await_nmap_task():
+        if nmap_followup_task:
+            await nmap_followup_task
+
+    if nmap_enabled:
+        print(
+            f"{Colors.BRIGHT_MAGENTA}[*] Running background full-range port scan "
+            f"(1-65535) to prep Nmap follow-up...{Colors.RESET}"
+        )
+        full_port_range = list(range(1, 65536))
+        full_port_scan_task = asyncio.create_task(
+            scan_ports(recon_targets, full_port_range, concurrency, state_manager=None)
+        )
+
+        async def _nmap_followup():
+            full_results = await full_port_scan_task
+            ip_port_map = {}
+            ip_host_map = {}
+            for target_obj, data in full_results:
+                open_ports = data.get('open_ports', [])
+                if not open_ports:
+                    continue
+                ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
+                host = target_obj.get('display_target') or ip
+                if not ip:
+                    continue
+                ip_port_map.setdefault(ip, set()).update(open_ports)
+                ip_host_map.setdefault(ip, host)
+            nmap_jobs = [
+                (ip, sorted(ports), ip_host_map.get(ip, ip))
+                for ip, ports in ip_port_map.items()
+            ]
+            if not nmap_jobs:
+                print(
+                    f"{Colors.YELLOW}[!] No open ports discovered during full-range scan; "
+                    f"skipping Nmap follow-up.{Colors.RESET}"
+                )
+                return
+            print(
+                f"{Colors.CYAN}[*] Starting Nmap follow-up for {len(nmap_jobs)} host(s)...{Colors.RESET}"
+            )
+            nmap_inst = nmap_runner.NmapRunner(output_base_dir=output_dir)
+            await nmap_inst.run_batch(nmap_jobs, concurrency=concurrency)
+            print(
+                f"{Colors.GREEN}[+] Nmap follow-up completed for {len(nmap_jobs)} host(s).{Colors.RESET}"
+            )
+
+        nmap_followup_task = asyncio.create_task(_nmap_followup())
+
+    def _format_url(scheme, host_value, port_value):
+        default_port = 80 if scheme == "http" else 443
+        suffix = "" if port_value == default_port else f":{port_value}"
+        return f"{scheme}://{host_value}{suffix}"
+
+    def _normalize_host(host_value):
+        host_value = (host_value or "").strip().lower()
+        if not host_value:
+            return ""
+        if "://" in host_value:
+            host_value = host_value.split("://", 1)[1]
+        if "/" in host_value:
+            host_value = host_value.split("/", 1)[0]
+        if host_value.count(":") == 1 and host_value.split(":")[1].isdigit():
+            host_value = host_value.split(":")[0]
+        return host_value
+
+    def _collect_domain_hosts(host_iterable):
+        domains = set()
+        for host_value in host_iterable:
+            candidate = _normalize_host(host_value)
+            if not candidate:
+                continue
+            try:
+                ipaddress.ip_address(candidate)
+                continue
+            except ValueError:
+                pass
+            if "." not in candidate:
+                continue
+            domains.add(candidate)
+        return sorted(domains)
+
     for target_obj, data in port_scan_results:
-        open_ports = data.get('open_ports', [])
+        open_ports = sorted(set(data.get('open_ports', [])))
         if not open_ports:
             continue
         host = target_obj.get('display_target') or target_obj.get('scan_address')
         ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
-        for port in sorted(set(open_ports)):
-            scheme = "https" if port in [443, 4443, 8443] else "http"
-            formatted_port = f":{port}" if port not in [80, 443] else ""
-            probe_urls.append(f"{scheme}://{host}{formatted_port}")
-            if ip != host:
-                probe_urls.append(f"{scheme}://{ip}{formatted_port}")
+        for port in open_ports:
+            for scheme in ("http", "https"):
+                probe_urls.append(_format_url(scheme, host, port))
+                if ip != host:
+                    probe_urls.append(_format_url(scheme, ip, port))
 
     probe_urls = sorted(set(probe_urls))
     if not probe_urls:
         print(f"{Colors.YELLOW}[!] No open web ports detected; skipping httpx probe.{Colors.RESET}")
+        await _await_nmap_task()
         return
 
     print(f"{Colors.CYAN}[*] Probing {len(probe_urls)} URLs with httpx...{Colors.RESET}")
     httpx_data = await http_runner.run_httpx(probe_urls, concurrency)
     if not httpx_data:
         print(f"{Colors.YELLOW}[!] No alive HTTP services detected by httpx.{Colors.RESET}")
+        await _await_nmap_task()
         return
 
     http_runner.save_csv(httpx_data, recon_domain.replace('.', '_'))
@@ -258,6 +355,7 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
 
     alive_urls = sorted(set(alive_urls))
     if alive_urls:
+        #print("Commented Out DIR ENUM - Continue to Nuclei")
         await dir_enumerator.run_dirsearch(alive_urls)
 
     if alive_urls:
@@ -270,32 +368,17 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
         else:
             print(f"{Colors.GREEN}[+] Nuclei scan complete with no findings.{Colors.RESET}")
 
-    if nmap_enabled:
-        print(f"{Colors.BRIGHT_MAGENTA}\n[*] Running full-range port scan (1-65535) for Nmap follow-up...{Colors.RESET}")
-        recon_targets = await process_targets(unique_targets)
-        if not recon_targets:
-            print(f"{Colors.RED}[!] Unable to build targets for Nmap scanning.{Colors.RESET}")
-        else:
-            full_port_range = list(range(1, 65536))
-            port_scan_results = await scan_ports(recon_targets, full_port_range, concurrency)
-            ip_port_map = {}
-            ip_host_map = {}
-            for target_obj, data in port_scan_results:
-                open_ports = data.get('open_ports', [])
-                if not open_ports:
-                    continue
-                ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
-                host = target_obj.get('display_target') or ip
-                if not ip:
-                    continue
-                ip_port_map.setdefault(ip, set()).update(open_ports)
-                ip_host_map.setdefault(ip, host)
-            nmap_jobs = [(ip, sorted(ports), ip_host_map.get(ip, ip)) for ip, ports in ip_port_map.items()]
-            if nmap_jobs:
-                nmap_inst = nmap_runner.NmapRunner(output_base_dir=output_dir)
-                await nmap_inst.run_batch(nmap_jobs, concurrency=concurrency)
-            else:
-                print(f"{Colors.YELLOW}[!] No open ports discovered during recon port scan; skipping Nmap.{Colors.RESET}")
+    domain_hosts = _collect_domain_hosts(alive_urls)
+    if domain_hosts:
+        print(f"{Colors.CYAN}[*] Harvesting archived URLs for {len(domain_hosts)} host(s) (gau → waybackurls)...{Colors.RESET}")
+        gau_inst = gau_runner.GAURunner(output_dir=output_dir)
+        await gau_inst.run(domain_hosts)
+        wayback_inst = waybackurls_runner.WaybackURLsRunner(output_dir=output_dir)
+        await wayback_inst.run(domain_hosts)
+    else:
+        print(f"{Colors.YELLOW}[!] No hostname targets available for gau/waybackurls.{Colors.RESET}")
+
+    await _await_nmap_task()
 
 def load_subdomains_file(file_path):
     """
@@ -316,6 +399,37 @@ def load_subdomains_file(file_path):
     if not entries:
         print(f"{Colors.YELLOW}[!] Subdomain file '{file_path}' did not contain any usable entries.{Colors.RESET}")
     return entries
+
+
+def expand_recon_inputs(recon_args):
+    """
+    Expand --recon arguments which may include literal domains and/or files.
+    """
+    if not recon_args:
+        return []
+
+    expanded = []
+    for raw in recon_args:
+        if not raw:
+            continue
+        candidate = raw.strip()
+        if not candidate:
+            continue
+
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        expanded.append(line.lower())
+            except OSError as exc:
+                print(f"{Colors.RED}[!] Unable to read recon domain file '{candidate}': {exc}{Colors.RESET}")
+        else:
+            expanded.append(candidate.lower())
+
+    return expanded
 
 def deduplicate_vulnerabilities(vulnerabilities):
     """
@@ -346,7 +460,7 @@ def deduplicate_vulnerabilities(vulnerabilities):
 
     return list(unique_vulns.values())
 
-async def main(targets_file, concurrency, resume=False, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000, recon_domains=None, wordlist=None, scan_found=False, nmap_enabled=False, subdomains_file=None):
+async def main(targets_file, concurrency, resume=False, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000, recon_domains=None, wordlist=None, scan_found=False, nmap_enabled=False, subdomains_file=None, recon_concurrency=2):
     """
     Main orchestrator for the scanning tool.
     """
@@ -384,8 +498,8 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
     if recon_domains:
         normalized_domains = []
         seen_domains = set()
-        for entry in recon_domains:
-            domain = (entry or "").strip().lower()
+        for domain in expand_recon_inputs(recon_domains):
+            domain = domain.strip().lower()
             if not domain:
                 continue
             if domain in seen_domains:
@@ -425,6 +539,10 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
         else:
             print(f"{Colors.CYAN}[*] Running passive recon for {len(normalized_domains)} domain(s) concurrently...{Colors.RESET}")
             print(f"{Colors.GRAY}[*] Toolchain: Amass, Subfinder, Assetfinder, Findomain, Sublist3r, Knockpy, bbot, Censys, crtsh + DirEnumerator(ffuf){Colors.RESET}")
+            tool_limit = getattr(recon, "TOOL_CONCURRENCY_LIMIT", None)
+            if tool_limit:
+                print(f"{Colors.GRAY}[*] Recon tool concurrency capped at {tool_limit} parallel process(es) "
+                      f"(set VAKT_RECON_TOOL_LIMIT to adjust).{Colors.RESET}")
 
             async def handle_domain(domain):
                 print(f"{Colors.CYAN}[*] Enumerating subdomains for {domain}...{Colors.RESET}")
@@ -445,7 +563,14 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
                     "subdomains": subdomains,
                 }
 
-            tasks = [asyncio.create_task(handle_domain(domain)) for domain in normalized_domains]
+            max_recon = max(1, recon_concurrency or 1)
+            semaphore = asyncio.Semaphore(max_recon)
+
+            async def limited_domain_run(domain):
+                async with semaphore:
+                    return await handle_domain(domain)
+
+            tasks = [asyncio.create_task(limited_domain_run(domain)) for domain in normalized_domains]
             recon_results = await asyncio.gather(*tasks, return_exceptions=True)
             successes = []
             for result in recon_results:
@@ -540,8 +665,13 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
             print("[!] No valid targets to scan. Exiting.")
             return
 
-        # 2. Define service ports
-        service_ports = get_service_ports()
+        # 2. Define service ports (only modules that have scanners)
+        full_service_ports = get_service_ports()
+        service_ports = {
+            service: ports
+            for service, ports in full_service_ports.items()
+            if service in SERVICE_TO_MODULE
+        }
         
         if module_filter:
             print(f"{Colors.YELLOW}[*] Module filter: Scanning only {module_filter.capitalize()} services{Colors.RESET}")
@@ -550,8 +680,7 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
         # Default scan ports (standard VaktScan mode)
         all_ports_to_scan = [
             port
-            for service, ports in service_ports.items()
-            if service != "web"
+            for ports in service_ports.values()
             for port in ports
         ]
         
@@ -622,8 +751,7 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
                         service_mapping.append((service, target_obj, port, scanner_func))
 
                 if custom_ports and port not in [p for ports in service_ports.values() for p in ports]:
-                    original_service_ports = get_service_ports()
-                    for service_name in original_service_ports.keys():
+                    for service_name in SERVICE_TO_MODULE.keys():
                         if module_filter is None or service_name == module_filter:
                             scanner_func = SERVICE_TO_MODULE[service_name].run_scans
                             validation_tasks.append(validate_service(service_name, scan_address, port))
@@ -729,7 +857,12 @@ async def process_streaming_scan(raw_targets, concurrency, output_csv=False, mod
     total_chunks = (total_targets + chunk_size - 1) // chunk_size if chunk_size > 0 else 1
     print(f"{Colors.CYAN}[*] Starting streaming scan: ~{total_targets:,} total targets across {total_chunks} chunks{Colors.RESET}")
     
-    service_ports = get_service_ports()
+    base_ports = get_service_ports()
+    service_ports = {
+        service: ports
+        for service, ports in base_ports.items()
+        if service in SERVICE_TO_MODULE
+    }
     if module_filter:
         service_ports = {module_filter: service_ports.get(module_filter, [])}
     
@@ -781,7 +914,7 @@ async def process_chunk_services(open_ports_results, service_ports, module_filte
                     validation_tasks.append(validate_service(service, scan_address, port))
                     service_mapping.append((service, target_obj, port, scanner_func))
             if custom_ports and port not in [p for ports in service_ports.values() for p in ports]:
-                for service_name in get_service_ports().keys():
+                for service_name in SERVICE_TO_MODULE.keys():
                     if module_filter is None or service_name == module_filter:
                         scanner_func = SERVICE_TO_MODULE[service_name].run_scans
                         validation_tasks.append(validate_service(service_name, scan_address, port))
@@ -871,7 +1004,13 @@ if __name__ == "__main__":
         "--recon",
         metavar="DOMAIN",
         nargs="+",
-        help="Run subdomain enumeration and passive recon on one or more DOMAIN values."
+        help="Run subdomain enumeration and passive recon on one or more DOMAIN values or files."
+    )
+    parser.add_argument(
+        "--recon-concurrency",
+        type=int,
+        default=2,
+        help="Number of recon domains to run at once when multiple are provided."
     )
     parser.add_argument(
         "--wordlist",
@@ -909,7 +1048,8 @@ if __name__ == "__main__":
             args.wordlist,
             args.scan_found,
             args.nmap,
-            args.sub_domains_file
+            args.sub_domains_file,
+            args.recon_concurrency
         ))
     except KeyboardInterrupt:
         print("\n[*] Scanner terminated by user.")

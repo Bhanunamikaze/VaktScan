@@ -40,8 +40,6 @@ class NmapRunner:
         # -Pn: Treat host as online (skip discovery)
         cmd = f"{self.binary} -sCV -Pn -p {ports_str} {ip} -oN {output_file}"
         
-        print(f"\033[96m[*] Starting nmap on {safe_name} ({len(ports)} ports)...\033[0m")
-        
         try:
             process = await asyncio.create_subprocess_shell(
                 cmd,
@@ -52,7 +50,7 @@ class NmapRunner:
             stdout, stderr = await process.communicate()
             
             if os.path.exists(output_file):
-                print(f"\033[92m[+] Nmap finished for {safe_name}. Saved to: {output_file}\033[0m")
+                pass
             else:
                  # Only print error if file wasn't created, as nmap writes progressively
                  print(f"\033[91m[!] Nmap failed to create output for {safe_name}.\033[0m")
@@ -75,12 +73,7 @@ class NmapRunner:
             print("\033[93m[*] No targets with open ports to scan with Nmap.\033[0m")
             return
 
-        print(f"\n\033[95m[+] Starting Nmap Script/Version Scans on {len(targets_data)} targets...\033[0m")
-        print(f"\033[90m[*] Results directory: {self.nmap_dir}\033[0m")
-        
-        # Nmap is heavy, so we limit concurrency separate from the main scanner
-        # default to 10 or user provided if lower
-        actual_concurrency = min(concurrency, 10) 
+        actual_concurrency = max(1, concurrency)
         semaphore = asyncio.Semaphore(actual_concurrency)
 
         async def sem_task(t_data):
@@ -89,4 +82,3 @@ class NmapRunner:
 
         tasks = [sem_task(t) for t in targets_data]
         await asyncio.gather(*tasks)
-        print(f"\033[92m[+] All Nmap scans completed.\033[0m")

@@ -9,3 +9,5 @@ from . import httpx_runner
 from . import nuclei_runner
 from . import nmap_runner
 from . import dir_enum
+from . import gau_runner
+from . import waybackurls_runner

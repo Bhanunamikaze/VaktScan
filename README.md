@@ -124,6 +124,9 @@ python main.py --recon target.com --wordlist wordlist.txt
 # Run recon for multiple domains concurrently and immediately scan the findings
 python main.py --recon target.com api.target.com --scan-found
 
+# Feed recon a file of domains and limit concurrent recon jobs
+python main.py --recon recon_domains.txt --recon-concurrency 1
+
 # Attack surface recon + auto follow-up (web-port scan → httpx → dirsearch → nuclei)
 python main.py --recon target.com --wordlist wordlist.txt --scan-found
 
@@ -202,9 +205,10 @@ Options:
   -m, --module SERVICE    Scan only elasticsearch|kibana|grafana|prometheus|nextjs
   -p, --ports PORTS       Extra comma-separated ports to scan
   --chunk-size INT        Chunk size for streaming mode (default: 30000)
-  --recon DOMAIN          Run passive/active subdomain enumeration for DOMAIN and scan findings
+  --recon DOMAIN|FILE     Run passive/active recon on one or more DOMAIN values or @FILE list and scan findings
   --wordlist PATH         Wordlist for ffuf VHost fuzzing during recon
   --sub-domains FILE      Provide newline-separated subdomains to probe (requires --recon)
+  --recon-concurrency N   Limit how many recon domains run concurrently (default: 2)
   --scan-found            Immediately probe recon results (httpx→dirsearch→nuclei)
   --nmap                  Full 1-65535 port scan on recon hosts followed by nmap -sCV -Pn
   -h, --help              Show help

@@ -11,6 +11,7 @@ class NucleiRunner:
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
         self.binary = self._resolve_binary()
+        self.output_flag = self._detect_output_flag()
 
     def _resolve_binary(self):
         candidates = [
@@ -56,6 +57,27 @@ class NucleiRunner:
         except Exception:
             return False
 
+    def _detect_output_flag(self):
+        if not self.binary:
+            return None
+        try:
+            result = subprocess.run(
+                [self.binary, "-h"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception:
+            return "-json"
+
+        help_text = (result.stdout or "") + (result.stderr or "")
+        lower_help = help_text.lower()
+        if "-jsonl" in lower_help:
+            return "-jsonl"
+        if "-json" in lower_help:
+            return "-json"
+        return "-json"
+
     async def run_nuclei(self, targets):
         """
         Runs nuclei on a list of targets (URLs).
@@ -83,68 +105,89 @@ class NucleiRunner:
             return []
 
         # Construct command following ProjectDiscovery best practices (Ultimate Guide)
-        cmd = (
-            f"{self.binary} -l {input_file} "
-            "-c 50 "
-            "-rl 150 "
-            "-bs 100 "
-            "-timeout 15 "
-            "-silent "
-            "-severity critical,high,medium "
-            "-json "
-            "-nc "
-            f"-o {json_output_tmp}"
-        )
+        cmd = [
+            self.binary,
+            "-l", input_file,
+            "-c", "50",
+            "-rl", "150",
+            "-bs", "100",
+            "-timeout", "15",
+            "-severity", "critical,high,medium",
+            "-nc",
+        ]
+        if self.output_flag:
+            cmd.append(self.output_flag)
+        cmd.extend(["-silent", "-o", json_output_tmp])
 
         print(f"\033[96m[*] Running nuclei on {len(targets)} alive services...\033[0m")
         print(f"\033[90m[*] Nuclei targets file: {input_file}\033[0m")
 
         try:
-            process = await asyncio.create_subprocess_shell(
-                cmd,
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
 
-            # Check if output file exists (Nuclei might not create it if no vulns found)
-            if not os.path.exists(json_output_tmp):
-                if stderr and b"error" in stderr.lower():
-                     print(f"\033[93m[!] Nuclei warning/error: {stderr.decode().strip()}\033[0m")
-                return []
+            if process.returncode not in (0, None):
+                print(f"\033[93m[!] Nuclei exited with code {process.returncode}.\033[0m")
+                stderr_text = stderr.decode().strip()
+                if stderr_text:
+                    print(f"\033[90m[*] nuclei stderr:\033[0m\n{stderr_text}")
 
-            vulnerabilities = []
-            with open(json_output_tmp, 'r') as f:
-                for line in f:
-                    if not line.strip(): continue
+            # Prefer file output, but fall back to stdout if file missing
+            data_lines = []
+            if os.path.exists(json_output_tmp):
+                with open(json_output_tmp, 'r') as f:
+                    data_lines = [line.strip() for line in f if line.strip()]
+            else:
+                stdout_lines = [line.strip() for line in stdout.decode().splitlines() if line.strip()]
+                if stdout_lines:
+                    data_lines = stdout_lines
                     try:
-                        data = json.loads(line)
-                        
-                        # Map Nuclei JSON to VaktScan Vulnerability Structure
-                        severity_raw = data.get('info', {}).get('severity', 'info')
-                        mapped_status = self._map_severity(severity_raw)
-                        
-                        vuln = {
-                            'target': data.get('host', ''), # Hostname usually
-                            'resolved_ip': data.get('ip', ''), 
-                            'port': self._extract_port(data.get('matched-at', '')),
-                            'vulnerability': data.get('info', {}).get('name', 'Unknown Vulnerability'),
-                            'status': mapped_status,
-                            'severity': severity_raw.upper(),
-                            'module': 'nuclei',
-                            'service_version': 'N/A',
-                            'url': data.get('matched-at', ''),
-                            'details': data.get('info', {}).get('description', '') or data.get('matcher-name', '')
-                        }
-                        vulnerabilities.append(vuln)
-                    except json.JSONDecodeError:
-                        continue
+                        with open(json_output_tmp, 'w') as handle:
+                            for line in stdout_lines:
+                                handle.write(f"{line}\n")
+                    except OSError:
+                        pass
 
             # Cleanup
             try:
                 os.remove(input_file)
             except OSError:
                 pass
+
+            if not data_lines:
+                print(f"\033[92m[+] Nuclei scan complete. No vulnerabilities found.\033[0m")
+                try:
+                    os.remove(json_output_tmp)
+                except OSError:
+                    pass
+                return []
+
+            vulnerabilities = []
+            for line in data_lines:
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                severity_raw = data.get('info', {}).get('severity', 'info')
+                mapped_status = self._map_severity(severity_raw)
+                vuln = {
+                    'target': data.get('host', ''),
+                    'resolved_ip': data.get('ip', ''),
+                    'port': self._extract_port(data.get('matched-at', '')),
+                    'vulnerability': data.get('info', {}).get('name', 'Unknown Vulnerability'),
+                    'status': mapped_status,
+                    'severity': severity_raw.upper(),
+                    'module': 'nuclei',
+                    'service_version': 'N/A',
+                    'url': data.get('matched-at', ''),
+                    'details': data.get('info', {}).get('description', '') or data.get('matcher-name', '')
+                }
+                vulnerabilities.append(vuln)
 
             try:
                 shutil.move(json_output_tmp, final_json_output)
@@ -156,7 +199,7 @@ class NucleiRunner:
             else:
                 print(f"\033[92m[+] Nuclei scan complete. No vulnerabilities found.\033[0m")
             print(f"\033[90m[*] Nuclei raw results saved to: {final_json_output}\033[0m")
-            
+
             return vulnerabilities
 
         except Exception as e:

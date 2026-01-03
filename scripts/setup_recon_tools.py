@@ -131,6 +131,29 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
         ),
         description="bbot subdomain enumeration framework (requires ~/.local/bin in PATH).",
     ),
+    "gau": ToolSpec(
+        name="gau",
+        binary="gau",
+        install_cmd=(
+            "tmpdir=$(mktemp -d) && "
+            "arch=$(uname -m) && "
+            "case \"$arch\" in "
+            "x86_64|amd64) asset=\"gau_2.2.4_linux_amd64.tar.gz\" ;; "
+            "aarch64|arm64) asset=\"gau_2.2.4_linux_arm64.tar.gz\" ;; "
+            "armv7l|armv7) asset=\"gau_2.2.4_linux_armv7.tar.gz\" ;; "
+            "i386|i686) asset=\"gau_2.2.4_linux_386.tar.gz\" ;; "
+            "*) echo \"Unsupported architecture: $arch\" && exit 1 ;; "
+            "esac && "
+            "curl -sL \"https://github.com/lc/gau/releases/download/v2.2.4/$asset\" "
+            "-o \"$tmpdir/$asset\" && "
+            "tar -xzf \"$tmpdir/$asset\" -C \"$tmpdir\" && "
+            "bin_path=$(find \"$tmpdir\" -type f -name gau -perm -111 | head -n 1) && "
+            "[ -n \"$bin_path\" ] || { echo 'gau binary not found in archive'; exit 1; } && "
+            "sudo install -m 755 \"$bin_path\" /usr/local/bin/gau && "
+            "rm -rf \"$tmpdir\""
+        ),
+        description="Gather all URLs (gau) v2.2.4 release binary for archived URL scraping.",
+    ),
     "censys": ToolSpec(
         name="censys",
         binary="censys",
@@ -187,6 +210,28 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
             "rm -rf \"$tmpdir\""
         ),
         description="ProjectDiscovery httpx v1.7.4 binary download (architecture-aware).",
+    ),
+    "waybackurls": ToolSpec(
+        name="waybackurls",
+        binary="waybackurls",
+        install_cmd=(
+            "tmpdir=$(mktemp -d) && "
+            "arch=$(uname -m) && "
+            "case \"$arch\" in "
+            "x86_64|amd64) asset=\"waybackurls-linux-amd64-0.1.0.tgz\" ;; "
+            "aarch64|arm64) asset=\"waybackurls-linux-arm64-0.1.0.tgz\" ;; "
+            "i386|i686) asset=\"waybackurls-linux-386-0.1.0.tgz\" ;; "
+            "*) echo \"Unsupported architecture: $arch\" && exit 1 ;; "
+            "esac && "
+            "curl -sL \"https://github.com/tomnomnom/waybackurls/releases/download/v0.1.0/$asset\" "
+            "-o \"$tmpdir/$asset\" && "
+            "tar -xzf \"$tmpdir/$asset\" -C \"$tmpdir\" && "
+            "bin_path=$(find \"$tmpdir\" -type f -name waybackurls -perm -111 | head -n 1) && "
+            "[ -n \"$bin_path\" ] || { echo 'waybackurls binary not found in archive'; exit 1; } && "
+            "sudo install -m 755 \"$bin_path\" /usr/local/bin/waybackurls && "
+            "rm -rf \"$tmpdir\""
+        ),
+        description="waybackurls v0.1.0 release binary for archived URL enumeration.",
     ),
     "nmap": ToolSpec(
         name="nmap",
@@ -261,16 +306,24 @@ def main() -> None:
         action="store_true",
         help="Attempt to install every missing tool using the predefined commands.",
     )
+    tool_choices = sorted(TOOL_SPECS.keys())
     parser.add_argument(
         "--tools",
         nargs="+",
-        choices=sorted(TOOL_SPECS.keys()),
+        choices=tool_choices,
         metavar="TOOL",
         help="Only process a subset of tools (default: all).",
     )
+    parser.add_argument(
+        "tool_args",
+        nargs="*",
+        choices=tool_choices,
+        metavar="TOOL",
+        help="Optional positional tool list (alias of --tools for convenience).",
+    )
     args = parser.parse_args()
 
-    selected = args.tools or list(TOOL_SPECS.keys())
+    selected = args.tools or args.tool_args or list(TOOL_SPECS.keys())
     status_lines: List[str] = []
 
     go_needed = any(
