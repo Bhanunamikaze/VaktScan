@@ -346,7 +346,7 @@ def deduplicate_vulnerabilities(vulnerabilities):
 
     return list(unique_vulns.values())
 
-async def main(targets_file, concurrency, resume=False, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000, recon_domain=None, wordlist=None, scan_found=False, nmap_enabled=False, subdomains_file=None):
+async def main(targets_file, concurrency, resume=False, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000, recon_domains=None, wordlist=None, scan_found=False, nmap_enabled=False, subdomains_file=None):
     """
     Main orchestrator for the scanning tool.
     """
@@ -364,41 +364,134 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
     
     # Store recon results to pass to scanner if needed
     nuclei_vulns_found = False
+    recon_targets_file = None
+    recon_targets_count = 0
 
     # Validation: --nmap needs --recon
-    if nmap_enabled and not recon_domain:
+    if nmap_enabled and not recon_domains:
         print(f"{Colors.RED}[!] Error: --nmap cannot be used without --recon.{Colors.RESET}")
         sys.exit(1)
-    if subdomains_file and not recon_domain:
-        print(f"{Colors.RED}[!] Error: --sub-domains requires --recon to be specified.{Colors.RESET}")
-        sys.exit(1)
+    if subdomains_file:
+        if not recon_domains:
+            print(f"{Colors.RED}[!] Error: --sub-domains requires --recon to be specified.{Colors.RESET}")
+            sys.exit(1)
+        if len(recon_domains) != 1:
+            print(f"{Colors.RED}[!] Error: --sub-domains currently supports exactly one --recon domain.{Colors.RESET}")
+            sys.exit(1)
 
     # --- RECONNAISSANCE MODE ---
-    if recon_domain:
-        print(f"{Colors.CYAN}[*] Starting Reconnaissance Mode for: {Colors.BOLD}{recon_domain}{Colors.RESET}")
+    recon_targets_label = None
+    if recon_domains:
+        normalized_domains = []
+        seen_domains = set()
+        for entry in recon_domains:
+            domain = (entry or "").strip().lower()
+            if not domain:
+                continue
+            if domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+            normalized_domains.append(domain)
+
+        if not normalized_domains:
+            print(f"{Colors.RED}[!] No valid recon domains supplied.{Colors.RESET}")
+            return
 
         if subdomains_file:
+            recon_domain = normalized_domains[0]
+            print(f"{Colors.CYAN}[*] Starting Reconnaissance Mode for: {Colors.BOLD}{recon_domain}{Colors.RESET}")
             subdomains = load_subdomains_file(subdomains_file)
-            if not subdomains:
+            unique_subdomains = sorted(set(subdomains))
+            if not unique_subdomains:
                 print(f"{Colors.RED}[!] No usable subdomains found in '{subdomains_file}'. Nothing to probe.{Colors.RESET}")
                 return
             safe_domain = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in recon_domain.lower())
             domain_output_dir = os.path.join("recon_results", safe_domain or "domain")
             os.makedirs(domain_output_dir, exist_ok=True)
+            dedup_file = os.path.join(domain_output_dir, f"manual_subdomains_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+            try:
+                with open(dedup_file, "w", encoding="utf-8") as handle:
+                    for host in unique_subdomains:
+                        handle.write(f"{host}\n")
+                print(f"{Colors.GRAY}[*] Normalized subdomain list saved to {dedup_file}{Colors.RESET}")
+            except OSError as exc:
+                print(f"{Colors.RED}[!] Failed to write normalized subdomain file: {exc}{Colors.RESET}")
+                return
             print(f"{Colors.GRAY}[*] Using provided subdomain list '{subdomains_file}'. Skipping passive recon and starting with HTTP probing.{Colors.RESET}")
-            await run_recon_followups(subdomains, recon_domain, domain_output_dir, concurrency, nmap_enabled, wordlist)
+            await run_recon_followups(unique_subdomains, recon_domain, domain_output_dir, concurrency, nmap_enabled, wordlist)
+            recon_targets_file = dedup_file
+            recon_targets_count = len(unique_subdomains)
+            recon_targets_label = dedup_file
+        else:
+            print(f"{Colors.CYAN}[*] Running passive recon for {len(normalized_domains)} domain(s) concurrently...{Colors.RESET}")
+            print(f"{Colors.GRAY}[*] Toolchain: Amass, Subfinder, Assetfinder, Findomain, Sublist3r, Knockpy, bbot, Censys, crtsh + DirEnumerator(ffuf){Colors.RESET}")
+
+            async def handle_domain(domain):
+                print(f"{Colors.CYAN}[*] Enumerating subdomains for {domain}...{Colors.RESET}")
+                scanner = recon.ReconScanner(domain, wordlist=wordlist)
+                results_file, subdomains = await scanner.run_all()
+                if not subdomains:
+                    print(f"{Colors.YELLOW}[!] Recon completed for {domain} but no subdomains were discovered.{Colors.RESET}")
+                    return None
+                domain_output_dir = os.path.dirname(results_file)
+                if scan_found:
+                    await run_recon_followups(subdomains, domain, domain_output_dir, concurrency, nmap_enabled, wordlist)
+                else:
+                    print(f"{Colors.GRAY}[*] Recon ({domain}) complete. Use --scan-found to automatically probe recon targets (httpx → dirsearch → nuclei).{Colors.RESET}")
+                return {
+                    "domain": domain,
+                    "file": results_file,
+                    "count": len(subdomains),
+                    "subdomains": subdomains,
+                }
+
+            tasks = [asyncio.create_task(handle_domain(domain)) for domain in normalized_domains]
+            recon_results = await asyncio.gather(*tasks, return_exceptions=True)
+            successes = []
+            for result in recon_results:
+                if isinstance(result, dict):
+                    successes.append(result)
+                elif isinstance(result, Exception):
+                    print(f"{Colors.RED}[!] Recon error: {result}{Colors.RESET}")
+
+            if not successes:
+                print(f"{Colors.RED}[!] Recon finished with no usable targets.{Colors.RESET}")
+                return
+
+            if len(successes) == 1:
+                meta = successes[0]
+                recon_targets_file = meta["file"]
+                recon_targets_count = meta["count"]
+                recon_targets_label = meta["file"]
+            else:
+                combined_targets = sorted({sub for meta in successes for sub in meta["subdomains"]})
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                combined_dir = os.path.join("recon_results", "combined")
+                os.makedirs(combined_dir, exist_ok=True)
+                combined_file = os.path.join(combined_dir, f"recon_targets_{timestamp}.txt")
+                try:
+                    with open(combined_file, "w", encoding="utf-8") as handle:
+                        for item in combined_targets:
+                            handle.write(f"{item}\n")
+                except OSError as exc:
+                    print(f"{Colors.RED}[!] Failed to write combined recon targets: {exc}{Colors.RESET}")
+                    return
+                print(f"{Colors.GRAY}[*] Combined recon targets saved to {combined_file}{Colors.RESET}")
+                recon_targets_file = combined_file
+                recon_targets_count = len(combined_targets)
+                recon_targets_label = combined_file
+
+        if recon_targets_count == 0:
+            print(f"{Colors.YELLOW}[!] Recon input did not yield any valid targets. Exiting.{Colors.RESET}")
             return
 
-        print(f"{Colors.GRAY}[*] Tools: Amass, Subfinder, Assetfinder, Findomain, Sublist3r, Knockpy, bbot, Censys, crtsh + DirEnumerator(ffuf){Colors.RESET}")
-        scanner = recon.ReconScanner(recon_domain, wordlist=wordlist)
-        results_file, subdomains = await scanner.run_all()
-        domain_output_dir = os.path.dirname(results_file)
-        
-        if scan_found:
-            await run_recon_followups(subdomains, recon_domain, domain_output_dir, concurrency, nmap_enabled, wordlist)
-        else:
-            print(f"\n{Colors.CYAN}[*] Recon complete. To scan these targets, run:\n    python main.py {results_file}{Colors.RESET}")
-        return
+        if targets_file:
+            print(f"{Colors.YELLOW}[!] Ignoring provided targets file because --recon supplies its own target set.{Colors.RESET}")
+        targets_file = recon_targets_file
+        print(
+            f"{Colors.CYAN}[*] Continuing with full service scanning for {recon_targets_count} recon target(s) "
+            f"from {recon_targets_label}.{Colors.RESET}"
+        )
 
     # --- MAIN SCANNING LOGIC ---
     if not targets_file:
@@ -777,7 +870,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--recon",
         metavar="DOMAIN",
-        help="Run subdomain enumeration and passive recon on DOMAIN."
+        nargs="+",
+        help="Run subdomain enumeration and passive recon on one or more DOMAIN values."
     )
     parser.add_argument(
         "--wordlist",

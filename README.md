@@ -118,8 +118,11 @@ python main.py targets.txt -c 1000
 # Resume interrupted scan
 python main.py targets.txt --resume
 
-# Run recon (passive + optional active chain)
+# Run recon (passive + optional active chain → service scan automatically continues)
 python main.py --recon target.com --wordlist wordlist.txt
+
+# Run recon for multiple domains concurrently and immediately scan the findings
+python main.py --recon target.com api.target.com --scan-found
 
 # Attack surface recon + auto follow-up (web-port scan → httpx → dirsearch → nuclei)
 python main.py --recon target.com --wordlist wordlist.txt --scan-found
@@ -199,7 +202,7 @@ Options:
   -m, --module SERVICE    Scan only elasticsearch|kibana|grafana|prometheus|nextjs
   -p, --ports PORTS       Extra comma-separated ports to scan
   --chunk-size INT        Chunk size for streaming mode (default: 30000)
-  --recon DOMAIN          Run passive/active subdomain enumeration for DOMAIN
+  --recon DOMAIN          Run passive/active subdomain enumeration for DOMAIN and scan findings
   --wordlist PATH         Wordlist for ffuf VHost fuzzing during recon
   --sub-domains FILE      Provide newline-separated subdomains to probe (requires --recon)
   --scan-found            Immediately probe recon results (httpx→dirsearch→nuclei)
