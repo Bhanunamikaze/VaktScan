@@ -127,7 +127,7 @@ class ReconScanner:
     async def run_amass(self):
         # Amass passive enum
         outfile = os.path.join(self.domain_dir, f"amass_{self.domain}.txt")
-        cmd = f"amass enum -passive -d {self.domain} -o {outfile} -silent"
+        cmd = f"amass enum -brute -active -min-for-recursive 2 {self.domain} -o {outfile} -silent"
         results = await self._run_command(cmd, "Amass")
         if not os.path.exists(outfile) and results:
             try:
@@ -340,7 +340,7 @@ class ReconScanner:
             print(f"{Colors.YELLOW}[!] Skipping privileged tools: {', '.join(sorted(disabled))}{Colors.RESET}")
 
         tasks = []
-        if "amass" not in missing: tasks.append(self.run_amass())
+        #if "amass" not in missing: tasks.append(self.run_amass())
         if "subfinder" not in missing: tasks.append(self.run_subfinder())
         if "assetfinder" not in missing: tasks.append(self.run_assetfinder())
         if "findomain" not in missing: tasks.append(self.run_findomain())

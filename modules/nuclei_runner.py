@@ -1,7 +1,8 @@
 import asyncio
 import json
-import shutil
 import os
+import shutil
+import subprocess
 from datetime import datetime
 
 class NucleiRunner:
@@ -9,13 +10,51 @@ class NucleiRunner:
         self.output_dir = output_dir
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
-        self.binary = "nuclei"
-        self.check_installed()
+        self.binary = self._resolve_binary()
 
-    def check_installed(self):
-        """Checks if nuclei is available in the system PATH."""
-        if not shutil.which(self.binary):
-             self.binary = None
+    def _resolve_binary(self):
+        candidates = [
+            os.environ.get("VAKT_NUCLEI_BIN"),
+            "/usr/local/bin/nuclei",
+            "/opt/homebrew/bin/nuclei",
+            shutil.which("nuclei"),
+            os.path.expanduser("~/.local/bin/nuclei"),
+        ]
+        seen = set()
+        for cand in candidates:
+            path = self._normalize_path(cand)
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            if self._is_projectdiscovery_nuclei(path):
+                return path
+        fallback = shutil.which("nuclei")
+        if fallback:
+            print("\033[93m[!] ProjectDiscovery nuclei not found. Falling back to system nuclei at: "
+                  f"{fallback}\033[0m")
+            return fallback
+        return None
+
+    def _normalize_path(self, candidate):
+        if not candidate:
+            return None
+        expanded = os.path.expanduser(candidate)
+        if os.path.isabs(expanded):
+            return expanded if os.path.exists(expanded) else None
+        return shutil.which(expanded)
+
+    def _is_projectdiscovery_nuclei(self, path):
+        try:
+            result = subprocess.run(
+                [path, "-version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            return "Nuclei" in output or "projectdiscovery" in output.lower()
+        except Exception:
+            return False
 
     async def run_nuclei(self, targets):
         """

@@ -120,7 +120,7 @@ class DirEnumerator:
         output_pattern = os.path.join(reports_dir, "dirsearch_report_%host.txt")
         binary = shlex.quote(self.dirsearch_binary)
         cmd = (
-            f"{binary} -L {shlex.quote(tmp_path)} "
+            f"{binary} -l {shlex.quote(tmp_path)} "
             f"--output={shlex.quote(output_pattern)} --format=simple "
             "--force-recursive --exclude-status=404,403,500-599 "
             f"-t {threads} --random-agent"
