@@ -196,16 +196,10 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
     http_runner.save_csv(httpx_data, recon_domain.replace('.', '_'))
 
     alive_urls = []
-    nmap_targets = []
     for entry in httpx_data:
         url = entry.get('url')
         if url:
             alive_urls.append(url)
-        ip = entry.get('ip') or entry.get('host')
-        port = entry.get('port')
-        hostname = entry.get('input', '').split(':')[0] or entry.get('url')
-        if ip and port:
-            nmap_targets.append((ip, [port], hostname))
 
     alive_urls = sorted(set(alive_urls))
     dir_enumerator = dir_enum.DirEnumerator(recon_domain, output_dir=output_dir)
@@ -221,9 +215,32 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
         else:
             print(f"{Colors.GREEN}[+] Nuclei scan complete with no findings.{Colors.RESET}")
 
-    if nmap_enabled and nmap_targets:
-        nmap_inst = nmap_runner.NmapRunner(output_base_dir=output_dir)
-        await nmap_inst.run_batch(nmap_targets, concurrency=concurrency)
+    if nmap_enabled:
+        print(f"{Colors.BRIGHT_MAGENTA}\n[*] Running full-range port scan (1-65535) for Nmap follow-up...{Colors.RESET}")
+        recon_targets = await process_targets(subdomains)
+        if not recon_targets:
+            print(f"{Colors.RED}[!] Unable to build targets for Nmap scanning.{Colors.RESET}")
+        else:
+            full_port_range = list(range(1, 65536))
+            port_scan_results = await scan_ports(recon_targets, full_port_range, concurrency)
+            ip_port_map = {}
+            ip_host_map = {}
+            for target_obj, data in port_scan_results:
+                open_ports = data.get('open_ports', [])
+                if not open_ports:
+                    continue
+                ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
+                host = target_obj.get('display_target') or ip
+                if not ip:
+                    continue
+                ip_port_map.setdefault(ip, set()).update(open_ports)
+                ip_host_map.setdefault(ip, host)
+            nmap_jobs = [(ip, sorted(ports), ip_host_map.get(ip, ip)) for ip, ports in ip_port_map.items()]
+            if nmap_jobs:
+                nmap_inst = nmap_runner.NmapRunner(output_base_dir=output_dir)
+                await nmap_inst.run_batch(nmap_jobs, concurrency=concurrency)
+            else:
+                print(f"{Colors.YELLOW}[!] No open ports discovered during recon port scan; skipping Nmap.{Colors.RESET}")
 
 def deduplicate_vulnerabilities(vulnerabilities):
     """
