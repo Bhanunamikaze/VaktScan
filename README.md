@@ -7,12 +7,11 @@ An advanced, high-performance security scanner designed for comprehensive vulner
 
 ##  Features
 
-###  Comprehensive Service Coverage
-- **Elasticsearch**: 11+ CVEs (2014-2024), version vulnerabilities, authentication bypass, sensitive endpoint exposure
-- **Kibana**: CVE testing (CVE-2018-17246, CVE-2019-7609), UI exposure detection, default credentials, API enumeration
-- **Grafana**: 18+ CVEs, default credentials, directory traversal, XSS vulnerabilities, comprehensive CVE database
-- **Prometheus**: Dashboard exposure, configuration leaks, target enumeration, Node Exporter analysis, pprof endpoints
-- **Next.js (React)**: RCE detection for `react-to-shell` (CVE-2025-55182).
+### Comprehensive Attack Surface Coverage
+- **Discovery & Mapping**: Passive recon (amass, subfinder, findomain, assetfinder, bbot, knockpy, censys, crtsh), active fuzzing (ffuf), and directory busting (dirsearch) driven by a curated toolchain and the built-in HTTP probe pipeline.
+- **Web Service Validation**: Common web port sweep (30+ ports) per host, automatic URL generation (HTTP/HTTPS) for live service detection, ProjectDiscovery httpx integration for responsive target enumeration.
+- **Vulnerability Scanning**: Service-specific modules for Elasticsearch, Kibana, Grafana, Prometheus, and Next.js plus ProjectDiscovery nuclei (with severity filtering and tuned rate limits) for broader HTTP exposure assessment.
+- **Optional Deepening**: Automatic Nmap `-sCV -Pn` on recon findings (`--nmap`) and CSV reporting for port scan snapshots.
 
 ###  Advanced Vulnerability Detection
 - **Smart Vulnerability Deduplication**: If the same vulnerability is discovered on both a hostname and its corresponding IP, the scanner now treats it as a single finding and reports it against the hostname, providing cleaner and more actionable reports.

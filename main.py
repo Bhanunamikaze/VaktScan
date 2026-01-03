@@ -82,11 +82,11 @@ def print_logo():
 {Colors.BRIGHT_CYAN}║{Colors.RESET}   {Colors.BRIGHT_BLUE}╚████╔╝ ██║  ██║██║  ██╗   ██║   ███████║╚██████╗██║  ██║██║ ╚████║{Colors.RESET}  {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}    {Colors.BRIGHT_BLUE}╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝{Colors.RESET}  {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                                                                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
-{Colors.BRIGHT_CYAN}║{Colors.RESET}                  {Colors.BRIGHT_YELLOW}Attack Surface Scanner{Colors.RESET}                         {Colors.BRIGHT_CYAN}║{Colors.RESET}
+{Colors.BRIGHT_CYAN}║{Colors.RESET}                  {Colors.BRIGHT_YELLOW}    Attack Surface Scanner   {Colors.RESET}                         {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                         {Colors.BRIGHT_MAGENTA}   Nordic Vigilance   {Colors.RESET}                         {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                                                                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
-{Colors.BRIGHT_CYAN}║{Colors.RESET}      {Colors.GREEN}Elasticsearch{Colors.RESET} • {Colors.GREEN}Kibana{Colors.RESET} • {Colors.GREEN}Grafana{Colors.RESET} • {Colors.GREEN}Prometheus{Colors.RESET} • {Colors.GREEN}Next.js{Colors.RESET}      {Colors.BRIGHT_CYAN}║{Colors.RESET}
-{Colors.BRIGHT_CYAN}║{Colors.RESET}                     {Colors.RED}30+ CVEs{Colors.RESET} • {Colors.YELLOW}High Performance{Colors.RESET}                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
+{Colors.BRIGHT_CYAN}║{Colors.RESET}      {Colors.GREEN}Recon & Port Scans{Colors.RESET} • {Colors.GREEN}CVE Detection{Colors.RESET} • {Colors.GREEN}Vuln Exploits{Colors.RESET}      {Colors.BRIGHT_CYAN}║{Colors.RESET}
+{Colors.BRIGHT_CYAN}║{Colors.RESET}                     {Colors.RED}httpx/ffuf{Colors.RESET} • {Colors.YELLOW}Nuclei/Nmap{Colors.RESET}                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                                                                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}╚════════════════════════════════════════════════════════════════════════╝{Colors.RESET}
 """
