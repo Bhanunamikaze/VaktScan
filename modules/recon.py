@@ -1,5 +1,7 @@
 import asyncio
+import ast
 import getpass
+import json
 import os
 import re
 import shlex
@@ -164,8 +166,32 @@ class ReconScanner:
         outdir = os.path.join(self.domain_dir, "knockpy_results")
         os.makedirs(outdir, exist_ok=True)
         binary = shlex.quote(self.tools.get("knockpy", "knockpy"))
-        cmd = f"{binary} {shlex.quote(self.domain)} -o {shlex.quote(outdir)}"
+        cmd = (
+            f"{binary} --recon -d {shlex.quote(self.domain)} --json "
+            f"-o {shlex.quote(outdir)}"
+        )
         results = await self._run_command(cmd, "Knockpy")
+
+        raw_text = "\n".join(results).strip()
+        json_outfile = os.path.join(self.domain_dir, f"knockpy_{self.domain}.json")
+        if raw_text:
+            try:
+                parsed = json.loads(raw_text)
+            except json.JSONDecodeError:
+                try:
+                    parsed = ast.literal_eval(raw_text)
+                except Exception:
+                    parsed = None
+            if parsed:
+                try:
+                    with open(json_outfile, 'w') as f:
+                        f.write(raw_text)
+                except OSError:
+                    pass
+                for entry in parsed:
+                    if isinstance(entry, dict):
+                        self._add_subdomain(entry.get("domain", ""))
+                return
 
         harvested = False
         if os.path.isdir(outdir):
