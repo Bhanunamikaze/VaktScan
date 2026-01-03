@@ -188,8 +188,43 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
 
     http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
     unique_targets = sorted(set(subdomains))
-    print(f"{Colors.CYAN}[*] Probing {len(unique_targets)} hosts with httpx...{Colors.RESET}")
-    httpx_data = await http_runner.run_httpx(unique_targets, concurrency)
+
+    print(f"{Colors.CYAN}[*] Running preliminary web-port scan on {len(unique_targets)} hosts...{Colors.RESET}")
+    recon_targets = await process_targets(unique_targets)
+    if not recon_targets:
+        print(f"{Colors.RED}[!] No targets to probe after preprocessing.{Colors.RESET}")
+        return
+
+    common_web_ports = [
+        80, 81, 443, 444, 591, 593, 832,
+        981, 1010, 1311, 2082, 2083, 2086, 2087,
+        2095, 2096, 2480, 3000, 3001, 3128, 3333,
+        4243, 4443, 4567, 4711, 4712, 4993, 5000,
+        5104, 5108
+    ]
+    port_scan_results = await scan_ports(recon_targets, common_web_ports, concurrency, state_manager=None)
+
+    probe_urls = []
+    for target_obj, data in port_scan_results:
+        open_ports = data.get('open_ports', [])
+        if not open_ports:
+            continue
+        host = target_obj.get('display_target') or target_obj.get('scan_address')
+        ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
+        for port in sorted(set(open_ports)):
+            scheme = "https" if port in [443, 4443, 8443] else "http"
+            formatted_port = f":{port}" if port not in [80, 443] else ""
+            probe_urls.append(f"{scheme}://{host}{formatted_port}")
+            if ip != host:
+                probe_urls.append(f"{scheme}://{ip}{formatted_port}")
+
+    probe_urls = sorted(set(probe_urls))
+    if not probe_urls:
+        print(f"{Colors.YELLOW}[!] No open web ports detected; skipping httpx probe.{Colors.RESET}")
+        return
+
+    print(f"{Colors.CYAN}[*] Probing {len(probe_urls)} URLs with httpx...{Colors.RESET}")
+    httpx_data = await http_runner.run_httpx(probe_urls, concurrency)
     if not httpx_data:
         print(f"{Colors.YELLOW}[!] No alive HTTP services detected by httpx.{Colors.RESET}")
         return

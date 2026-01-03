@@ -80,10 +80,10 @@ class HTTPXRunner:
         if not targets:
             return []
 
-        # Create a temporary input file
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         input_file = os.path.join(self.output_dir, f"httpx_input_{timestamp}.txt")
-        
+        json_output = os.path.join(self.output_dir, f"httpx_raw_{timestamp}.json")
+
         try:
             with open(input_file, 'w') as f:
                 for target in targets:
@@ -92,37 +92,36 @@ class HTTPXRunner:
             print(f"\033[91m[!] Error creating httpx input file: {e}\033[0m")
             return []
 
-        # Define output file for raw JSON
-        json_output = os.path.join(self.output_dir, f"httpx_raw_{timestamp}.json")
+        cmd = [
+            self.binary,
+            "-l", input_file,
+            "-json",
+            "-nc",
+            "-silent",
+            "-status-code",
+            "-title",
+            "-tech-detect",
+            "-follow-redirects",
+            "-ip",
+            "-o", json_output,
+            "-t", str(concurrency),
+        ]
 
-        # httpx command construction
-        # -l: input file
-        # -t: threads (concurrency)
-        # -json: output format
-        # -silent: suppress banner
-        # -status-code -title -tech-detect -follow-redirects -ip: gather enriched data
-        cmd = (
-            f"{self.binary} -l {input_file} -json -o {json_output} "
-            f"-t {concurrency} -silent -status-code -title -tech-detect -follow-redirects -ip"
-        )
-        
-        print(f"\033[96m[*] Running httpx on {len(targets)} ports to find alive web services (Concurrency: {concurrency})...\033[0m")
-        
+        print(f"\033[96m[*] Running httpx on {len(targets)} hosts to find alive web services (Concurrency: {concurrency})...\033[0m")
+
         try:
-            process = await asyncio.create_subprocess_shell(
-                cmd,
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
-            
-            # httpx might return non-zero on some network errors, but we check if output exists
+
             if not os.path.exists(json_output):
                 if stderr:
                     print(f"\033[91m[!] httpx failed to generate output: {stderr.decode()}\033[0m")
                 return []
-            
-            # Parse JSON results
+
             results = []
             with open(json_output, 'r') as f:
                 for line in f:
@@ -132,14 +131,13 @@ class HTTPXRunner:
                         results.append(data)
                     except json.JSONDecodeError:
                         continue
-            
-            # Clean up temporary input/output files to keep folder clean
+
             try:
                 os.remove(input_file)
                 os.remove(json_output)
             except OSError:
                 pass
-                
+
             print(f"\033[92m[+] httpx finished. Found {len(results)} alive services.\033[0m")
             return results
 
