@@ -172,26 +172,25 @@ class ReconScanner:
         )
         results = await self._run_command(cmd, "Knockpy")
 
+        if results:
+            preview = "\n".join(results[:10])
+            print(f"{Colors.GRAY}[*] knockpy stdout preview:\n{preview}{Colors.RESET}")
+        else:
+            print(f"{Colors.GRAY}[*] knockpy produced no stdout (checking output files).{Colors.RESET}")
+
         raw_text = "\n".join(results).strip()
         json_outfile = os.path.join(self.domain_dir, f"knockpy_{self.domain}.json")
-        if raw_text:
+        parsed = self._parse_knockpy_payload(raw_text)
+        if parsed:
             try:
-                parsed = json.loads(raw_text)
-            except json.JSONDecodeError:
-                try:
-                    parsed = ast.literal_eval(raw_text)
-                except Exception:
-                    parsed = None
-            if parsed:
-                try:
-                    with open(json_outfile, 'w') as f:
-                        f.write(raw_text)
-                except OSError:
-                    pass
-                for entry in parsed:
-                    if isinstance(entry, dict):
-                        self._add_subdomain(entry.get("domain", ""))
-                return
+                with open(json_outfile, 'w') as f:
+                    f.write(raw_text)
+            except OSError:
+                pass
+            for entry in parsed:
+                if isinstance(entry, dict):
+                    self._add_subdomain(entry.get("domain", ""))
+            return
 
         harvested = False
         if os.path.isdir(outdir):
@@ -200,6 +199,28 @@ class ReconScanner:
                     if filename.endswith(".txt"):
                         harvested = True
                         self._collect_results(os.path.join(root, filename))
+            path_obj = Path(outdir)
+            json_candidates = sorted(path_obj.rglob("*.json"), key=lambda p: -p.stat().st_mtime)
+            json_harvested = False
+            for json_file in json_candidates:
+                try:
+                    payload = json_file.read_text()
+                    parsed_data = self._parse_knockpy_payload(payload)
+                    if not parsed_data:
+                        continue
+                    dest_file = os.path.join(self.domain_dir, json_file.name)
+                    try:
+                        shutil.copy(json_file, dest_file)
+                    except OSError:
+                        pass
+                    for entry in parsed_data:
+                        if isinstance(entry, dict):
+                            self._add_subdomain(entry.get("domain", ""))
+                    json_harvested = True
+                except Exception:
+                    continue
+            if json_harvested:
+                return
         if not harvested:
             self._collect_from_lines(results)
 
@@ -318,15 +339,15 @@ class ReconScanner:
             print(f"{Colors.YELLOW}[!] Skipping privileged tools: {', '.join(sorted(disabled))}{Colors.RESET}")
 
         tasks = []
-        if "amass" not in missing: tasks.append(self.run_amass())
-        if "subfinder" not in missing: tasks.append(self.run_subfinder())
-        if "assetfinder" not in missing: tasks.append(self.run_assetfinder())
-        if "findomain" not in missing: tasks.append(self.run_findomain())
-        if "sublist3r" not in missing: tasks.append(self.run_sublist3r())
+       # if "amass" not in missing: tasks.append(self.run_amass())
+       # if "subfinder" not in missing: tasks.append(self.run_subfinder())
+       # if "assetfinder" not in missing: tasks.append(self.run_assetfinder())
+       # if "findomain" not in missing: tasks.append(self.run_findomain())
+       # if "sublist3r" not in missing: tasks.append(self.run_sublist3r())
         if "knockpy" not in missing: tasks.append(self.run_knockpy())
         if "bbot" not in missing and "bbot" not in disabled: tasks.append(self.run_bbot())
-        if "censys" not in missing: tasks.append(self.run_censys())
-        if "crtsh" not in missing: tasks.append(self.run_crtsh())
+        #if "censys" not in missing: tasks.append(self.run_censys())
+        #if "crtsh" not in missing: tasks.append(self.run_crtsh())
         
         # Run passive tools concurrently
         if tasks:
@@ -352,3 +373,45 @@ class ReconScanner:
         print(f"{Colors.GREEN}[+] Results saved to: {Colors.BOLD}{final_file}{Colors.RESET}")
         
         return final_file, sorted(self.subdomains)
+
+    def _parse_knockpy_payload(self, payload):
+        if not payload:
+            return None
+        trimmed = payload.strip()
+        if not trimmed:
+            return None
+
+        # Knockpy prints progress bars/noise before the JSON list.
+        markers = ["[{'domain'", '[{"domain"', "[{'Domain'", '[{"Domain"']
+        start_idx = -1
+        for marker in markers:
+            idx = trimmed.find(marker)
+            if idx != -1:
+                start_idx = trimmed.rfind('[', 0, idx + 1)
+                if start_idx == -1:
+                    start_idx = idx
+                break
+        if start_idx == -1:
+            start_idx = trimmed.find('[')
+
+        if start_idx > 0:
+            trimmed = trimmed[start_idx:]
+
+        end_idx = trimmed.rfind(']')
+        if end_idx != -1:
+            trimmed = trimmed[:end_idx + 1]
+
+        if not trimmed.startswith('['):
+            return None
+
+        # Prefer JSON parsing if knockpy outputs proper JSON
+        try:
+            return json.loads(trimmed)
+        except json.JSONDecodeError:
+            pass
+
+        # Fallback to Python literal parsing (handles single quotes)
+        try:
+            return ast.literal_eval(trimmed)
+        except Exception:
+            return None
