@@ -195,13 +195,8 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
         print(f"{Colors.RED}[!] No targets to probe after preprocessing.{Colors.RESET}")
         return
 
-    common_web_ports = [
-        80, 81, 443, 444, 591, 593, 832,
-        981, 1010, 1311, 2082, 2083, 2086, 2087,
-        2095, 2096, 2480, 3000, 3001, 3128, 3333,
-        4243, 4443, 4567, 4711, 4712, 4993, 5000,
-        5104, 5108
-    ]
+    service_ports = get_service_ports()
+    common_web_ports = sorted(set(service_ports.get("web", [])))
     port_scan_results = await scan_ports(recon_targets, common_web_ports, concurrency, state_manager=None)
 
     probe_urls = []
@@ -425,7 +420,12 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
             service_ports = {module_filter: service_ports.get(module_filter, [])}
         
         # Default scan ports (standard VaktScan mode)
-        all_ports_to_scan = [port for ports in service_ports.values() for port in ports]
+        all_ports_to_scan = [
+            port
+            for service, ports in service_ports.items()
+            if service != "web"
+            for port in ports
+        ]
         
         if custom_ports:
             try:
