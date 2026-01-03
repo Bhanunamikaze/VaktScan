@@ -3,6 +3,7 @@ import json
 import os
 import shlex
 import shutil
+import tempfile
 from datetime import datetime
 
 
@@ -27,12 +28,16 @@ class DirEnumerator:
         self.output_dir = output_dir
         self.protocol = protocol
         self.binary = shutil.which("ffuf")
+        self.dirsearch_binary = shutil.which("dirsearch")
 
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
 
     def is_available(self):
         return self.binary is not None
+
+    def dirsearch_available(self):
+        return self.dirsearch_binary is not None
 
     async def fuzz_subdomains(self, match_codes="200,301,302,403"):
         """
@@ -91,3 +96,57 @@ class DirEnumerator:
         unique_subs = sorted(set(discovered))
         print(f"{Colors.GREEN}[+] DirEnumerator discovered {len(unique_subs)} potential subdomains with ffuf.{Colors.RESET}")
         return unique_subs
+
+    async def run_dirsearch(self, urls, threads=30):
+        """
+        Runs dirsearch against a list of alive URLs.
+        """
+        if not urls:
+            print(f"{Colors.YELLOW}[!] No HTTP services provided to dirsearch.{Colors.RESET}")
+            return None
+        if not self.dirsearch_available():
+            print(f"{Colors.YELLOW}[!] dirsearch not found in PATH. Skipping directory enumeration.{Colors.RESET}")
+            return None
+
+        reports_dir = os.path.join(self.output_dir, "dirsearch_reports")
+        os.makedirs(reports_dir, exist_ok=True)
+
+        # Prepare URL list file
+        with tempfile.NamedTemporaryFile('w', delete=False) as tmp:
+            for url in sorted(set(urls)):
+                tmp.write(f"{url}\n")
+            tmp_path = tmp.name
+
+        output_pattern = os.path.join(reports_dir, "dirsearch_report_%host.txt")
+        binary = shlex.quote(self.dirsearch_binary)
+        cmd = (
+            f"{binary} -L {shlex.quote(tmp_path)} "
+            f"--output={shlex.quote(output_pattern)} --format=simple "
+            "--force-recursive --exclude-status=404,403,500-599 "
+            f"-t {threads} --random-agent"
+        )
+
+        print(f"{Colors.CYAN}[*] Running dirsearch against {len(urls)} alive targets...{Colors.RESET}")
+        try:
+            process = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            if stdout:
+                print(stdout.decode().strip())
+            if stderr:
+                err = stderr.decode().strip()
+                if err:
+                    print(err)
+            print(f"{Colors.GREEN}[+] dirsearch reports saved under {reports_dir}{Colors.RESET}")
+            return reports_dir
+        except Exception as exc:
+            print(f"{Colors.RED}[!] dirsearch execution error: {exc}{Colors.RESET}")
+            return None
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass

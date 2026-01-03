@@ -67,7 +67,7 @@ VaktScan/
 
 ## Recon Module Tooling
 
-The optional recon/HTTP probing helpers (`modules/recon.py`, `modules/dir_enum.py`, `modules/httpx_runner.py`, and `modules/nmap_runner.py`) call out to several third-party binaries such as `amass`, `subfinder`, `assetfinder`, `findomain`, `sublist3r`, `knockpy`, `bbot`, `censys`, `crtsh`, `ffuf`, `httpx`, and `nmap`. Use the provided helper to check/install them:
+The optional recon/HTTP probing helpers (`modules/recon.py`, `modules/dir_enum.py`, `modules/httpx_runner.py`, and `modules/nmap_runner.py`) call out to several third-party binaries such as `amass`, `subfinder`, `assetfinder`, `findomain`, `sublist3r`, `knockpy`, `bbot`, `censys`, `crtsh`, `dirsearch`, `ffuf`, `httpx`, and `nmap`. Use the provided helper to check/install them:
 
 ```bash
 # View status only

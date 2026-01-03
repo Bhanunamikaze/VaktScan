@@ -148,6 +148,12 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
         ),
         description="crt.sh command-line helper for certificate transparency lookups.",
     ),
+    "dirsearch": ToolSpec(
+        name="dirsearch",
+        binary="dirsearch",
+        install_cmd="sudo apt update && sudo apt install -y dirsearch",
+        description="Dirsearch directory brute-forcer used on alive HTTP targets.",
+    ),
     "ffuf": ToolSpec(
         name="ffuf",
         binary="ffuf",

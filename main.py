@@ -14,7 +14,7 @@ from utils import process_targets, process_targets_streaming, get_service_ports
 from port_scanner import scan_ports
 from service_validator import validate_service
 from scan_state import ScanStateManager
-from modules import elastic, kibana, grafana, prometheus, react_to_shell, recon, httpx_runner, nuclei_runner, nmap_runner
+from modules import elastic, kibana, grafana, prometheus, react_to_shell, recon, httpx_runner, nuclei_runner, nmap_runner, dir_enum
 
 # Map service names to their corresponding modules
 SERVICE_TO_MODULE = {
@@ -180,6 +180,51 @@ def save_results_to_csv(vulnerabilities, filename=None):
         print(f"{Colors.RED}[!] Error saving CSV file: {e}{Colors.RESET}")
         return None
 
+async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency, nmap_enabled):
+    """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
+    if not subdomains:
+        print(f"{Colors.YELLOW}[!] No subdomains discovered to probe further.{Colors.RESET}")
+        return
+
+    http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
+    print(f"{Colors.CYAN}[*] Probing {len(subdomains)} hosts with httpx...{Colors.RESET}")
+    httpx_data = await http_runner.run_httpx(subdomains, concurrency)
+    if not httpx_data:
+        print(f"{Colors.YELLOW}[!] No alive HTTP services detected by httpx.{Colors.RESET}")
+        return
+
+    http_runner.save_csv(httpx_data, recon_domain.replace('.', '_'))
+
+    alive_urls = []
+    nmap_targets = []
+    for entry in httpx_data:
+        url = entry.get('url')
+        if url:
+            alive_urls.append(url)
+        ip = entry.get('ip') or entry.get('host')
+        port = entry.get('port')
+        hostname = entry.get('input', '').split(':')[0] or entry.get('url')
+        if ip and port:
+            nmap_targets.append((ip, [port], hostname))
+
+    alive_urls = sorted(set(alive_urls))
+    dir_enumerator = dir_enum.DirEnumerator(recon_domain, output_dir=output_dir)
+    await dir_enumerator.run_dirsearch(alive_urls)
+
+    if alive_urls:
+        nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
+        nuclei_results = await nuclei_inst.run_nuclei(alive_urls)
+        if nuclei_results:
+            print(f"{Colors.GREEN}[+] Nuclei identified {len(nuclei_results)} findings.{Colors.RESET}")
+            for vuln in nuclei_results:
+                print(f"    - {vuln['status']} | {vuln['vulnerability']} | {vuln['url']}")
+        else:
+            print(f"{Colors.GREEN}[+] Nuclei scan complete with no findings.{Colors.RESET}")
+
+    if nmap_enabled and nmap_targets:
+        nmap_inst = nmap_runner.NmapRunner(output_base_dir=output_dir)
+        await nmap_inst.run_batch(nmap_targets, concurrency=concurrency)
+
 def deduplicate_vulnerabilities(vulnerabilities):
     """
     Deduplicates a list of vulnerabilities.
@@ -226,8 +271,6 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
     print_logo()
     
     # Store recon results to pass to scanner if needed
-    recon_targets_processed = None
-    force_full_scan = False
     nuclei_vulns_found = False
 
     # Validation: --nmap needs --recon
@@ -242,14 +285,13 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
         
         scanner = recon.ReconScanner(recon_domain, wordlist=wordlist)
         results_file, subdomains = await scanner.run_all()
+        domain_output_dir = os.path.dirname(results_file)
         
         if scan_found:
-            print(f"\n{Colors.YELLOW}[*] Feeding {len(subdomains)} discovered subdomains into VaktScan...{Colors.RESET}")
-            targets_file = results_file
-            force_full_scan = True # Flag to trigger the 65535 port scan
+            await run_recon_followups(subdomains, recon_domain, domain_output_dir, concurrency, nmap_enabled)
         else:
             print(f"\n{Colors.CYAN}[*] Recon complete. To scan these targets, run:\n    python main.py {results_file}{Colors.RESET}")
-            return
+        return
 
     # --- MAIN SCANNING LOGIC ---
     if not targets_file:
@@ -274,9 +316,7 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
         
         should_stream = len(raw_targets) > 1000
 
-        # Streaming currently skips the logic below, so we disable streaming if force_full_scan is on
-        # to ensure the full port scan logic executes correctly in memory.
-        if should_stream and not force_full_scan:
+        if should_stream:
             print(f"{Colors.YELLOW}[*] Large target set detected - using streaming mode{Colors.RESET}")
             return await process_streaming_scan(raw_targets, concurrency, output_csv, module_filter, custom_ports, chunk_size, state_manager)
         
@@ -319,79 +359,8 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
             except ValueError as e:
                 print(f"{Colors.RED}[!] Error parsing custom ports: {e}. Ignoring custom ports.{Colors.RESET}")
         
-        # --- SPECIAL RECON FULL PORT SCAN LOGIC ---
-        if force_full_scan and state_manager.state["phase"] in ["initializing", "target_processing_complete"]:
-            print(f"{Colors.BRIGHT_MAGENTA}\n[*] RECON MODE DETECTED: Initiating full range port scan (1-65535) on {len(targets)} targets...{Colors.RESET}")
-            print(f"{Colors.GRAY}[*] This process may take a while depending on network speed and target responsiveness.{Colors.RESET}")
-            
-            # Generate full port range
-            full_port_range = list(range(1, 65536))
-            
-            state_manager.set_totals(len(targets), len(targets) * 65535)
-            state_manager.update_phase("full_port_scanning")
-            
-            # Run the full scan
-            open_ports_results = await scan_ports(targets, full_port_range, concurrency, state_manager)
-            
-            print(f"{Colors.GREEN}[+] Full port scan complete.{Colors.RESET}")
-            
-            # Generate the requested CSV for Port Scan results
-            save_port_scan_csv(open_ports_results, recon_domain)
-            
-            # --- NMAP MODULE INTEGRATION ---
-            if nmap_enabled:
-                nmap_targets = []
-                # Extract targets with open ports from the full scan results
-                # open_ports_results is list of tuples: (target_obj, {'open_ports': [...]})
-                for target_obj, result in open_ports_results:
-                    found_ports = result.get('open_ports', [])
-                    if found_ports:
-                        ip = target_obj.get('resolved_ip')
-                        hostname = target_obj.get('display_target')
-                        nmap_targets.append((ip, found_ports, hostname))
-                
-                if nmap_targets:
-                    nmap_mod = nmap_runner.NmapRunner()
-                    await nmap_mod.run_batch(nmap_targets, concurrency=concurrency)
-            # -------------------------------
-
-            # --- HTTPX & NUCLEI INTEGRATION ---
-            # Prepare targets for httpx (hostname:port)
-            httpx_targets = []
-            for target_obj, result in open_ports_results:
-                ports = result.get('open_ports', [])
-                hostname = target_obj.get('display_target')
-                for p in ports:
-                    httpx_targets.append(f"{hostname}:{p}")
-            
-            httpx_alive_urls = []
-            if httpx_targets:
-                runner = httpx_runner.HTTPXRunner()
-                # Run httpx with same concurrency
-                alive_data = await runner.run_httpx(httpx_targets, concurrency)
-                if alive_data:
-                    runner.save_csv(alive_data, recon_domain)
-                    # Extract URLs for Nuclei
-                    for entry in alive_data:
-                        if 'url' in entry:
-                            httpx_alive_urls.append(entry['url'])
-            
-            # --- NUCLEI SCANNER ---
-            if httpx_alive_urls:
-                n_runner = nuclei_runner.NucleiRunner()
-                nuclei_results = await n_runner.run_nuclei(httpx_alive_urls)
-                
-                if nuclei_results:
-                    nuclei_vulns_found = True
-                    # Add nuclei findings to state manager for final CSV export
-                    for vuln in nuclei_results:
-                        state_manager.add_vulnerability(vuln)
-            
-            # Update phase so we don't re-run this on resume
-            state_manager.update_phase("port_scanning_complete")
-
-        # --- STANDARD PORT SCAN LOGIC (Skipped if full scan ran above) ---
-        elif state_manager.state["phase"] in ["initializing", "target_processing_complete", "port_scanning"]:
+        # --- STANDARD PORT SCAN LOGIC ---
+        if state_manager.state["phase"] in ["initializing", "target_processing_complete", "port_scanning"]:
             state_manager.set_totals(len(targets), len(targets) * len(all_ports_to_scan))
             
             print(f"{Colors.CYAN}[*] Starting concurrent port scan for {len(targets)} targets across {len(all_ports_to_scan)} unique ports...{Colors.RESET}")
@@ -542,13 +511,6 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
 
 # Helper for streaming process (remains mostly unchanged, just ensured it's accessible)
 async def process_streaming_scan(raw_targets, concurrency, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000, state_manager=None):
-    # (Implementation details from previous main.py remain same but truncated here for brevity)
-    # The user's original logic works fine, just ensuring the call path is correct.
-    from main import process_streaming_scan as original_streaming
-    # To avoid circular imports or re-implementing, we assume the original logic is preserved
-    # In a real edit, I would keep the function body here.
-    # For this file generation, I will paste the original function body below to ensure it runs.
-    
     print(f"{Colors.CYAN}[*] Calculating total targets for progress estimation...{Colors.RESET}")
     total_targets = 0
     for target in raw_targets:
