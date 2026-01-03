@@ -180,15 +180,16 @@ def save_results_to_csv(vulnerabilities, filename=None):
         print(f"{Colors.RED}[!] Error saving CSV file: {e}{Colors.RESET}")
         return None
 
-async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency, nmap_enabled):
+async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency, nmap_enabled, wordlist=None):
     """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
     if not subdomains:
         print(f"{Colors.YELLOW}[!] No subdomains discovered to probe further.{Colors.RESET}")
         return
 
     http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
-    print(f"{Colors.CYAN}[*] Probing {len(subdomains)} hosts with httpx...{Colors.RESET}")
-    httpx_data = await http_runner.run_httpx(subdomains, concurrency)
+    unique_targets = sorted(set(subdomains))
+    print(f"{Colors.CYAN}[*] Probing {len(unique_targets)} hosts with httpx...{Colors.RESET}")
+    httpx_data = await http_runner.run_httpx(unique_targets, concurrency)
     if not httpx_data:
         print(f"{Colors.YELLOW}[!] No alive HTTP services detected by httpx.{Colors.RESET}")
         return
@@ -202,8 +203,32 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
             alive_urls.append(url)
 
     alive_urls = sorted(set(alive_urls))
-    dir_enumerator = dir_enum.DirEnumerator(recon_domain, output_dir=output_dir)
-    await dir_enumerator.run_dirsearch(alive_urls)
+    dir_enumerator = dir_enum.DirEnumerator(recon_domain, wordlist=wordlist, output_dir=output_dir)
+
+    if wordlist:
+        print(f"{Colors.CYAN}[*] Running ffuf (post-httpx) for additional vhosts...{Colors.RESET}")
+        ffuf_subdomains = await dir_enumerator.fuzz_subdomains()
+        new_targets = []
+        for sub in ffuf_subdomains:
+            if sub and sub not in unique_targets:
+                unique_targets.append(sub)
+                new_targets.append(sub)
+        if new_targets:
+            print(f"{Colors.CYAN}[*] Probing {len(new_targets)} ffuf-discovered hosts with httpx...{Colors.RESET}")
+            ffuf_httpx = await http_runner.run_httpx(new_targets, concurrency)
+            if ffuf_httpx:
+                http_runner.save_csv(ffuf_httpx, f"{recon_domain.replace('.', '_')}_ffuf")
+                httpx_data.extend(ffuf_httpx)
+                for entry in ffuf_httpx:
+                    url = entry.get('url')
+                    if url:
+                        alive_urls.append(url)
+            else:
+                print(f"{Colors.YELLOW}[!] No additional alive hosts found from ffuf results.{Colors.RESET}")
+
+    alive_urls = sorted(set(alive_urls))
+    if alive_urls:
+        await dir_enumerator.run_dirsearch(alive_urls)
 
     if alive_urls:
         nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
@@ -217,7 +242,7 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
 
     if nmap_enabled:
         print(f"{Colors.BRIGHT_MAGENTA}\n[*] Running full-range port scan (1-65535) for Nmap follow-up...{Colors.RESET}")
-        recon_targets = await process_targets(subdomains)
+        recon_targets = await process_targets(unique_targets)
         if not recon_targets:
             print(f"{Colors.RED}[!] Unable to build targets for Nmap scanning.{Colors.RESET}")
         else:
@@ -305,7 +330,7 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
         domain_output_dir = os.path.dirname(results_file)
         
         if scan_found:
-            await run_recon_followups(subdomains, recon_domain, domain_output_dir, concurrency, nmap_enabled)
+            await run_recon_followups(subdomains, recon_domain, domain_output_dir, concurrency, nmap_enabled, wordlist)
         else:
             print(f"\n{Colors.CYAN}[*] Recon complete. To scan these targets, run:\n    python main.py {results_file}{Colors.RESET}")
         return

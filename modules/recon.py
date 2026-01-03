@@ -10,8 +10,6 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from .dir_enum import DirEnumerator
-
 # Color codes (matching main.py)
 class Colors:
     RED = '\033[91m'
@@ -43,15 +41,14 @@ class ReconScanner:
         }
         self.domain_pattern = re.compile(r"(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}")
         self.sudo_ready = os.geteuid() == 0 if hasattr(os, "geteuid") else False
-        self.sudo_tools = {"bbot"}
 
         os.makedirs(self.output_dir, exist_ok=True)
         safe_domain = re.sub(r"[^a-z0-9._-]", "_", self.domain)
         self.domain_dir = os.path.join(self.output_dir, safe_domain or "domain")
         os.makedirs(self.domain_dir, exist_ok=True)
 
-        self.dir_enumerator = DirEnumerator(self.domain, wordlist, output_dir=self.domain_dir)
         self._ansi_regex = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+        self.sudo_tools = set()
 
     def check_tools(self):
         """Verifies that required tools are installed in PATH."""
@@ -164,126 +161,77 @@ class ReconScanner:
         self._collect_results(outfile)
 
     async def run_knockpy(self):
-        outdir = os.path.join(self.domain_dir, "knockpy_results")
-        os.makedirs(outdir, exist_ok=True)
+        """Fixed knockpy - captures JSON directly from stdout"""
         binary = shlex.quote(self.tools.get("knockpy", "knockpy"))
-        cmd = (
-            f"{binary} --recon -d {shlex.quote(self.domain)} --json "
-            f"-o {shlex.quote(outdir)}"
-        )
+        # Use --silent json to get output directly on stdout
+        cmd = f"{binary} -d {shlex.quote(self.domain)} --recon --json"
+        
         results = await self._run_command(cmd, "Knockpy")
-
-        if results:
-            preview = "\n".join(results[:10])
-            print(f"{Colors.GRAY}[*] knockpy stdout preview:\n{preview}{Colors.RESET}")
-        else:
-            print(f"{Colors.GRAY}[*] knockpy produced no stdout (checking output files).{Colors.RESET}")
-
-        raw_text = "\n".join(results).strip()
+        
+        if not results:
+            print(f"{Colors.YELLOW}[!] Knockpy produced no output.{Colors.RESET}")
+            return
+        
+        # Save the JSON output
         json_outfile = os.path.join(self.domain_dir, f"knockpy_{self.domain}.json")
+        raw_text = "\n".join(results).strip()
+        
+        try:
+            with open(json_outfile, 'w') as f:
+                f.write(raw_text)
+            #print(f"{Colors.GREEN}[+] Knockpy output saved to: {json_outfile}{Colors.RESET}")
+        except OSError as e:
+            print(f"{Colors.YELLOW}[!] Failed to write knockpy output: {e}{Colors.RESET}")
+        
+        # Parse the JSON payload
         parsed = self._parse_knockpy_payload(raw_text)
         if parsed:
-            try:
-                with open(json_outfile, 'w') as f:
-                    f.write(raw_text)
-            except OSError:
-                pass
             for entry in parsed:
                 if isinstance(entry, dict):
-                    self._add_subdomain(entry.get("domain", ""))
-            return
-
-        harvested = False
-        if os.path.isdir(outdir):
-            for root, _, files in os.walk(outdir):
-                for filename in files:
-                    if filename.endswith(".txt"):
-                        harvested = True
-                        self._collect_results(os.path.join(root, filename))
-            path_obj = Path(outdir)
-            json_candidates = sorted(path_obj.rglob("*.json"), key=lambda p: -p.stat().st_mtime)
-            json_harvested = False
-            for json_file in json_candidates:
-                try:
-                    payload = json_file.read_text()
-                    parsed_data = self._parse_knockpy_payload(payload)
-                    if not parsed_data:
-                        continue
-                    dest_file = os.path.join(self.domain_dir, json_file.name)
-                    try:
-                        shutil.copy(json_file, dest_file)
-                    except OSError:
-                        pass
-                    for entry in parsed_data:
-                        if isinstance(entry, dict):
-                            self._add_subdomain(entry.get("domain", ""))
-                    json_harvested = True
-                except Exception:
-                    continue
-            if json_harvested:
-                return
-        if not harvested:
+                    domain = entry.get("domain", "") or entry.get("Domain", "")
+                    if domain:
+                        self._add_subdomain(domain)
+            #print(f"{Colors.GREEN}[+] Knockpy found {len(parsed)} entries.{Colors.RESET}")
+        else:
+            # Fallback: try to extract domains from raw output
             self._collect_from_lines(results)
 
+
     async def run_bbot(self):
+        """Run bbot and harvest subdomain output."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         outdir = os.path.join(self.domain_dir, "bbot_results")
         os.makedirs(outdir, exist_ok=True)
+
         binary = shlex.quote(self.tools.get("bbot", "bbot"))
-        base_cmd = (
-            f"{binary} -t {shlex.quote(self.domain)} -p subdomain-enum "
-            f"-o {shlex.quote(outdir)} -y --force"
+        cmd = (
+            f"{binary} -t {shlex.quote(self.domain)} "
+            f"-p subdomain-enum "
+            f"-o {shlex.quote(outdir)} "
+            "-y --force"
         )
-        if os.name == "posix" and not self.sudo_ready:
-            print(f"{Colors.YELLOW}[!] sudo session not available. Skipping bbot.{Colors.RESET}")
-            return
-        sudo_prefix = "sudo -n " if os.name == "posix" and not (hasattr(os, "geteuid") and os.geteuid() == 0) else ""
-        cmd = f"{sudo_prefix}{base_cmd}"
-        log_file = os.path.join(self.domain_dir, f"bbot_{self.domain}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+
+        print(f"{Colors.CYAN}[*] Running BBOT scan (this may take time)...{Colors.RESET}")
         results = await self._run_command(cmd, "bbot")
-        if results:
-            try:
-                with open(log_file, 'w') as f:
-                    f.write("\n".join(results))
-            except OSError:
-                pass
 
-        saved_reports = []
-        if os.path.isdir(outdir):
-            path_obj = Path(outdir)
-            run_dirs = sorted([p for p in path_obj.iterdir() if p.is_dir()], key=lambda p: -p.stat().st_mtime)
-            for run_dir in run_dirs[:5]:  # limit traversal depth
-                candidates = list(run_dir.rglob("subdomains.txt")) + list(run_dir.rglob("output.txt"))
-                if not candidates:
-                    continue
-                candidates.sort(key=lambda p: (p.name != "subdomains.txt", -p.stat().st_mtime))
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                for idx, fpath in enumerate(candidates, start=1):
-                    try:
-                        dest_name = f"bbot_{self.domain}_{timestamp}_{run_dir.name}_{idx}_{fpath.name}"
-                        dest_path = os.path.join(self.domain_dir, dest_name)
-                        shutil.copy2(fpath, dest_path)
-                        self._collect_results(dest_path)
-                        saved_reports.append(dest_path)
-                    except Exception as exc:
-                        print(f"{Colors.YELLOW}[!] Failed to copy bbot result {fpath}: {exc}{Colors.RESET}")
-                        continue
-                if saved_reports:
-                    break
-        if saved_reports:
-            print(f"{Colors.GRAY}[*] bbot reports copied to:{Colors.RESET}")
-            for path in saved_reports:
-                print(f"    {path}")
+        path_obj = Path(outdir)
+        candidates = list(path_obj.rglob("subdomains.txt")) + list(path_obj.rglob("output.txt"))
+
+        if candidates:
+            candidates.sort(key=lambda p: -p.stat().st_mtime)
+            for idx, fpath in enumerate(candidates[:3], start=1):
+                try:
+                    dest_name = f"bbot_{self.domain}_{timestamp}_{idx}_{fpath.name}"
+                    dest_path = os.path.join(self.domain_dir, dest_name)
+                    shutil.copy2(fpath, dest_path)
+                    self._collect_results(dest_path)
+                    #print(f"{Colors.GREEN}[+] BBOT results saved: {dest_path}{Colors.RESET}")
+                except Exception as exc:
+                    print(f"{Colors.YELLOW}[!] Failed to copy {fpath}: {exc}{Colors.RESET}")
             return
 
-        log_data = []
-        if os.path.exists(log_file):
-            try:
-                log_data = Path(log_file).read_text().splitlines()
-            except OSError:
-                log_data = []
-        if not log_data:
-            log_data = results
-        self._collect_from_lines(log_data)
+        print(f"{Colors.YELLOW}[!] No BBOT output files found, falling back to console output.{Colors.RESET}")
+        self._collect_from_lines(results if results else [])
 
     async def run_censys(self):
         binary = shlex.quote(self.tools.get("censys", "censys"))
@@ -383,11 +331,6 @@ class ReconScanner:
             await asyncio.gather(*tasks)
         
         # Run ffuf-based enumeration via the standalone DirEnumerator
-        if self.wordlist:
-            new_subs = await self.dir_enumerator.fuzz_subdomains()
-            for sub in new_subs:
-                self._add_subdomain(sub)
-
         # Save combined + deduplicated results inside the domain output directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         raw_file = os.path.join(self.domain_dir, f"raw_subdomains_{timestamp}.txt")
