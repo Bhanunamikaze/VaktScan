@@ -194,6 +194,30 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
         install_cmd="sudo apt update && sudo apt install -y nmap",
         description="Nmap security scanner used by nmap_runner for service probing.",
     ),
+    "nuclei": ToolSpec(
+        name="nuclei",
+        binary="nuclei",
+        install_cmd=(
+            "tmpdir=$(mktemp -d) && "
+            "arch=$(uname -m) && "
+            "case \"$arch\" in "
+            "x86_64|amd64) asset=\"nuclei_3.6.2_linux_amd64.zip\" ;; "
+            "aarch64|arm64) asset=\"nuclei_3.6.2_linux_arm64.zip\" ;; "
+            "armv7l|armv7) asset=\"nuclei_3.6.2_linux_arm.zip\" ;; "
+            "armv6l|armv6) asset=\"nuclei_3.6.2_linux_arm.zip\" ;; "
+            "i386|i686) asset=\"nuclei_3.6.2_linux_386.zip\" ;; "
+            "*) echo \"Unsupported architecture: $arch\" && exit 1 ;; "
+            "esac && "
+            "curl -sL \"https://github.com/projectdiscovery/nuclei/releases/download/v3.6.2/$asset\" "
+            "-o \"$tmpdir/$asset\" && "
+            "unzip -q \"$tmpdir/$asset\" -d \"$tmpdir\" && "
+            "bin_path=$(find \"$tmpdir\" -type f -name nuclei -perm -111 | head -n 1) && "
+            "[ -n \"$bin_path\" ] || { echo 'nuclei binary not found in archive'; exit 1; } && "
+            "sudo install -m 755 \"$bin_path\" /usr/local/bin/nuclei && "
+            "rm -rf \"$tmpdir\""
+        ),
+        description="ProjectDiscovery nuclei v3.6.2 binary download (architecture-aware).",
+    ),
 }
 
 
