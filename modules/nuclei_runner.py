@@ -81,12 +81,19 @@ class NucleiRunner:
             print(f"\033[91m[!] Error creating nuclei input file: {e}\033[0m")
             return []
 
-        # Construct command
-        # -l: list of targets
-        # -json: output json format (essential for parsing)
-        # -silent: reduce noise
-        # -nc: no color in output file
-        cmd = f"{self.binary} -l {input_file} -json -o {json_output} -silent -nc"
+        # Construct command following ProjectDiscovery best practices (Ultimate Guide)
+        cmd = (
+            f"{self.binary} -l {input_file} "
+            "-c 50 "
+            "-rl 150 "
+            "-bs 100 "
+            "-timeout 15 "
+            "-silent "
+            "-severity critical,high,medium "
+            "-json "
+            "-nc "
+            f"-o {json_output}"
+        )
 
         print(f"\033[96m[*] Running nuclei on {len(targets)} alive services...\033[0m")
 
