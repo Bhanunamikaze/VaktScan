@@ -1,4 +1,4 @@
-# VaktScan - Monitoring Stack Security Scanner
+# VaktScan - Attack Surface Scanner
 
 > **VaktScan** (*pronounced "vahkt-scan"*) - Named after the Nordic word "vakt" meaning "guard" or "watch", representing the vigilant nature of security monitoring.
 

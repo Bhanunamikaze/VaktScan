@@ -82,7 +82,7 @@ def print_logo():
 {Colors.BRIGHT_CYAN}║{Colors.RESET}   {Colors.BRIGHT_BLUE}╚████╔╝ ██║  ██║██║  ██╗   ██║   ███████║╚██████╗██║  ██║██║ ╚████║{Colors.RESET}  {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}    {Colors.BRIGHT_BLUE}╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝{Colors.RESET}  {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                                                                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
-{Colors.BRIGHT_CYAN}║{Colors.RESET}                  {Colors.BRIGHT_YELLOW}Monitoring Stack Security Scanner{Colors.RESET}                     {Colors.BRIGHT_CYAN}║{Colors.RESET}
+{Colors.BRIGHT_CYAN}║{Colors.RESET}                  {Colors.BRIGHT_YELLOW}Attack Surface Scanner{Colors.RESET}                         {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                         {Colors.BRIGHT_MAGENTA}   Nordic Vigilance   {Colors.RESET}                         {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}                                                                        {Colors.BRIGHT_CYAN}║{Colors.RESET}
 {Colors.BRIGHT_CYAN}║{Colors.RESET}      {Colors.GREEN}Elasticsearch{Colors.RESET} • {Colors.GREEN}Kibana{Colors.RESET} • {Colors.GREEN}Grafana{Colors.RESET} • {Colors.GREEN}Prometheus{Colors.RESET} • {Colors.GREEN}Next.js{Colors.RESET}      {Colors.BRIGHT_CYAN}║{Colors.RESET}
