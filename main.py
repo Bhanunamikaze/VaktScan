@@ -11,7 +11,7 @@ import ipaddress
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
 
 from utils import process_targets, process_targets_streaming, get_service_ports
-from port_scanner import scan_ports
+from port_scanner import scan_ports, DEFAULT_CONNECT_TIMEOUT, DEFAULT_PORT_RETRIES
 from service_validator import validate_service
 from scan_state import ScanStateManager
 from modules import (
@@ -193,7 +193,16 @@ def save_results_to_csv(vulnerabilities, filename=None):
         print(f"{Colors.RED}[!] Error saving CSV file: {e}{Colors.RESET}")
         return None
 
-async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency, nmap_enabled, wordlist=None):
+async def run_recon_followups(
+    subdomains,
+    recon_domain,
+    output_dir,
+    concurrency,
+    nmap_enabled,
+    wordlist=None,
+    connect_timeout=DEFAULT_CONNECT_TIMEOUT,
+    port_retries=DEFAULT_PORT_RETRIES,
+):
     """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
     if not subdomains:
         print(f"{Colors.YELLOW}[!] No subdomains discovered to probe further.{Colors.RESET}")
@@ -210,7 +219,14 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
 
     service_ports = get_service_ports()
     common_web_ports = sorted(set(service_ports.get("web", [])))
-    port_scan_results = await scan_ports(recon_targets, common_web_ports, concurrency, state_manager=None)
+    port_scan_results = await scan_ports(
+        recon_targets,
+        common_web_ports,
+        concurrency,
+        state_manager=None,
+        connect_timeout=connect_timeout,
+        retries=port_retries,
+    )
     probe_urls = []
     nmap_followup_task = None
 
@@ -225,7 +241,14 @@ async def run_recon_followups(subdomains, recon_domain, output_dir, concurrency,
         )
         full_port_range = list(range(1, 65536))
         full_port_scan_task = asyncio.create_task(
-            scan_ports(recon_targets, full_port_range, concurrency, state_manager=None)
+            scan_ports(
+                recon_targets,
+                full_port_range,
+                concurrency,
+                state_manager=None,
+                connect_timeout=connect_timeout,
+                retries=port_retries,
+            )
         )
 
         async def _nmap_followup():
@@ -460,7 +483,23 @@ def deduplicate_vulnerabilities(vulnerabilities):
 
     return list(unique_vulns.values())
 
-async def main(targets_file, concurrency, resume=False, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000, recon_domains=None, wordlist=None, scan_found=False, nmap_enabled=False, subdomains_file=None, recon_concurrency=2):
+async def main(
+    targets_file,
+    concurrency,
+    resume=False,
+    output_csv=False,
+    module_filter=None,
+    custom_ports=None,
+    chunk_size=30000,
+    recon_domains=None,
+    wordlist=None,
+    scan_found=False,
+    nmap_enabled=False,
+    subdomains_file=None,
+    recon_concurrency=2,
+    connect_timeout=DEFAULT_CONNECT_TIMEOUT,
+    port_retries=DEFAULT_PORT_RETRIES,
+):
     """
     Main orchestrator for the scanning tool.
     """
@@ -532,7 +571,16 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
                 print(f"{Colors.RED}[!] Failed to write normalized subdomain file: {exc}{Colors.RESET}")
                 return
             print(f"{Colors.GRAY}[*] Using provided subdomain list '{subdomains_file}'. Skipping passive recon and starting with HTTP probing.{Colors.RESET}")
-            await run_recon_followups(unique_subdomains, recon_domain, domain_output_dir, concurrency, nmap_enabled, wordlist)
+            await run_recon_followups(
+                unique_subdomains,
+                recon_domain,
+                domain_output_dir,
+                concurrency,
+                nmap_enabled,
+                wordlist,
+                connect_timeout,
+                port_retries,
+            )
             recon_targets_file = dedup_file
             recon_targets_count = len(unique_subdomains)
             recon_targets_label = dedup_file
@@ -553,7 +601,16 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
                     return None
                 domain_output_dir = os.path.dirname(results_file)
                 if scan_found:
-                    await run_recon_followups(subdomains, domain, domain_output_dir, concurrency, nmap_enabled, wordlist)
+                    await run_recon_followups(
+                        subdomains,
+                        domain,
+                        domain_output_dir,
+                        concurrency,
+                        nmap_enabled,
+                        wordlist,
+                        connect_timeout,
+                        port_retries,
+                    )
                 else:
                     print(f"{Colors.GRAY}[*] Recon ({domain}) complete. Use --scan-found to automatically probe recon targets (httpx → dirsearch → nuclei).{Colors.RESET}")
                 return {
@@ -643,7 +700,17 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
 
         if should_stream:
             print(f"{Colors.YELLOW}[*] Large target set detected - using streaming mode{Colors.RESET}")
-            return await process_streaming_scan(raw_targets, concurrency, output_csv, module_filter, custom_ports, chunk_size, state_manager)
+            return await process_streaming_scan(
+                raw_targets,
+                concurrency,
+                output_csv,
+                module_filter,
+                custom_ports,
+                chunk_size,
+                state_manager,
+                connect_timeout,
+                port_retries,
+            )
         
         if not is_resume or state_manager.state["phase"] == "initializing":
             print(f"{Colors.CYAN}[*] Parsing targets from {targets_file}...{Colors.RESET}")
@@ -700,7 +767,14 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
             print(f"{Colors.CYAN}[*] Starting concurrent port scan for {len(targets)} targets across {len(all_ports_to_scan)} unique ports...{Colors.RESET}")
             state_manager.update_phase("port_scanning")
             
-            open_ports_results = await scan_ports(targets, all_ports_to_scan, concurrency, state_manager)
+            open_ports_results = await scan_ports(
+                targets,
+                all_ports_to_scan,
+                concurrency,
+                state_manager,
+                connect_timeout=connect_timeout,
+                retries=port_retries,
+            )
             print(f"{Colors.GREEN}[+] Port scanning complete.{Colors.RESET}")
             state_manager.update_phase("port_scanning_complete")
         else:
@@ -843,7 +917,17 @@ async def main(targets_file, concurrency, resume=False, output_csv=False, module
     state_manager.cleanup_state_file()
 
 # Helper for streaming process (remains mostly unchanged, just ensured it's accessible)
-async def process_streaming_scan(raw_targets, concurrency, output_csv=False, module_filter=None, custom_ports=None, chunk_size=30000, state_manager=None):
+async def process_streaming_scan(
+    raw_targets,
+    concurrency,
+    output_csv=False,
+    module_filter=None,
+    custom_ports=None,
+    chunk_size=30000,
+    state_manager=None,
+    connect_timeout=DEFAULT_CONNECT_TIMEOUT,
+    port_retries=DEFAULT_PORT_RETRIES,
+):
     print(f"{Colors.CYAN}[*] Calculating total targets for progress estimation...{Colors.RESET}")
     total_targets = 0
     for target in raw_targets:
@@ -882,7 +966,14 @@ async def process_streaming_scan(raw_targets, concurrency, output_csv=False, mod
             chunk_count += 1
             print(f"\n{Colors.BRIGHT_CYAN}=== Processing Chunk {chunk_count}/{total_chunks} ({len(target_chunk):,} targets) ==={Colors.RESET}")
             
-            open_ports_results = await scan_ports(target_chunk, all_ports_to_scan, concurrency, state_manager)
+            open_ports_results = await scan_ports(
+                target_chunk,
+                all_ports_to_scan,
+                concurrency,
+                state_manager,
+                connect_timeout=connect_timeout,
+                retries=port_retries,
+            )
             chunk_vulnerabilities = await process_chunk_services(open_ports_results, service_ports, module_filter, custom_ports, state_manager)
             all_vulnerabilities.extend(chunk_vulnerabilities)
             
@@ -975,6 +1066,18 @@ if __name__ == "__main__":
         help="Concurrency level for network operations (default: 100)."
     )
     parser.add_argument(
+        "--connect-timeout",
+        type=float,
+        default=DEFAULT_CONNECT_TIMEOUT,
+        help=f"TCP connect timeout per port attempt in seconds (default: {DEFAULT_CONNECT_TIMEOUT:.1f})."
+    )
+    parser.add_argument(
+        "--port-retries",
+        type=int,
+        default=DEFAULT_PORT_RETRIES,
+        help=f"Retry timed out or transient port probes this many times (default: {DEFAULT_PORT_RETRIES})."
+    )
+    parser.add_argument(
         "-r", "--resume",
         action="store_true",
         help="Resume an interrupted infrastructure scan."
@@ -1049,7 +1152,9 @@ if __name__ == "__main__":
             args.scan_found,
             args.nmap,
             args.sub_domains_file,
-            args.recon_concurrency
+            args.recon_concurrency,
+            args.connect_timeout,
+            args.port_retries,
         ))
     except KeyboardInterrupt:
         print("\n[*] Scanner terminated by user.")
