@@ -36,6 +36,7 @@ from modules import (
     dir_enum,
     gau_runner,
     waybackurls_runner,
+    domain_scan,
 )
 
 # Map service names to their corresponding modules
@@ -226,6 +227,12 @@ async def run_recon_followups(
     host_to_ip, ip_to_hosts, unresolved_hosts = await resolve_hostnames(unique_targets)
     recon_targets = build_scan_targets_from_mappings(unique_targets, host_to_ip)
 
+    # Note: DomainClassification happens right before we probe and saves to the output_dir
+    scanner = domain_scan.DomainScanner(output_dir=output_dir)
+    classified = scanner.classify_domains(unique_targets)
+    scanner.save_classification_csv(unique_targets)
+    print(f"{Colors.GRAY}[*] Domain mix: {len(classified['INTERNAL'])} INTERNAL, {len(classified['EXTERNAL'])} EXTERNAL{Colors.RESET}")
+
     print(
         f"{Colors.CYAN}[*] Running preliminary web-port scan on {len(unique_targets)} hosts "
         f"mapped to {len(ip_to_hosts)} unique IPv4 addresses...{Colors.RESET}"
@@ -364,6 +371,26 @@ async def run_recon_followups(
                 print(f"{Colors.YELLOW}[!] No additional alive hosts found from ffuf results.{Colors.RESET}")
 
     alive_urls = sorted(set(alive_urls))
+    
+    # Run the web checks on alive urls right after httpx completes
+    if alive_urls:
+        domain_scan_findings = await scanner.run(
+            domains=unique_targets,
+            httpx_data=httpx_data,
+            alive_urls=alive_urls,
+            concurrency=concurrency
+        )
+        if domain_scan_findings:
+            print(f"{Colors.GREEN}[+] Domain scanner identified {len(domain_scan_findings)} web issues.{Colors.RESET}")
+            for finding in domain_scan_findings:
+                # Same formatting as nuclei
+                print(f"    - {finding['status']} | {finding['vulnerability']} | {finding['url']}")
+            # Let the final results aggregation handle these
+            # Ideally this needs a way to propagate all the way up, but we're in the recon branch.
+            # We'll save them directly here since run_recon_followups doesn't return anything.
+            if domain_scan_findings:
+                save_results_to_csv(domain_scan_findings, filename=os.path.join(output_dir, f"domain_scan_vulns_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
+
     if alive_urls:
         #print("Commented Out DIR ENUM - Continue to Nuclei")
         await dir_enumerator.run_dirsearch(alive_urls)
@@ -483,6 +510,9 @@ async def main(
     scan_found=False,
     nmap_enabled=False,
     subdomains_file=None,
+    module_mode=None,
+    domain_scan_file=None,
+    domain_scan_concurrency=50,
     recon_concurrency=2,
     connect_timeout=DEFAULT_CONNECT_TIMEOUT,
     port_retries=DEFAULT_PORT_RETRIES,
@@ -509,15 +539,57 @@ async def main(
 
     # Validation: --nmap needs --recon
     if nmap_enabled and not recon_domains:
-        print(f"{Colors.RED}[!] Error: --nmap cannot be used without --recon.{Colors.RESET}")
-        sys.exit(1)
-    if subdomains_file:
-        if not recon_domains:
-            print(f"{Colors.RED}[!] Error: --sub-domains requires --recon to be specified.{Colors.RESET}")
+            print(f"{Colors.RED}[!] Error: --nmap cannot be used without --recon.{Colors.RESET}")
             sys.exit(1)
-        if len(recon_domains) != 1:
-            print(f"{Colors.RED}[!] Error: --sub-domains currently supports exactly one --recon domain.{Colors.RESET}")
+        if subdomains_file:
+            if not recon_domains:
+                print(f"{Colors.RED}[!] Error: --sub-domains requires --recon to be specified.{Colors.RESET}")
+                sys.exit(1)
+            if len(recon_domains) != 1:
+                print(f"{Colors.RED}[!] Error: --sub-domains currently supports exactly one --recon domain.{Colors.RESET}")
+                sys.exit(1)
+
+    # --- DOMAIN SCAN MODE ---
+    if module_mode == 'domain-scan':
+        if not domain_scan_file:
+            print(f"{Colors.RED}[!] Error: -m domain-scan requires --ds-file <domains.txt>.{Colors.RESET}")
             sys.exit(1)
+        
+        print(f"{Colors.CYAN}[*] Starting Domain Scanner Module...{Colors.RESET}")
+        domains = load_subdomains_file(domain_scan_file)
+        if not domains:
+            return
+
+        unique_domains = sorted(set(domains))
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join("recon_results", f"domain_scan_{timestamp}")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 1. HTTP Alive Probes
+        http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
+        probe_urls = build_default_http_probe_urls(unique_domains)
+        print(f"{Colors.CYAN}[*] Probing {len(probe_urls)} URLs with httpx...{Colors.RESET}")
+        httpx_data = await http_runner.run_httpx(probe_urls, domain_scan_concurrency)
+        
+        if httpx_data:
+            http_runner.save_csv(httpx_data, "domain_scan")
+        
+        alive_urls = [entry.get('url') for entry in httpx_data if entry.get('url')]
+        
+        # 2. Main Scan (Classification, Anomalies, Broken Components)
+        scanner = domain_scan.DomainScanner(output_dir=output_dir)
+        findings = await scanner.run(
+            domains=unique_domains,
+            httpx_data=httpx_data,
+            alive_urls=alive_urls,
+            concurrency=domain_scan_concurrency
+        )
+        
+        if findings:
+            save_results_to_csv(findings, filename=os.path.join(output_dir, f"domain_scan_vulns_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
+
+        print(f"{Colors.GREEN}[+] Domain scan module completed.{Colors.RESET}")
+        return
 
     # --- RECONNAISSANCE MODE ---
     recon_targets_label = None
@@ -1076,8 +1148,19 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-m", "--module",
-        choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs"],
-        help="Only scan the specified service module."
+        choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs", "domain-scan"],
+        help="Only scan the specified service module. Use 'domain-scan' for standalone HTTP validation & checks."
+    )
+    parser.add_argument(
+        "--ds-file",
+        metavar="FILE",
+        help="Domains file needed when using -m domain-scan."
+    )
+    parser.add_argument(
+        "--ds-concurrency",
+        type=int,
+        default=50,
+        help="Concurrency for domain-scan web checks (default: 50)."
     )
     parser.add_argument(
         "-p", "--ports",
@@ -1139,6 +1222,9 @@ if __name__ == "__main__":
             args.scan_found,
             args.nmap,
             args.sub_domains_file,
+            args.module,
+            args.ds_file,
+            args.ds_concurrency,
             args.recon_concurrency,
             args.connect_timeout,
             args.port_retries,
