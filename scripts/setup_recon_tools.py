@@ -20,6 +20,7 @@ and relies on apt/go for packages plus GitHub releases when needed.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -280,6 +281,63 @@ def check_tool(binary: str) -> bool:
     return shutil.which(binary) is not None
 
 
+def get_help_output(path: str) -> str:
+    """Returns combined help output for a candidate binary."""
+    try:
+        result = subprocess.run(
+            [path, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return (result.stdout or "") + (result.stderr or "")
+    except Exception:
+        return ""
+
+
+def is_projectdiscovery_httpx(path: str) -> bool:
+    """Checks whether the resolved httpx binary is the ProjectDiscovery tool."""
+    help_text = get_help_output(path)
+    if not help_text:
+        return False
+    if "Usage:" in help_text and "[flags]" in help_text:
+        return True
+    if "-l, -list" in help_text:
+        return True
+    if "<URL> [OPTIONS]" in help_text:
+        return False
+    return False
+
+
+def resolve_projectdiscovery_httpx() -> str | None:
+    """Finds a ProjectDiscovery-compatible httpx binary if one is present."""
+    candidates = [
+        os.environ.get("VAKT_HTTPX_BIN"),
+        "/usr/local/bin/httpx",
+        os.path.expanduser("~/.bbot/tools/httpx"),
+        shutil.which("httpx"),
+        shutil.which("pd-httpx"),
+    ]
+    seen = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = os.path.expanduser(candidate)
+        if not os.path.isabs(path):
+            path = shutil.which(path)
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if is_projectdiscovery_httpx(path):
+            return path
+    return None
+
+
+def check_httpx_tool() -> bool:
+    """Returns True only when a ProjectDiscovery-compatible httpx is available."""
+    return resolve_projectdiscovery_httpx() is not None
+
+
 def ensure_go_available() -> bool:
     """Ensures Go is available when any Go-based tool is being installed."""
     if shutil.which("go"):
@@ -325,9 +383,14 @@ def main() -> None:
 
     selected = args.tools or args.tool_args or list(TOOL_SPECS.keys())
     status_lines: List[str] = []
+    
+    def tool_is_ready(spec: ToolSpec) -> bool:
+        if spec.name == "httpx":
+            return check_httpx_tool()
+        return check_tool(spec.binary)
 
     go_needed = any(
-        TOOL_SPECS[tool].requires_go and not check_tool(TOOL_SPECS[tool].binary)
+        TOOL_SPECS[tool].requires_go and not tool_is_ready(TOOL_SPECS[tool])
         for tool in selected
     )
     if go_needed and args.install and not ensure_go_available():
@@ -335,7 +398,7 @@ def main() -> None:
 
     for tool in selected:
         spec = TOOL_SPECS[tool]
-        if check_tool(spec.binary):
+        if tool_is_ready(spec):
             status_lines.append(f"[OK] {spec.name:11s} → {spec.description}")
             continue
 
@@ -352,7 +415,7 @@ def main() -> None:
             status_lines.append(f"[FAIL] {spec.name} installation failed.")
             continue
 
-        if check_tool(spec.binary):
+        if tool_is_ready(spec):
             status_lines.append(f"[OK] {spec.name} installed successfully.")
         else:
             status_lines.append(

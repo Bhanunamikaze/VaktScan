@@ -23,6 +23,7 @@ class HTTPXRunner:
             os.environ.get("VAKT_HTTPX_BIN"),
             "/usr/local/bin/httpx",
             "/opt/homebrew/bin/httpx",
+            os.path.expanduser("~/.bbot/tools/httpx"),
             shutil.which("httpx"),
             shutil.which("pd-httpx"),
         ]
