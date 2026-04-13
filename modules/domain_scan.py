@@ -16,6 +16,7 @@ class Colors:
     YELLOW = '\033[93m'
     BLUE = '\033[94m'
     CYAN = '\033[96m'
+    BRIGHT_CYAN = '\033[1;96m'
     GRAY = '\033[90m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
@@ -137,14 +138,17 @@ class DomainScanner:
     async def check_broken_components(self, httpx_data: list, concurrency: int = 50) -> list[dict]:
         """Scan alive URLs for broken sub-resources (JS, CSS, Img, API)."""
         findings = []
-        semaphore = asyncio.Semaphore(max(1, concurrency))
-        
+        # Two separate semaphores to avoid deadlock:
+        # page_sem gates the parent GET fetches; probe_sem gates the child HEAD probes.
+        page_sem  = asyncio.Semaphore(max(1, min(concurrency // 2, 10)))
+        probe_sem = asyncio.Semaphore(max(1, concurrency))
+
         async with httpx.AsyncClient(verify=False, timeout=5.0, follow_redirects=True) as client:
             async def probe_resource(parent_entry, resource_url, parent_url):
-                async with semaphore:
+                async with probe_sem:
                     try:
                         resp = await client.head(resource_url)
-                        if resp.status_code >= 400 and resp.status_code != 401 and resp.status_code != 403:
+                        if resp.status_code >= 400 and resp.status_code not in (401, 403):
                             findings.append(self._create_vuln_entry(
                                 parent_entry,
                                 f"Broken Component: {urlparse(resource_url).path}",
@@ -153,40 +157,32 @@ class DomainScanner:
                                 f"Sub-resource '{resource_url}' returned HTTP {resp.status_code}. Parent: {parent_url}"
                             ))
                     except Exception:
-                        pass # Ignore connection errors for sub-resources
-            
-            tasks = []
-            print(f"{Colors.CYAN}[*] Checking for broken components on {len(httpx_data)} alive URLs...{Colors.RESET}")
-            for entry in httpx_data:
+                        pass
+
+            async def fetch_and_collect(entry):
                 url = entry.get('url')
-                if not url: continue
-                
-                # Fast track: we need the body to parse it, but we can only get it if we request it.
-                # Since httpx_runner might not store full bodies, we fetch the shell quickly.
-                try:
-                    async with semaphore:
+                if not url:
+                    return []
+                async with page_sem:
+                    try:
                         resp = await client.get(url)
-                        body = resp.text
                         parser = SubResourceParser()
-                        parser.feed(body)
-                        
-                        unique_resources = set()
+                        parser.feed(resp.text)
+                        tasks = []
                         for res in parser.resources:
-                            # Normalize relative to absolute
                             abs_url = urljoin(url, res)
-                            # Only check same origin or common CDNs if preferred, 
-                            # but checking all is fine to find dead links.
                             if abs_url.startswith('http'):
-                                unique_resources.add(abs_url)
-                        
-                        for res_url in unique_resources:
-                            tasks.append(probe_resource(entry, res_url, url))
-                except Exception:
-                    continue
-            
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-                
+                                tasks.append(probe_resource(entry, abs_url, url))
+                        if tasks:
+                            await asyncio.gather(*tasks, return_exceptions=True)
+                    except Exception:
+                        pass
+
+            print(f"{Colors.CYAN}[*] Checking for broken components on {len(httpx_data)} alive URLs...{Colors.RESET}")
+            page_tasks = [fetch_and_collect(entry) for entry in httpx_data]
+            if page_tasks:
+                await asyncio.gather(*page_tasks, return_exceptions=True)
+
         return findings
 
     async def run_anomaly_checks(self, alive_urls: list, httpx_data: list = None, concurrency: int = 50) -> list[dict]:
@@ -287,18 +283,22 @@ class DomainScanner:
         return findings
 
     async def run(self, domains: list, httpx_data: list, alive_urls: list, concurrency: int = 50) -> list[dict]:
-        """Orchestrate all domain scan checks."""
+        """
+        Orchestrate all domain scan checks.
+        NOTE: Callers are responsible for calling save_classification_csv() if they
+        want the classification CSV — this method only prints the summary to avoid
+        double-writing when integrated into run_recon_followups().
+        """
         print(f"{Colors.BRIGHT_CYAN}[*] Starting domain checks on {len(domains)} targets...{Colors.RESET}")
-        
-        # 1. Classify
+
+        # 1. Classify (no CSV here — caller does it once before calling run())
         classified = self.classify_domains(domains)
         print(f"{Colors.GRAY}[*] Domain mix: {len(classified['INTERNAL'])} INTERNAL, {len(classified['EXTERNAL'])} EXTERNAL{Colors.RESET}")
-        self.save_classification_csv(domains)
-        
+
         # 2. Web Checks
         findings = self.detect_default_pages(httpx_data)
         findings += await self.check_broken_components(httpx_data, concurrency)
         findings += await self.run_anomaly_checks(alive_urls, httpx_data, concurrency)
-        
+
         print(f"{Colors.GREEN}[+] Domain scan finished. Found {len(findings)} web anomalies/issues.{Colors.RESET}")
         return findings
