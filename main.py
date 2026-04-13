@@ -165,7 +165,7 @@ def save_results_to_csv(vulnerabilities, filename=None):
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         filename = f"scan_results_{timestamp}.csv"
     
-    csv_headers = ['Timestamp', 'Status', 'Vulnerability', 'Hostname', 'IP Address', 'Port', 'URL', 'Module', 'Service_Version', 'Severity', 'Details']
+    csv_headers = ['Timestamp', 'Status', 'Vulnerability', 'Hostname', 'IP Address', 'Port', 'URL', 'Module', 'Service_Version', 'Severity', 'Details', 'HTTP_Status', 'Page_Title', 'Content_Length']
     
     try:
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
@@ -194,7 +194,10 @@ def save_results_to_csv(vulnerabilities, filename=None):
                     vuln.get('module', 'N/A'),
                     vuln.get('service_version', 'N/A'),
                     vuln.get('severity', 'N/A'),
-                    vuln.get('details', 'N/A')
+                    vuln.get('details', 'N/A'),
+                    str(vuln.get('http_status', 'N/A')),
+                    vuln.get('page_title', 'N/A'),
+                    str(vuln.get('content_length', 'N/A'))
                 ])
         
         print(f"{Colors.GREEN}[+] Results saved to {filename}{Colors.RESET}")

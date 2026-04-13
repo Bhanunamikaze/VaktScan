@@ -113,9 +113,12 @@ class DomainScanner:
             "status":          status,
             "severity":        severity,
             "module":          "domain_scan",
-            "service_version": "N/A",
+            "service_version": httpx_entry.get('webserver', 'N/A'),
             "url":             url,
             "details":         details,
+            "http_status":     str(httpx_entry.get('status_code', 'N/A')),
+            "page_title":      httpx_entry.get('title', 'N/A'),
+            "content_length":  str(httpx_entry.get('content_length', 'N/A'))
         }
 
     def detect_default_pages(self, httpx_data: list) -> list[dict]:
