@@ -2,10 +2,13 @@ import asyncio
 import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime
 from urllib.parse import urlparse
+
+import httpx as python_httpx
 
 class HTTPXRunner:
     def __init__(self, output_dir="recon_results"):
@@ -37,7 +40,7 @@ class HTTPXRunner:
                   f"{fallback}\033[0m")
             if "-l, -list" not in self._get_help_output(fallback):
                 print("\033[91m[!] System httpx does not support the required CLI flags. "
-                      "Please install the ProjectDiscovery httpx binary.\033[0m")
+                      "Using the Python httpx library fallback instead.\033[0m")
                 return None
             return fallback
         return None
@@ -51,6 +54,18 @@ class HTTPXRunner:
         return shutil.which(expanded)
 
     def _is_projectdiscovery_httpx(self, path):
+        help_text = self._get_help_output(path)
+        if not help_text:
+            return False
+        if "Usage:" in help_text and "[flags]" in help_text:
+            return True
+        if "-l, -list" in help_text:
+            return True
+        if "<URL> [OPTIONS]" in help_text:
+            return False
+        return False
+
+    def _get_help_output(self, path):
         try:
             result = subprocess.run(
                 [path, "--help"],
@@ -58,26 +73,46 @@ class HTTPXRunner:
                 text=True,
                 timeout=5,
             )
-            help_text = (result.stdout or "") + (result.stderr or "")
-            if "Usage:" in help_text and "[flags]" in help_text:
-                return True
-            if "-l, -list" in help_text:
-                return True
-            if "<URL> [OPTIONS]" in help_text:
-                return False
+            return (result.stdout or "") + (result.stderr or "")
         except Exception:
-            pass
-        return False
+            return ""
 
-    async def run_httpx(self, targets, concurrency=100):
-        """
-        Runs httpx on a list of targets (host:port) using the specified concurrency.
-        """
+    def _extract_title(self, html_text):
+        if not html_text:
+            return ""
+        match = re.search(r"<title[^>]*>(.*?)</title>", html_text, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return ""
+        return " ".join(match.group(1).split())
+
+    def _extract_tech(self, response):
+        tech = []
+        for header_name in ("server", "x-powered-by"):
+            header_value = response.headers.get(header_name)
+            if header_value:
+                tech.append(f"{header_name}:{header_value}")
+        return tech
+
+    def _expand_targets_for_library(self, targets):
+        expanded_targets = []
+        seen = set()
+        for target in targets:
+            target = (target or "").strip()
+            if not target:
+                continue
+            if "://" in target:
+                variants = [target]
+            else:
+                variants = [f"http://{target}", f"https://{target}"]
+            for variant in variants:
+                if variant in seen:
+                    continue
+                seen.add(variant)
+                expanded_targets.append(variant)
+        return expanded_targets
+
+    async def _run_httpx_binary(self, targets, concurrency):
         if not self.binary:
-            print("\033[93m[!] httpx binary not found in PATH. Skipping HTTP probing.\033[0m")
-            return []
-
-        if not targets:
             return []
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -144,6 +179,70 @@ class HTTPXRunner:
         except Exception as e:
             print(f"\033[91m[!] Error running httpx: {e}\033[0m")
             return []
+
+    async def _run_httpx_library(self, targets, concurrency=100):
+        expanded_targets = self._expand_targets_for_library(targets)
+        if not expanded_targets:
+            return []
+
+        print(
+            f"\033[96m[*] Running Python httpx fallback on {len(expanded_targets)} URL probes "
+            f"(Concurrency: {concurrency})...\033[0m"
+        )
+
+        semaphore = asyncio.Semaphore(max(1, int(concurrency)))
+        timeout = python_httpx.Timeout(10.0, connect=5.0)
+        results = []
+        seen_urls = set()
+
+        async with python_httpx.AsyncClient(
+            timeout=timeout,
+            verify=False,
+            follow_redirects=True,
+        ) as client:
+            async def probe(target):
+                async with semaphore:
+                    try:
+                        response = await client.get(target)
+                    except python_httpx.HTTPError:
+                        return
+
+                    final_url = str(response.url)
+                    if final_url in seen_urls:
+                        return
+                    seen_urls.add(final_url)
+
+                    parsed = urlparse(final_url)
+                    input_parsed = urlparse(target)
+                    input_value = input_parsed.netloc or input_parsed.path or target
+                    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                    results.append({
+                        "input": input_value,
+                        "url": final_url,
+                        "host": parsed.hostname or "",
+                        "port": port,
+                        "status_code": response.status_code,
+                        "title": self._extract_title(response.text),
+                        "tech": self._extract_tech(response),
+                    })
+
+            await asyncio.gather(*(probe(target) for target in expanded_targets))
+
+        print(f"\033[92m[+] Python httpx fallback finished. Found {len(results)} alive services.\033[0m")
+        return results
+
+    async def run_httpx(self, targets, concurrency=100):
+        """
+        Runs httpx on a list of targets (host:port) using the specified concurrency.
+        """
+        if not targets:
+            return []
+
+        if self.binary:
+            return await self._run_httpx_binary(targets, concurrency)
+
+        print("\033[93m[!] ProjectDiscovery httpx binary unavailable. Using Python httpx fallback.\033[0m")
+        return await self._run_httpx_library(targets, concurrency)
 
     def save_csv(self, httpx_data, domain_label):
         """

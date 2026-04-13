@@ -10,7 +10,16 @@ import ipaddress
 # Add vendor directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
 
-from utils import process_targets, process_targets_streaming, get_service_ports
+from utils import (
+    build_default_http_probe_urls,
+    build_recon_probe_urls,
+    build_scan_targets_from_mappings,
+    collect_domain_hosts,
+    get_service_ports,
+    process_targets,
+    process_targets_streaming,
+    resolve_hostnames,
+)
 from port_scanner import scan_ports, DEFAULT_CONNECT_TIMEOUT, DEFAULT_PORT_RETRIES
 from service_validator import validate_service
 from scan_state import ScanStateManager
@@ -209,32 +218,49 @@ async def run_recon_followups(
         return
 
     http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
-    unique_targets = sorted(set(subdomains))
-
-    print(f"{Colors.CYAN}[*] Running preliminary web-port scan on {len(unique_targets)} hosts...{Colors.RESET}")
-    recon_targets = await process_targets(unique_targets)
-    if not recon_targets:
-        print(f"{Colors.RED}[!] No targets to probe after preprocessing.{Colors.RESET}")
+    unique_targets = sorted({target.strip().lower() for target in subdomains if target and target.strip()})
+    if not unique_targets:
+        print(f"{Colors.YELLOW}[!] No normalized subdomains remained after filtering.{Colors.RESET}")
         return
+
+    host_to_ip, ip_to_hosts, unresolved_hosts = await resolve_hostnames(unique_targets)
+    recon_targets = build_scan_targets_from_mappings(unique_targets, host_to_ip)
+
+    print(
+        f"{Colors.CYAN}[*] Running preliminary web-port scan on {len(unique_targets)} hosts "
+        f"mapped to {len(ip_to_hosts)} unique IPv4 addresses...{Colors.RESET}"
+    )
+    if unresolved_hosts:
+        print(
+            f"{Colors.YELLOW}[!] Could not resolve {len(unresolved_hosts)} hostnames during pre-processing. "
+            f"Default httpx hostname probes will still be attempted for them.{Colors.RESET}"
+        )
 
     service_ports = get_service_ports()
     common_web_ports = sorted(set(service_ports.get("web", [])))
-    port_scan_results = await scan_ports(
-        recon_targets,
-        common_web_ports,
-        concurrency,
-        state_manager=None,
-        connect_timeout=connect_timeout,
-        retries=port_retries,
-    )
-    probe_urls = []
+    port_scan_results = []
     nmap_followup_task = None
 
     async def _await_nmap_task():
         if nmap_followup_task:
             await nmap_followup_task
 
-    if nmap_enabled:
+    if recon_targets:
+        port_scan_results = await scan_ports(
+            recon_targets,
+            common_web_ports,
+            concurrency,
+            state_manager=None,
+            connect_timeout=connect_timeout,
+            retries=port_retries,
+        )
+    else:
+        print(
+            f"{Colors.YELLOW}[!] No resolved scan targets remained after hostname/IP deduplication. "
+            f"Skipping the TCP web-port sweep and relying on hostname-first httpx probing.{Colors.RESET}"
+        )
+
+    if nmap_enabled and recon_targets:
         print(
             f"{Colors.BRIGHT_MAGENTA}[*] Running background full-range port scan "
             f"(1-65535) to prep Nmap follow-up...{Colors.RESET}"
@@ -260,7 +286,7 @@ async def run_recon_followups(
                 if not open_ports:
                     continue
                 ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
-                host = target_obj.get('display_target') or ip
+                host = next(iter(ip_to_hosts.get(ip, [])), target_obj.get('display_target') or ip)
                 if not ip:
                     continue
                 ip_port_map.setdefault(ip, set()).update(open_ports)
@@ -285,59 +311,17 @@ async def run_recon_followups(
             )
 
         nmap_followup_task = asyncio.create_task(_nmap_followup())
-
-    def _format_url(scheme, host_value, port_value):
-        default_port = 80 if scheme == "http" else 443
-        suffix = "" if port_value == default_port else f":{port_value}"
-        return f"{scheme}://{host_value}{suffix}"
-
-    def _normalize_host(host_value):
-        host_value = (host_value or "").strip().lower()
-        if not host_value:
-            return ""
-        if "://" in host_value:
-            host_value = host_value.split("://", 1)[1]
-        if "/" in host_value:
-            host_value = host_value.split("/", 1)[0]
-        if host_value.count(":") == 1 and host_value.split(":")[1].isdigit():
-            host_value = host_value.split(":")[0]
-        return host_value
-
-    def _collect_domain_hosts(host_iterable):
-        domains = set()
-        for host_value in host_iterable:
-            candidate = _normalize_host(host_value)
-            if not candidate:
-                continue
-            try:
-                ipaddress.ip_address(candidate)
-                continue
-            except ValueError:
-                pass
-            if "." not in candidate:
-                continue
-            domains.add(candidate)
-        return sorted(domains)
-
-    for target_obj, data in port_scan_results:
-        open_ports = sorted(set(data.get('open_ports', [])))
-        if not open_ports:
-            continue
-        host = target_obj.get('display_target') or target_obj.get('scan_address')
-        ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
-        for port in open_ports:
-            for scheme in ("http", "https"):
-                probe_urls.append(_format_url(scheme, host, port))
-                if ip != host:
-                    probe_urls.append(_format_url(scheme, ip, port))
-
-    probe_urls = sorted(set(probe_urls))
+    default_probe_urls = build_default_http_probe_urls(unique_targets)
+    probe_urls = build_recon_probe_urls(unique_targets, port_scan_results, ip_to_hosts)
     if not probe_urls:
-        print(f"{Colors.YELLOW}[!] No open web ports detected; skipping httpx probe.{Colors.RESET}")
+        print(f"{Colors.YELLOW}[!] No hostname or port-scan HTTP targets were generated; skipping httpx probe.{Colors.RESET}")
         await _await_nmap_task()
         return
 
-    print(f"{Colors.CYAN}[*] Probing {len(probe_urls)} URLs with httpx...{Colors.RESET}")
+    print(
+        f"{Colors.CYAN}[*] Probing {len(probe_urls)} URLs with httpx "
+        f"({len(default_probe_urls)} default hostname probes + shared-IP expanded port discoveries)...{Colors.RESET}"
+    )
     httpx_data = await http_runner.run_httpx(probe_urls, concurrency)
     if not httpx_data:
         print(f"{Colors.YELLOW}[!] No alive HTTP services detected by httpx.{Colors.RESET}")
@@ -364,8 +348,11 @@ async def run_recon_followups(
                 unique_targets.append(sub)
                 new_targets.append(sub)
         if new_targets:
-            print(f"{Colors.CYAN}[*] Probing {len(new_targets)} ffuf-discovered hosts with httpx...{Colors.RESET}")
-            ffuf_httpx = await http_runner.run_httpx(new_targets, concurrency)
+            ffuf_probe_urls = build_default_http_probe_urls(new_targets)
+            print(
+                f"{Colors.CYAN}[*] Probing {len(ffuf_probe_urls)} ffuf-discovered default HTTP targets with httpx...{Colors.RESET}"
+            )
+            ffuf_httpx = await http_runner.run_httpx(ffuf_probe_urls, concurrency)
             if ffuf_httpx:
                 http_runner.save_csv(ffuf_httpx, f"{recon_domain.replace('.', '_')}_ffuf")
                 httpx_data.extend(ffuf_httpx)
@@ -391,7 +378,7 @@ async def run_recon_followups(
         else:
             print(f"{Colors.GREEN}[+] Nuclei scan complete with no findings.{Colors.RESET}")
 
-    domain_hosts = _collect_domain_hosts(alive_urls)
+    domain_hosts = collect_domain_hosts(alive_urls)
     if domain_hosts:
         print(f"{Colors.CYAN}[*] Harvesting archived URLs for {len(domain_hosts)} host(s) (gau → waybackurls)...{Colors.RESET}")
         gau_inst = gau_runner.GAURunner(output_dir=output_dir)

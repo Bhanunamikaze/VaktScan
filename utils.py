@@ -1,7 +1,192 @@
 import asyncio
 import socket
 import ipaddress
-from urllib.parse import urlparse
+
+
+def normalize_host_value(host_value):
+    """Normalize a host or URL-like value down to a hostname/IP token."""
+    host_value = (host_value or "").strip().lower()
+    if not host_value:
+        return ""
+    if "://" in host_value:
+        host_value = host_value.split("://", 1)[1]
+    if "/" in host_value:
+        host_value = host_value.split("/", 1)[0]
+    if host_value.startswith("[") and "]" in host_value:
+        closing = host_value.find("]")
+        remainder = host_value[closing + 1:]
+        if remainder.startswith(":") and remainder[1:].isdigit():
+            return host_value[1:closing]
+        return host_value[1:closing]
+    if host_value.count(":") == 1 and host_value.split(":")[1].isdigit():
+        host_value = host_value.split(":")[0]
+    return host_value
+
+
+def collect_domain_hosts(host_iterable):
+    """Return normalized hostnames while excluding raw IP addresses."""
+    domains = set()
+    for host_value in host_iterable:
+        candidate = normalize_host_value(host_value)
+        if not candidate:
+            continue
+        try:
+            ipaddress.ip_address(candidate)
+            continue
+        except ValueError:
+            pass
+        if "." not in candidate:
+            continue
+        domains.add(candidate)
+    return sorted(domains)
+
+
+def format_url(scheme, host_value, port_value):
+    """Format a URL while omitting the default port for the chosen scheme."""
+    default_port = 80 if scheme == "http" else 443
+    suffix = "" if port_value == default_port else f":{port_value}"
+    return f"{scheme}://{host_value}{suffix}"
+
+
+def build_default_http_probe_urls(host_iterable):
+    """Build explicit http/https probe URLs for every hostname."""
+    probe_urls = set()
+    for host in collect_domain_hosts(host_iterable):
+        probe_urls.add(format_url("http", host, 80))
+        probe_urls.add(format_url("https", host, 443))
+    return sorted(probe_urls)
+
+
+def build_port_scan_probe_urls(port_scan_results, ip_to_hosts=None):
+    """
+    Expand discovered web ports across every hostname that maps to the same IP.
+    """
+    ip_to_hosts = ip_to_hosts or {}
+    probe_urls = set()
+
+    for target_obj, data in port_scan_results:
+        open_ports = sorted(set(data.get("open_ports", [])))
+        if not open_ports:
+            continue
+
+        ip = normalize_host_value(target_obj.get("resolved_ip") or target_obj.get("scan_address"))
+        candidate_hosts = set(ip_to_hosts.get(ip, []))
+
+        fallback_host = normalize_host_value(
+            target_obj.get("display_target") or target_obj.get("scan_address")
+        )
+        if fallback_host:
+            try:
+                ipaddress.ip_address(fallback_host)
+            except ValueError:
+                if "." in fallback_host:
+                    candidate_hosts.add(fallback_host)
+
+        for port in open_ports:
+            for scheme in ("http", "https"):
+                for host in sorted(candidate_hosts):
+                    probe_urls.add(format_url(scheme, host, port))
+                if ip:
+                    probe_urls.add(format_url(scheme, ip, port))
+
+    return sorted(probe_urls)
+
+
+def build_recon_probe_urls(host_iterable, port_scan_results, ip_to_hosts=None):
+    """
+    Combine hostname-first default probes with port-scan-expanded probes.
+    """
+    return sorted(
+        set(build_default_http_probe_urls(host_iterable))
+        | set(build_port_scan_probe_urls(port_scan_results, ip_to_hosts))
+    )
+
+
+async def resolve_hostnames(hostnames):
+    """
+    Resolve hostnames and return hostname/IP lookup maps for shared-IP recon flows.
+    """
+    normalized_hosts = []
+    seen = set()
+
+    for host in hostnames:
+        candidate = normalize_host_value(host)
+        if not candidate or candidate in seen:
+            continue
+        try:
+            ipaddress.ip_address(candidate)
+            continue
+        except ValueError:
+            pass
+        seen.add(candidate)
+        normalized_hosts.append(candidate)
+
+    if not normalized_hosts:
+        return {}, {}, []
+
+    resolution_tasks = [resolve_hostname(host) for host in normalized_hosts]
+    resolved_results = await asyncio.gather(*resolution_tasks)
+
+    host_to_ip = {}
+    ip_to_hosts = {}
+    unresolved_hosts = []
+
+    for hostname, resolved_ip in zip(normalized_hosts, resolved_results):
+        if not resolved_ip:
+            unresolved_hosts.append(hostname)
+            continue
+        host_to_ip[hostname] = resolved_ip
+        ip_to_hosts.setdefault(resolved_ip, []).append(hostname)
+
+    for hosts in ip_to_hosts.values():
+        hosts.sort()
+
+    return host_to_ip, ip_to_hosts, unresolved_hosts
+
+
+def build_scan_targets_from_mappings(raw_targets, host_to_ip):
+    """
+    Build deduplicated scan targets while preserving hostname/IP attribution.
+    """
+    scan_targets = []
+    processed_ips = set()
+
+    for target in raw_targets:
+        candidate = normalize_host_value(target)
+        if not candidate:
+            continue
+
+        try:
+            ip_addr = str(ipaddress.ip_address(candidate))
+            if ip_addr in processed_ips:
+                continue
+            scan_targets.append({
+                "scan_address": ip_addr,
+                "display_target": ip_addr,
+                "resolved_ip": ip_addr,
+            })
+            processed_ips.add(ip_addr)
+            continue
+        except ValueError:
+            pass
+
+        resolved_ip = host_to_ip.get(candidate)
+        if not resolved_ip or resolved_ip in processed_ips:
+            continue
+
+        scan_targets.append({
+            "scan_address": candidate,
+            "display_target": candidate,
+            "resolved_ip": resolved_ip,
+        })
+        scan_targets.append({
+            "scan_address": resolved_ip,
+            "display_target": candidate,
+            "resolved_ip": resolved_ip,
+        })
+        processed_ips.add(resolved_ip)
+
+    return scan_targets
 
 def get_service_ports():
     """Returns a dictionary of services and their common ports."""
