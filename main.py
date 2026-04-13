@@ -563,11 +563,28 @@ async def main(
         output_dir = os.path.join("recon_results", f"domain_scan_{timestamp}")
         os.makedirs(output_dir, exist_ok=True)
         
-        # 1. HTTP Alive Probes
-        http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
+        # 1. Resolve and Port Scan
+        host_to_ip, ip_to_hosts, unresolved_hosts = await resolve_hostnames(unique_domains)
+        scan_targets = build_scan_targets_from_mappings(unique_domains, host_to_ip)
+        
+        print(f"{Colors.CYAN}[*] Running preliminary web-port scan on {len(unique_domains)} domains...{Colors.RESET}")
         web_ports = get_service_ports().get("web", [80, 443])
-        probe_urls = build_web_probe_urls(unique_domains, web_ports)
-        print(f"{Colors.CYAN}[*] Probing {len(unique_domains)} domains across {len(web_ports)} web ports ({len(probe_urls)} total URLs) with httpx...{Colors.RESET}")
+        port_scan_results = []
+        if scan_targets:
+            port_scan_results = await scan_ports(
+                scan_targets,
+                web_ports,
+                concurrency,
+                state_manager=None,
+                connect_timeout=connect_timeout,
+                retries=port_retries
+            )
+        
+        # 2. HTTP Alive Probes
+        http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
+        # build_recon_probe_urls automatically tests 80/443 for all, plus only the discovered open ports
+        probe_urls = build_recon_probe_urls(unique_domains, port_scan_results, ip_to_hosts)
+        print(f"{Colors.CYAN}[*] Probing {len(probe_urls)} active web URLs with httpx...{Colors.RESET}")
         httpx_data = await http_runner.run_httpx(probe_urls, domain_scan_concurrency)
         
         if httpx_data:
