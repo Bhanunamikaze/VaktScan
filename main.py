@@ -537,26 +537,20 @@ async def main(
     recon_targets_file = None
     recon_targets_count = 0
 
-    # Validation: --nmap needs --recon
+    # Validation: --nmap needs recon mode
     if nmap_enabled and not recon_domains:
-            print(f"{Colors.RED}[!] Error: --nmap cannot be used without --recon.{Colors.RESET}")
-            sys.exit(1)
-        if subdomains_file:
-            if not recon_domains:
-                print(f"{Colors.RED}[!] Error: --sub-domains requires --recon to be specified.{Colors.RESET}")
-                sys.exit(1)
-            if len(recon_domains) != 1:
-                print(f"{Colors.RED}[!] Error: --sub-domains currently supports exactly one --recon domain.{Colors.RESET}")
-                sys.exit(1)
+        print(f"{Colors.RED}[!] Error: --nmap cannot be used without -m recon.{Colors.RESET}")
+        sys.exit(1)
 
     # --- DOMAIN SCAN MODE ---
     if module_mode == 'domain-scan':
-        if not domain_scan_file:
-            print(f"{Colors.RED}[!] Error: -m domain-scan requires --ds-file <domains.txt>.{Colors.RESET}")
+        target_file = domain_scan_file or subdomains_file
+        if not target_file:
+            print(f"{Colors.RED}[!] Error: -m domain-scan requires a domains file via --ds-file <file> or --sub-domains <file>.{Colors.RESET}")
             sys.exit(1)
         
         print(f"{Colors.CYAN}[*] Starting Domain Scanner Module...{Colors.RESET}")
-        domains = load_subdomains_file(domain_scan_file)
+        domains = load_subdomains_file(target_file)
         if not domains:
             return
 
@@ -591,7 +585,40 @@ async def main(
         print(f"{Colors.GREEN}[+] Domain scan module completed.{Colors.RESET}")
         return
 
-    # --- RECONNAISSANCE MODE ---
+    # --- STANDALONE --sub-domains MODE (no -m recon needed) ---
+    if subdomains_file and not recon_domains:
+        print(f"{Colors.CYAN}[*] Running in standalone --sub-domains mode (no recon label)...{Colors.RESET}")
+        subdomains = load_subdomains_file(subdomains_file)
+        unique_subdomains = sorted(set(subdomains))
+        if not unique_subdomains:
+            print(f"{Colors.RED}[!] No usable subdomains found in '{subdomains_file}'.{Colors.RESET}")
+            return
+        safe_label = os.path.splitext(os.path.basename(subdomains_file))[0]
+        safe_label = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in safe_label.lower())
+        domain_output_dir = os.path.join("recon_results", safe_label or "subdomains")
+        os.makedirs(domain_output_dir, exist_ok=True)
+        dedup_file = os.path.join(domain_output_dir, f"manual_subdomains_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+        try:
+            with open(dedup_file, "w", encoding="utf-8") as handle:
+                for host in unique_subdomains:
+                    handle.write(f"{host}\n")
+        except OSError as exc:
+            print(f"{Colors.RED}[!] Failed to write normalized subdomain file: {exc}{Colors.RESET}")
+            return
+        print(f"{Colors.GRAY}[*] {len(unique_subdomains)} subdomains loaded. Starting HTTP probing...{Colors.RESET}")
+        await run_recon_followups(
+            unique_subdomains,
+            safe_label,         # used as the output label
+            domain_output_dir,
+            concurrency,
+            nmap_enabled,
+            wordlist,
+            connect_timeout,
+            port_retries,
+        )
+        return
+
+    # --- RECONNAISSANCE MODE (-m recon or --sub-domains WITH a recon domain) ---
     recon_targets_label = None
     if recon_domains:
         normalized_domains = []
@@ -610,6 +637,9 @@ async def main(
             return
 
         if subdomains_file:
+            if len(recon_domains) != 1:
+                print(f"{Colors.RED}[!] Error: --sub-domains currently supports exactly one -m recon domain.{Colors.RESET}")
+                sys.exit(1)
             recon_domain = normalized_domains[0]
             print(f"{Colors.CYAN}[*] Starting Reconnaissance Mode for: {Colors.BOLD}{recon_domain}{Colors.RESET}")
             subdomains = load_subdomains_file(subdomains_file)
@@ -727,7 +757,7 @@ async def main(
             return
 
         if targets_file:
-            print(f"{Colors.YELLOW}[!] Ignoring provided targets file because --recon supplies its own target set.{Colors.RESET}")
+            print(f"{Colors.YELLOW}[!] Ignoring provided targets file because -m recon supplies its own target set.{Colors.RESET}")
         targets_file = recon_targets_file
         print(
             f"{Colors.CYAN}[*] Continuing with full service scanning for {recon_targets_count} recon target(s) "
@@ -1148,8 +1178,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-m", "--module",
-        choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs", "domain-scan"],
-        help="Only scan the specified service module. Use 'domain-scan' for standalone HTTP validation & checks."
+        choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs", "domain-scan", "recon"],
+        help="Scan/run the specified module. Use 'recon' for subdomain enumeration, 'domain-scan' for HTTP validation & checks."
     )
     parser.add_argument(
         "--ds-file",
@@ -1174,10 +1204,11 @@ if __name__ == "__main__":
         help="Chunk size for streaming mode (default: 30000)."
     )
     parser.add_argument(
-        "--recon",
+        "--recon-domain",
         metavar="DOMAIN",
         nargs="+",
-        help="Run subdomain enumeration and passive recon on one or more DOMAIN values or files."
+        dest="recon_domain",
+        help="Domain(s) to enumerate subdomains for when using -m recon."
     )
     parser.add_argument(
         "--recon-concurrency",
@@ -1187,23 +1218,23 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--wordlist",
-        help="Wordlist for ffuf-based VHost fuzzing during recon (--recon required)."
+        help="Wordlist for ffuf-based VHost fuzzing during -m recon."
     )
     parser.add_argument(
         "--sub-domains",
         metavar="FILE",
         dest="sub_domains_file",
-        help="File containing newline-separated subdomains to probe directly (requires --recon)."
+        help="File of newline-separated subdomains to probe directly. Works standalone or paired with -m recon."
     )
     parser.add_argument(
         "--scan-found",
         action="store_true",
-        help="Automatically probe recon subdomains via httpx → dirsearch → nuclei."
+        help="After -m recon, automatically probe subdomains via httpx → dirsearch → nuclei."
     )
     parser.add_argument(
         "--nmap",
         action="store_true",
-        help="After recon, run a full 1-65535 port scan and nmap -sCV -Pn on alive hosts."
+        help="After -m recon, run full 1-65535 port scan and nmap -sCV -Pn on alive hosts."
     )
 
     args = parser.parse_args()
@@ -1217,7 +1248,7 @@ if __name__ == "__main__":
             args.module, 
             args.ports, 
             args.chunk_size,
-            args.recon,
+            args.recon_domain,
             args.wordlist,
             args.scan_found,
             args.nmap,

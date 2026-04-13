@@ -8,7 +8,8 @@ An advanced, high-performance security scanner designed for comprehensive vulner
 ##  Features
 
 ### Comprehensive Attack Surface Coverage
-- **Discovery & Mapping**: Passive recon (amass, subfinder, findomain, assetfinder, bbot, knockpy, censys, crtsh), active fuzzing (ffuf), and directory busting (dirsearch) driven by a curated toolchain and the built-in HTTP probe pipeline.
+- **Discovery & Mapping**: Passive recon (amass, subfinder, findomain, assetfinder, bbot, knockpy, censys, crtsh) inside a first-class `-m recon` module. Includes active fuzzing (ffuf) and directory busting (dirsearch).
+- **Domain Validation & Fingerprinting (-m domain-scan)**: Classifies internal vs. external domains, detects default/parked pages, identifies broken frontend components (4xx/5xx on sub-resources), and probes for anomalies (CORS, missing headers, open redirects, 5xx bodies, and size mismatches).
 - **Web Service Validation**: Common web port sweep (30+ ports) per host, automatic URL generation (HTTP/HTTPS) for live service detection, ProjectDiscovery httpx integration for responsive target enumeration.
 - **Vulnerability Scanning**: Service-specific modules for Elasticsearch, Kibana, Grafana, Prometheus, and Next.js plus ProjectDiscovery nuclei (with severity filtering and tuned rate limits) for broader HTTP exposure assessment.
 - **Optional Deepening**: Automatic Nmap `-sCV -Pn` on recon findings (`--nmap`) and CSV reporting for port scan snapshots.
@@ -119,22 +120,19 @@ python main.py targets.txt -c 1000
 python main.py targets.txt --resume
 
 # Run recon (passive + optional active chain → service scan automatically continues)
-python main.py --recon target.com --wordlist wordlist.txt
+python main.py -m recon --recon-domain target.com --wordlist wordlist.txt
 
 # Run recon for multiple domains concurrently and immediately scan the findings
-python main.py --recon target.com api.target.com --scan-found
-
-# Feed recon a file of domains and limit concurrent recon jobs
-python main.py --recon recon_domains.txt --recon-concurrency 1
+python main.py -m recon --recon-domain target.com api.target.com --scan-found
 
 # Attack surface recon + auto follow-up (web-port scan → httpx → dirsearch → nuclei)
-python main.py --recon target.com --wordlist wordlist.txt --scan-found
+python main.py -m recon --recon-domain target.com --wordlist wordlist.txt --scan-found
 
-# Skip passive recon and probe an existing subdomain list directly
-python main.py --recon target.com --sub-domains subs.txt
+# Stop passive recon and probe an existing subdomain list directly
+python main.py --sub-domains subs.txt
 
-# Recon + follow-up + full-range Nmap on alive hosts
-python main.py --recon target.com --wordlist wordlist.txt --scan-found --nmap
+# Run the dedicated web validation / anomaly checks on an existing subdomain list
+python main.py -m domain-scan --sub-domains subs.txt
 
 # Traditional service-only scan
 python main.py targets.txt -m elasticsearch
@@ -198,17 +196,13 @@ python main.py targets.txt -m grafana -p 3001,3002 -c 1000 --chunk-size 25000
 python main.py targets.txt [OPTIONS]
 
 Options:
-  targets_file            File with IPs/hosts/CIDRs (omit when using --recon)
+  targets_file            File with IPs/hosts/CIDRs (omit when using -m recon or --sub-domains)
   -c, --concurrency INT   Set concurrency level (default: 100, max: 2000)
-  -r, --resume            Resume an interrupted infrastructure scan
-  --csv                   Save consolidated results to CSV
-  -m, --module SERVICE    Scan only elasticsearch|kibana|grafana|prometheus|nextjs
+  -m, --module SERVICE    Scan only elasticsearch|kibana|grafana|prometheus|nextjs|domain-scan|recon
   -p, --ports PORTS       Extra comma-separated ports to scan
-  --chunk-size INT        Chunk size for streaming mode (default: 30000)
-  --recon DOMAIN|FILE     Run passive/active recon on one or more DOMAIN values or @FILE list and scan findings
+  --sub-domains FILE      Provide newline-separated subdomains to probe (standalone, or feeds domain-scan)
+  --recon-domain DOMAIN   Domain(s) to run passive recon/fuzzing against (used with -m recon)
   --wordlist PATH         Wordlist for ffuf VHost fuzzing during recon
-  --sub-domains FILE      Provide newline-separated subdomains to probe (requires --recon)
-  --recon-concurrency N   Limit how many recon domains run concurrently (default: 2)
   --scan-found            Immediately probe recon results (httpx→dirsearch→nuclei)
   --nmap                  Full 1-65535 port scan on recon hosts followed by nmap -sCV -Pn
   -h, --help              Show help
