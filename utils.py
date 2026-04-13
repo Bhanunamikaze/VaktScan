@@ -57,6 +57,18 @@ def build_default_http_probe_urls(host_iterable):
     return sorted(probe_urls)
 
 
+def build_web_probe_urls(host_iterable, ports):
+    """Build http/https probe URLs across a specific list of ports."""
+    probe_urls = set()
+    for host in collect_domain_hosts(host_iterable):
+        for port in ports:
+            # We don't try to guess http vs https per port because some custom 
+            # ports might run HTTPS. Tools like httpx handle fallback gracefully.
+            probe_urls.add(format_url("http", host, port))
+            probe_urls.add(format_url("https", host, port))
+    return sorted(probe_urls)
+
+
 def build_port_scan_probe_urls(port_scan_results, ip_to_hosts=None):
     """
     Expand discovered web ports across every hostname that maps to the same IP.

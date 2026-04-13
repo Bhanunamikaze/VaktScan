@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
 
 from utils import (
     build_default_http_probe_urls,
+    build_web_probe_urls,
     build_recon_probe_urls,
     build_scan_targets_from_mappings,
     collect_domain_hosts,
@@ -561,8 +562,9 @@ async def main(
         
         # 1. HTTP Alive Probes
         http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
-        probe_urls = build_default_http_probe_urls(unique_domains)
-        print(f"{Colors.CYAN}[*] Probing {len(probe_urls)} URLs with httpx...{Colors.RESET}")
+        web_ports = get_service_ports().get("web", [80, 443])
+        probe_urls = build_web_probe_urls(unique_domains, web_ports)
+        print(f"{Colors.CYAN}[*] Probing {len(unique_domains)} domains across {len(web_ports)} web ports ({len(probe_urls)} total URLs) with httpx...{Colors.RESET}")
         httpx_data = await http_runner.run_httpx(probe_urls, domain_scan_concurrency)
         
         if httpx_data:
