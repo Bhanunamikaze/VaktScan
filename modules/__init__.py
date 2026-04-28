@@ -12,3 +12,4 @@ from . import dir_enum
 from . import gau_runner
 from . import waybackurls_runner
 from . import domain_scan
+from . import js_paths

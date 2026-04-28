@@ -38,6 +38,7 @@ from modules import (
     gau_runner,
     waybackurls_runner,
     domain_scan,
+    js_paths,
 )
 
 # Map service names to their corresponding modules
@@ -520,6 +521,8 @@ async def main(
     recon_concurrency=2,
     connect_timeout=DEFAULT_CONNECT_TIMEOUT,
     port_retries=DEFAULT_PORT_RETRIES,
+    js_url=None,
+    js_timeout=10,
 ):
     """
     Main orchestrator for the scanning tool.
@@ -545,6 +548,110 @@ async def main(
     if nmap_enabled and not recon_domains:
         print(f"{Colors.RED}[!] Error: --nmap cannot be used without -m recon.{Colors.RESET}")
         sys.exit(1)
+
+    # --- JS PATHS MODE (-m js-paths) ---
+    if module_mode == 'js-paths':
+        js_targets = []
+        if js_url:
+            js_targets.append(js_url)
+        if domain_scan_file:
+            js_targets.extend(load_subdomains_file(domain_scan_file))
+        if not js_targets:
+            print(
+                f"{Colors.RED}[!] -m js-paths requires at least one target URL.\n"
+                f"    Use --url <URL> for a single target or --ds-file <file> "
+                f"for a list of URLs.{Colors.RESET}"
+            )
+            sys.exit(1)
+
+        js_targets = list(dict.fromkeys(js_targets))  # deduplicate, preserve order
+        timestamp  = time.strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join("recon_results", f"js_paths_{timestamp}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        print(
+            f"{Colors.CYAN}[*] Starting JS Paths Module on "
+            f"{len(js_targets)} target(s)...{Colors.RESET}"
+        )
+
+        scanner = js_paths.JSPathsScanner(
+            target_urls=js_targets,
+            threads=concurrency,
+            timeout=js_timeout,
+        )
+        result   = await scanner.run()
+        findings      = result.get("findings", [])
+        paths         = result.get("paths", [])
+        hosts         = result.get("hosts", [])
+        js_urls       = result.get("js_urls", [])
+        probe_results = result.get("probe_results", [])
+
+        # ── Save raw recon data ──
+        def _write_lines(name, items):
+            fpath = os.path.join(output_dir, name)
+            with open(fpath, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(items) + "\n")
+            print(f"{Colors.GRAY}[*] Saved {len(items):,} entries → {fpath}{Colors.RESET}")
+
+        if paths:
+            _write_lines(f"extracted_paths_{timestamp}.txt", paths)
+        if hosts:
+            _write_lines(f"discovered_hosts_{timestamp}.txt", hosts)
+        if js_urls:
+            _write_lines(f"js_files_{timestamp}.txt", js_urls)
+
+        # ── Save all probe results to CSV ──
+        if probe_results:
+            probe_csv = os.path.join(output_dir, f"probe_results_{timestamp}.csv")
+            fieldnames = ["Hostname", "URL", "Path", "Status Code", "Server Header"]
+            try:
+                with open(probe_csv, "w", newline="", encoding="utf-8") as fh:
+                    writer = csv.DictWriter(fh, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(probe_results)
+                print(
+                    f"{Colors.GREEN}[+] {len(probe_results):,} probe hit(s) saved → "
+                    f"{Colors.BOLD}{probe_csv}{Colors.RESET}"
+                )
+            except IOError as exc:
+                print(f"{Colors.RED}[!] Failed to write probe CSV: {exc}{Colors.RESET}")
+
+        # ── Print & save vulnerability findings ──
+        print(f"{Colors.BRIGHT_CYAN}\n" + "="*50 + f"{Colors.RESET}")
+        print(f"{Colors.BRIGHT_YELLOW}{Colors.BOLD}      JS Paths Scan Results{Colors.RESET}")
+        print(f"{Colors.BRIGHT_CYAN}" + "="*50 + f"\n{Colors.RESET}")
+
+        if findings:
+            for f in findings:
+                sev_color = (
+                    Colors.BRIGHT_RED   if f['status'] == 'VULNERABLE' else
+                    Colors.RED + Colors.BOLD if f['status'] == 'CRITICAL'  else
+                    Colors.YELLOW       if f['status'] == 'POTENTIAL'  else
+                    Colors.BLUE
+                )
+                print(
+                    f"{sev_color}[!] {f['status']}{Colors.RESET}: "
+                    f"{Colors.BOLD}{f['vulnerability']}{Colors.RESET} "
+                    f"→ {Colors.UNDERLINE}{f['url']}{Colors.RESET}"
+                )
+                print(f"    {Colors.GRAY}Details: {f['details']}{Colors.RESET}\n")
+            csv_file = save_results_to_csv(
+                findings,
+                filename=os.path.join(
+                    output_dir,
+                    f"js_paths_findings_{timestamp}.csv"
+                )
+            )
+            if csv_file:
+                print(f"{Colors.GREEN}[+] Findings saved → {Colors.BOLD}{csv_file}{Colors.RESET}")
+        else:
+            print(f"{Colors.GREEN}[*] No vulnerability findings.{Colors.RESET}")
+
+        print(
+            f"\n{Colors.BRIGHT_GREEN}[*] JS Paths scan finished. "
+            f"Output directory: {Colors.BOLD}{output_dir}{Colors.RESET}"
+        )
+        return
 
     # --- DOMAIN SCAN MODE ---
     if module_mode == 'domain-scan':
@@ -1200,8 +1307,26 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-m", "--module",
-        choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs", "domain-scan", "recon"],
-        help="Scan/run the specified module. Use 'recon' for subdomain enumeration, 'domain-scan' for HTTP validation & checks."
+        choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs",
+                 "domain-scan", "recon", "js-paths"],
+        help=(
+            "Scan/run the specified module. "
+            "Use 'recon' for subdomain enumeration, "
+            "'domain-scan' for HTTP validation & checks, "
+            "'js-paths' for JS file analysis and endpoint probing."
+        )
+    )
+    parser.add_argument(
+        "--url",
+        metavar="URL",
+        help="Single target URL for use with -m js-paths (e.g. https://example.com)."
+    )
+    parser.add_argument(
+        "--js-timeout",
+        type=int,
+        default=10,
+        metavar="SECONDS",
+        help="HTTP request timeout (seconds) for the js-paths module (default: 10)."
     )
     parser.add_argument(
         "--ds-file",
@@ -1263,12 +1388,12 @@ if __name__ == "__main__":
 
     try:
         asyncio.run(main(
-            args.targets_file, 
-            args.concurrency, 
-            args.resume, 
-            args.csv, 
-            args.module, 
-            args.ports, 
+            args.targets_file,
+            args.concurrency,
+            args.resume,
+            args.csv,
+            args.module,
+            args.ports,
             args.chunk_size,
             args.recon_domain,
             args.wordlist,
@@ -1281,6 +1406,8 @@ if __name__ == "__main__":
             args.recon_concurrency,
             args.connect_timeout,
             args.port_retries,
+            args.url,
+            args.js_timeout,
         ))
     except KeyboardInterrupt:
         print("\n[*] Scanner terminated by user.")

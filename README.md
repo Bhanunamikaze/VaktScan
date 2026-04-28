@@ -10,6 +10,7 @@ An advanced, high-performance security scanner designed for comprehensive vulner
 ### Comprehensive Attack Surface Coverage
 - **Discovery & Mapping**: Passive recon (amass, subfinder, findomain, assetfinder, bbot, knockpy, censys, crtsh) inside a first-class `-m recon` module. Includes active fuzzing (ffuf) and directory busting (dirsearch).
 - **Domain Validation & Fingerprinting (-m domain-scan)**: Classifies internal vs. external domains, detects default/parked pages, identifies broken frontend components (4xx/5xx on sub-resources), and probes for anomalies (CORS, missing headers, open redirects, 5xx bodies, and size mismatches).
+- **JavaScript Analysis (-m js-paths)**: Deep parsing of JS files to extract embedded endpoints using 12+ strategies. Detects hardcoded secrets, exposed source maps, internal IPs, and sensitive path permutations.
 - **Web Service Validation**: Common web port sweep (30+ ports) per host, automatic URL generation (HTTP/HTTPS) for live service detection, ProjectDiscovery httpx integration for responsive target enumeration.
 - **Vulnerability Scanning**: Service-specific modules for Elasticsearch, Kibana, Grafana, Prometheus, and Next.js plus ProjectDiscovery nuclei (with severity filtering and tuned rate limits) for broader HTTP exposure assessment.
 - **Optional Deepening**: Automatic Nmap `-sCV -Pn` on recon findings (`--nmap`) and CSV reporting for port scan snapshots.
@@ -60,7 +61,8 @@ VaktScan/
     ├── kibana.py          # Kibana scanner (4 CVEs + API testing)
     ├── grafana.py         # Grafana scanner (18+ CVEs)
     ├── prometheus.py      # Prometheus scanner (3 CVEs + metrics analysis)
-    └── react_to_shell.py  # Next.js (React) RCE scanner
+    ├── react_to_shell.py  # Next.js (React) RCE scanner
+    └── js_paths.py        # JavaScript analysis and endpoint extraction
 ```
 
 ##  Requirements
@@ -137,6 +139,10 @@ python main.py -m domain-scan --sub-domains subs.txt
 # Traditional service-only scan
 python main.py targets.txt -m elasticsearch
 
+# Deep JavaScript analysis & endpoint extraction
+python main.py -m js-paths --url https://example.com
+python main.py -m js-paths --ds-file subs.txt -c 30 --js-timeout 15
+
 # Add custom ports to scan
 python main.py targets.txt -p 8080,8443,9999
 
@@ -198,9 +204,11 @@ python main.py targets.txt [OPTIONS]
 Options:
   targets_file            File with IPs/hosts/CIDRs (omit when using -m recon or --sub-domains)
   -c, --concurrency INT   Set concurrency level (default: 100, max: 2000)
-  -m, --module SERVICE    Scan only elasticsearch|kibana|grafana|prometheus|nextjs|domain-scan|recon
+  -m, --module SERVICE    Scan only elasticsearch|kibana|grafana|prometheus|nextjs|domain-scan|recon|js-paths
   -p, --ports PORTS       Extra comma-separated ports to scan
-  --sub-domains FILE      Provide newline-separated subdomains to probe (standalone, or feeds domain-scan)
+  --url URL               Single target URL for use with -m js-paths
+  --js-timeout SECONDS    HTTP request timeout for js-paths module
+  --sub-domains FILE      Provide newline-separated subdomains to probe (standalone, or feeds domain-scan/js-paths)
   --recon-domain DOMAIN   Domain(s) to run passive recon/fuzzing against (used with -m recon)
   --wordlist PATH         Wordlist for ffuf VHost fuzzing during recon
   --scan-found            Immediately probe recon results (httpx→dirsearch→nuclei)
