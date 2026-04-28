@@ -583,6 +583,7 @@ async def main(
         findings      = result.get("findings", [])
         paths         = result.get("paths", [])
         hosts         = result.get("hosts", [])
+        absolute_urls = result.get("absolute_urls", [])
         js_urls       = result.get("js_urls", [])
         probe_results = result.get("probe_results", [])
 
@@ -597,6 +598,8 @@ async def main(
             _write_lines(f"extracted_paths_{timestamp}.txt", paths)
         if hosts:
             _write_lines(f"discovered_hosts_{timestamp}.txt", hosts)
+        if absolute_urls:
+            _write_lines(f"extracted_urls_{timestamp}.txt", absolute_urls)
         if js_urls:
             _write_lines(f"js_files_{timestamp}.txt", js_urls)
 

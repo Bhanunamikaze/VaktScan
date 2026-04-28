@@ -69,7 +69,8 @@ class JSRecon:
     EXCLUDED_DOMAINS = [
         "cloudflare.com", "github.com", "apple.com", "google.com",
         "adobe.ly", "trustpilot.com", "w3.org", "twitter.com",
-        "instagram.com", "facebook.com","bit.ly","angular.dev","jquery.com","adobedtm.com"
+        "instagram.com", "facebook.com","bit.ly","angular.dev","jquery.com","adobedtm.com",
+        "appleid.cdn-apple.com","pinterest.com", "cira.ca"
     ]
 
     # Hardcoded-secret patterns
@@ -134,12 +135,13 @@ class JSRecon:
         self.js_urls       = set()
         self.paths         = set()
         self.hosts         = set()
+        self.absolute_urls = set()
         self.findings      = []   # VaktScan vuln dicts
         self.probe_results = []   # every interesting probe hit
 
         # ── Full URL pattern (captures scheme://host:port/path) ──
         self.url_pattern = re.compile(
-            r'(https?://[a-zA-Z0-9.\-]+(?::\d+)?(?:/[a-zA-Z0-9_./:@!$&\'()*+,;=\-~%]*)?)'
+            r'''(https?://[^\s"'`<>\\]+)'''
         )
 
         # ── Multi-strategy path extraction patterns ──
@@ -148,6 +150,7 @@ class JSRecon:
 
         # Junk suffixes/fragments to strip after extraction
         self._junk_trail = re.compile(r'["\'\s;,\)\}\]\\]+$')
+        self._url_junk_trail = re.compile(r'["\'\s;,\)\]\\]+$')
 
         # Minimum path quality filter
         self._static_ext = {
@@ -161,6 +164,9 @@ class JSRecon:
         return [
             # 1. Classic quoted paths: "/api/v1/users"
             (re.compile(r'''["'](/[a-zA-Z0-9_.\-][a-zA-Z0-9_./:@!$&()*+,;=\-~%?#]*)["']'''), 0),
+
+            # 1b. Root paths with query strings: "/?checkout=true"
+            (re.compile(r'''["'](/\?[^"'`\s]{1,})["']'''), 0),
 
             # 2. fetch / axios / http.get / http.post / $.ajax calls
             (re.compile(
@@ -237,15 +243,19 @@ class JSRecon:
     def _extract_hosts_and_paths_from_urls(self, content: str) -> None:
         """Pull full URLs, split into hosts + path components."""
         for url in self.url_pattern.findall(content):
+            url = self._url_junk_trail.sub('', url)
+            self.absolute_urls.add(url)
             parsed    = urlparse(url)
             base_host = f"{parsed.scheme}://{parsed.netloc}"
-            if self._is_allowed(base_host):
+            has_template_host = '${' in parsed.netloc or '{' in parsed.netloc or '}' in parsed.netloc
+            if parsed.netloc and not has_template_host and self._is_allowed(base_host):
                 self.hosts.add(base_host)
             if parsed.path and parsed.path != '/':
-                self.paths.add(parsed.path)
+                normalized_path = re.sub(r'\$\{[^}]*\}', '*', parsed.path)
+                self.paths.add(normalized_path)
             # Also add the full URL path with query for probing
-            if parsed.query:
-                self.paths.add(f"{parsed.path}?{parsed.query}")
+            if parsed.query and '${' not in parsed.query and '{' not in parsed.query and '}' not in parsed.query:
+                self.paths.add(f"{normalized_path}?{parsed.query}")
 
     # ------------------------------------------------------------------
     # Allowlist helper
@@ -420,6 +430,9 @@ class JSRecon:
 
             print(f"{Colors.GREEN}[Probe] {status} | {server[:15]:<15} | {url}{Colors.RESET}")
 
+            if 400 <= status < 600:
+                return
+
             # --- Sensitive path detection ---
             for kw, (label, base_sev) in self.SENSITIVE_PATH_KEYWORDS.items():
                 if kw in path.lower():
@@ -512,6 +525,7 @@ class JSRecon:
             "findings":      self.findings,
             "paths":         sorted(self.paths),
             "hosts":         sorted(self.hosts),
+            "absolute_urls": sorted(self.absolute_urls),
             "js_urls":       sorted(self.js_urls),
             "probe_results": self.probe_results,
         }
@@ -530,7 +544,8 @@ class JSPathsScanner:
     async def run(self) -> dict:
         """
         Run JSRecon in a thread pool.
-        Returns dict with keys: findings, paths, hosts, js_urls, probe_results.
+        Returns dict with keys: findings, paths, hosts, absolute_urls, js_urls,
+        probe_results.
         """
         loop = asyncio.get_running_loop()
         with ThreadPoolExecutor(max_workers=1) as pool:
