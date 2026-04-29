@@ -39,6 +39,7 @@ from modules import (
     waybackurls_runner,
     domain_scan,
     js_paths,
+    aem,
 )
 
 # Map service names to their corresponding modules
@@ -48,6 +49,7 @@ SERVICE_TO_MODULE = {
     "grafana": grafana,
     "prometheus": prometheus,
     "nextjs": react_to_shell,
+    "aem": aem,
 }
 
 
@@ -1042,14 +1044,14 @@ async def main(
                 for service, service_ports_list in service_ports.items():
                     if port in service_ports_list:
                         scanner_func = SERVICE_TO_MODULE[service].run_scans
-                        validation_tasks.append(validate_service(service, scan_address, port))
+                        validation_tasks.append(validate_service(service, target_obj, port))
                         service_mapping.append((service, target_obj, port, scanner_func))
 
                 if custom_ports and port not in [p for ports in service_ports.values() for p in ports]:
                     for service_name in SERVICE_TO_MODULE.keys():
                         if module_filter is None or service_name == module_filter:
                             scanner_func = SERVICE_TO_MODULE[service_name].run_scans
-                            validation_tasks.append(validate_service(service_name, scan_address, port))
+                            validation_tasks.append(validate_service(service_name, target_obj, port))
                             service_mapping.append((service_name, target_obj, port, scanner_func))
         
         if not validation_tasks:
@@ -1223,13 +1225,13 @@ async def process_chunk_services(open_ports_results, service_ports, module_filte
             for service, service_ports_list in service_ports.items():
                 if port in service_ports_list:
                     scanner_func = SERVICE_TO_MODULE[service].run_scans
-                    validation_tasks.append(validate_service(service, scan_address, port))
+                    validation_tasks.append(validate_service(service, target_obj, port))
                     service_mapping.append((service, target_obj, port, scanner_func))
             if custom_ports and port not in [p for ports in service_ports.values() for p in ports]:
                 for service_name in SERVICE_TO_MODULE.keys():
                     if module_filter is None or service_name == module_filter:
                         scanner_func = SERVICE_TO_MODULE[service_name].run_scans
-                        validation_tasks.append(validate_service(service_name, scan_address, port))
+                        validation_tasks.append(validate_service(service_name, target_obj, port))
                         service_mapping.append((service_name, target_obj, port, scanner_func))
 
     chunk_vulnerabilities = []
@@ -1311,7 +1313,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-m", "--module",
         choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs",
-                 "domain-scan", "recon", "js-paths"],
+                 "domain-scan", "recon", "js-paths", "aem"],
         help=(
             "Scan/run the specified module. "
             "Use 'recon' for subdomain enumeration, "

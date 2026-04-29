@@ -6,6 +6,37 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
 
 import httpx
+from urllib.parse import urlparse
+
+
+def _is_full_url(value):
+    return isinstance(value, str) and (value.startswith("http://") or value.startswith("https://"))
+
+
+def _extract_scan_address(target_or_scan_address):
+    if isinstance(target_or_scan_address, dict):
+        return target_or_scan_address.get("scan_address", "")
+    return target_or_scan_address
+
+
+def _extract_aem_validation_context(target_or_scan_address, port):
+    if isinstance(target_or_scan_address, dict):
+        scan_address = target_or_scan_address.get("scan_address", "")
+        display_target = target_or_scan_address.get("display_target", scan_address)
+    else:
+        scan_address = target_or_scan_address
+        display_target = scan_address
+
+    full_url = None
+    for candidate in [display_target, scan_address]:
+        if _is_full_url(candidate):
+            full_url = candidate
+            break
+
+    parsed = urlparse(full_url) if full_url else None
+    origin_url = f"{parsed.scheme}://{parsed.netloc}" if parsed and parsed.netloc else None
+    path = (parsed.path or "").rstrip("/") if parsed and parsed.netloc else ""
+    return scan_address, origin_url, full_url, path
 
 async def validate_elasticsearch(scan_address, port, timeout=5):
     """
@@ -186,7 +217,132 @@ async def validate_nextjs(scan_address, port, timeout=5):
             continue
     return False
 
-async def validate_service(service, scan_address, port):
+async def validate_aem(target_or_scan_address, port, timeout=5):
+    """
+    Validates if Adobe Experience Manager (AEM) is running on the given address:port.
+    Checks both HTTP and HTTPS. Looks for AEM-specific login pages, CRXDE, and content indicators.
+    Returns True if AEM is detected, False otherwise.
+    """
+    scan_address, supplied_origin, supplied_url, supplied_path = _extract_aem_validation_context(target_or_scan_address, port)
+    protocols = ['https', 'http']
+    aem_indicators = [
+        'granite', 'adobe experience manager', 'cq5', 'cq.shared',
+        'crx', 'sling', 'j_security_check', 'coral-shell', 'crxde',
+    ]
+    jcr_keys = ["jcr:primarytype", "jcr:mixintypes", "sling:resourcetype", "cq:tags", "dam:"]
+
+    candidate_bases = []
+    if supplied_origin:
+        candidate_bases.append(supplied_origin.rstrip('/'))
+    for protocol in protocols:
+        candidate = f"{protocol}://{scan_address}:{port}"
+        if candidate not in candidate_bases:
+            candidate_bases.append(candidate)
+
+    def path_probes():
+        if not supplied_origin or not supplied_path or supplied_path == "/":
+            return []
+        parts = [part for part in supplied_path.strip("/").split("/") if part]
+        prefixes = []
+        for length in [len(parts), len(parts) - 1, 2, 1]:
+            if length <= 0 or length > len(parts):
+                continue
+            prefix = "/" + "/".join(parts[:length])
+            if prefix not in prefixes:
+                prefixes.append(prefix)
+        probes = [supplied_url]
+        for prefix in prefixes:
+            if prefix.endswith(".json"):
+                candidates = [prefix]
+            else:
+                candidates = [prefix, f"{prefix}.json", f"{prefix}.1.json", f"{prefix}.infinity.json"]
+            for candidate in candidates:
+                url = f"{supplied_origin}{candidate}"
+                if url not in probes:
+                    probes.append(url)
+        return probes
+
+    extra_path_probes = path_probes()
+
+    for base_url in candidate_bases:
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+                # Try AEM Touch UI login page
+                r = await client.get(f"{base_url}/libs/granite/core/content/login.html")
+                if r.status_code == 200:
+                    if any(ind in r.text.lower() for ind in aem_indicators):
+                        return True
+
+                # Try authoring surfaces often exposed on author nodes
+                for author_path in ["/aem/start.html", "/sites.html", "/assets.html"]:
+                    try:
+                        ra = await client.get(f"{base_url}{author_path}")
+                        if ra.status_code == 200 and any(ind in ra.text.lower() for ind in ['aem', 'sites', 'assets', 'granite', 'crx']):
+                            return True
+                    except Exception:
+                        pass
+
+                # Try AEM Classic login page
+                r = await client.get(f"{base_url}/libs/cq/core/content/login.html")
+                if r.status_code in [200, 302] and any(ind in r.text.lower() for ind in aem_indicators):
+                    return True
+
+                # CRXDE accessible (strong AEM indicator even if 401/403)
+                r = await client.get(f"{base_url}/crx/de/index.jsp")
+                if r.status_code == 200 and any(ind in r.text.lower() for ind in ['crxde', 'repository', 'jcr']):
+                    return True
+
+                # Check root page for AEM-specific content
+                r = await client.get(f"{base_url}/")
+                if any(ind in r.text.lower() for ind in aem_indicators):
+                    return True
+                if any(marker in r.headers.get(hdr, '').lower() for hdr in ['Server', 'X-Powered-By', 'X-Generator'] for marker in ['aem', 'adobe experience manager', 'apache sling', 'crx']):
+                    return True
+
+                # Product info endpoint is a very strong signal
+                try:
+                    rp = await client.get(f"{base_url}/system/console/status-productinfo.json")
+                    if rp.status_code == 200 and 'adobe experience manager' in rp.text.lower():
+                        return True
+                except Exception:
+                    pass
+
+                # Fingerprint via Sling GET servlet JCR JSON response
+                # Even headless/BFF-fronted AEM leaks jcr:* keys in .json endpoints
+                for jcr_path in [
+                    "/content.json",
+                    "/content.1.json",
+                    "/content/dam.json",
+                    "/conf.json",
+                    "/content/cq:graphql/global/endpoint.json",
+                ]:
+                    try:
+                        rj = await client.get(f"{base_url}{jcr_path}", timeout=3)
+                        if rj.status_code == 200:
+                            body = rj.text.lower()
+                            if any(k in body for k in jcr_keys + ['graphql', 'endpoint']):
+                                return True
+                    except Exception:
+                        pass
+
+                for probe_url in extra_path_probes:
+                    try:
+                        rp = await client.get(probe_url, timeout=3)
+                        if rp.status_code != 200:
+                            continue
+                        body = rp.text.lower()
+                        content_type = rp.headers.get("content-type", "").lower()
+                        if any(k in body for k in jcr_keys) and ("json" in content_type or body.startswith("{")):
+                            return True
+                        if any(ind in body for ind in aem_indicators):
+                            return True
+                    except Exception:
+                        pass
+        except Exception:
+            continue
+    return False
+
+async def validate_service(service, target_or_scan_address, port):
     """
     Validates if a specific service is running on the given address:port.
     Returns True if the service is detected, False otherwise.
@@ -196,10 +352,13 @@ async def validate_service(service, scan_address, port):
         'kibana': validate_kibana,
         'grafana': validate_grafana,
         'prometheus': validate_prometheus,
-        'nextjs': validate_nextjs
+        'nextjs': validate_nextjs,
+        'aem': validate_aem,
     }
     
     validator = validators.get(service)
     if validator:
-        return await validator(scan_address, port)
+        if service == 'aem':
+            return await validator(target_or_scan_address, port)
+        return await validator(_extract_scan_address(target_or_scan_address), port)
     return False
