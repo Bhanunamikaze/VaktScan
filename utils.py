@@ -303,39 +303,53 @@ async def process_targets_streaming(raw_targets, chunk_size=30000):
             hostname_targets.append(target)
 
     if hostname_targets:
-        print(f"[*] Resolving {len(hostname_targets)} hostnames...")
-        resolution_tasks = [resolve_hostname(h) for h in hostname_targets]
+        import urllib.parse
+        print(f"[*] Resolving {len(hostname_targets)} hostnames/URLs...")
+        
+        actual_hostnames = []
+        for h in hostname_targets:
+            if h.startswith(('http://', 'https://')):
+                parsed = urllib.parse.urlparse(h)
+                actual_hostnames.append(parsed.hostname or h)
+            else:
+                actual_hostnames.append(h)
+
+        resolution_tasks = [resolve_hostname(h) for h in actual_hostnames]
         resolved_results = await asyncio.gather(*resolution_tasks)
 
         unresolved_count = 0
-        for hostname, resolved_ip in zip(hostname_targets, resolved_results):
-            if resolved_ip and resolved_ip not in processed_ips:
-                # Add target object for the hostname
-                current_chunk.append({
-                    "scan_address": hostname,
-                    "display_target": hostname,
-                    "resolved_ip": resolved_ip
-                })
-                total_processed += 1
+        for original_target, actual_host, resolved_ip in zip(hostname_targets, actual_hostnames, resolved_results):
+            if resolved_ip:
+                is_url = original_target.startswith(('http://', 'https://'))
+                
+                if is_url or resolved_ip not in processed_ips:
+                    # Add target object for the original target (hostname or URL)
+                    current_chunk.append({
+                        "scan_address": original_target,
+                        "display_target": original_target,
+                        "resolved_ip": resolved_ip
+                    })
+                    total_processed += 1
 
-                # Add target object for the resolved IP
-                current_chunk.append({
-                    "scan_address": resolved_ip,
-                    "display_target": hostname,
-                    "resolved_ip": resolved_ip
-                })
-                processed_ips.add(resolved_ip)
-                total_processed += 1
+                    # Add target object for the resolved IP (only if not a URL)
+                    if not is_url:
+                        current_chunk.append({
+                            "scan_address": resolved_ip,
+                            "display_target": original_target,
+                            "resolved_ip": resolved_ip
+                        })
+                    
+                    processed_ips.add(resolved_ip)
 
-                if len(current_chunk) >= chunk_size:
-                    yield current_chunk
-                    current_chunk = []
+                    if len(current_chunk) >= chunk_size:
+                        yield current_chunk
+                        current_chunk = []
             elif not resolved_ip:
                 unresolved_count += 1
-                # print(f"[!] Could not resolve hostname: {hostname}")
+                # print(f"[!] Could not resolve hostname: {actual_host}")
         
         if unresolved_count > 0:
-            print(f"[!] Could not resolve {unresolved_count} hostnames.")
+            print(f"[!] Could not resolve {unresolved_count} hostnames/URLs.")
 
     if current_chunk:
         yield current_chunk

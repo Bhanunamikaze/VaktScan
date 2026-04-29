@@ -1080,7 +1080,10 @@ async def main(
 
             for is_valid, (service, target_obj, port, scanner_func) in zip(validation_results, service_mapping):
                 if isinstance(is_valid, bool) and is_valid:
-                    print(f"  -> Running {service.capitalize()} scans on http://{target_obj['scan_address']}:{port}")
+                    display_url = target_obj['scan_address']
+                    if not display_url.startswith(('http://', 'https://')):
+                        display_url = f"http://{display_url}:{port}"
+                    print(f"  -> Running {service.capitalize()} scans on {display_url}")
                     state_manager.add_validated_service(target_obj['resolved_ip'], port, service)
                     scan_tasks.append(scan_with_state_saving(scanner_func, target_obj, port))
                     validated_services += 1
