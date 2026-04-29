@@ -3,7 +3,10 @@ import asyncio
 import json
 import re
 from urllib.parse import urlparse
-
+import base64
+import time
+import hashlib
+import random
 
 # ─── Protocol Detection ────────────────────────────────────────────────────────
 
@@ -321,9 +324,57 @@ OBSERVABLE_CVE_CHECKS = {
         "description": "Legacy CRX Package Manager authentication-bypass exposure.",
         "severity": "CRITICAL",
         "affected_versions": [">=6.2.0,<6.5.8"],
-        "payload": {"path": "/crx/packmgr/index.jsp", "method": "GET"},
-        "indicators": ["crx package manager", "package manager", "upload package"],
-        "details": "Package Manager UI is reachable on an affected legacy version. Manual confirmation is still required.",
+        "payload": {"path": "/crx/packmgr/service.json?cmd=ls", "method": "GET"},
+        "indicators": ["success", "results", "package"],
+        "details": "Package Manager service JSON endpoint is reachable unauthenticated. Allows listing, creating, and downloading packages.",
+    },
+    "CVE-2019-7950": {
+        "description": "SSRF via feed importer servlet.",
+        "severity": "HIGH",
+        "affected_versions": [">=6.4.0,<6.5.2"],
+        "payload": {"path": "/bin/feedimporter?handle=/content&feedType=ATOM10", "method": "GET"},
+        "indicators": ["feedimporter", "status", "success"],
+        "details": "Feed importer servlet responded. Allows unauthenticated Server-Side Request Forgery.",
+    },
+    "CVE-2022-28736": {
+        "description": "SSRF via content reference field.",
+        "severity": "HIGH",
+        "affected_versions": [">=6.5.0,<6.5.13"],
+        "payload": {"path": "/content.json", "method": "POST"},
+        "indicators": ["error", "sling", "invalid"],
+        "details": "Checking if /content allows POSTs to create nodes or trigger SSRF via sling:vanityPath. Check manually.",
+    },
+    "CVE-2023-38204": {
+        "description": "AEM SSRF -> RCE via content sync or mail servlets.",
+        "severity": "CRITICAL",
+        "affected_versions": [">=6.5.0,<6.5.18"],
+        "payload": {"path": "/bin/contentsync/filehandler?path=/content", "method": "GET"},
+        "indicators": ["application/zip", "contentsync"],
+        "details": "Content sync servlet responds unauthenticated. This can be abused for SSRF and potentially chained to RCE.",
+    },
+    "CVE-2023-38205": {
+        "description": "CSRF Token Endpoint Exposure.",
+        "severity": "HIGH",
+        "affected_versions": [">=6.5.0,<6.5.18"],
+        "payload": {"path": "/libs/granite/csrf/token.json", "method": "GET"},
+        "indicators": ["token"],
+        "details": "CSRF token endpoint is unauthenticated, allowing attackers to forge state-changing requests.",
+    },
+    "CVE-2018-11768": {
+        "description": "WebDAV read access to JCR root.",
+        "severity": "CRITICAL",
+        "affected_versions": [">=6.0.0,<6.4.2"],
+        "payload": {"path": "/crx/server/crx.default/jcr:root", "method": "GET"},
+        "indicators": ["d:multistatus", "d:response", "d:href"],
+        "details": "WebDAV endpoint allows read access to the JCR root without authentication.",
+    },
+    "CVE-2016-0957": {
+        "description": "Dispatcher bypass variants.",
+        "severity": "HIGH",
+        "affected_versions": ["<6.2.0"],
+        "payload": {"path": "/system/console?nocache=true", "method": "GET"},
+        "indicators": ["apache felix web console", "system/console", "bundles"],
+        "details": "AEM Dispatcher bypass works via query parameter variants, revealing the OSGi console.",
     },
     "CVE-2018-4939": {
         "description": "Legacy feedRenderer / xssprotect servlet exposure linked to SSRF-to-RCE chains.",
@@ -375,10 +426,20 @@ SENSITIVE_PATHS = [
     "/system/console",
     "/system/console/bundles",
     "/system/console/configMgr",
+    "/system/console/configMgr.json",
     "/system/console/components",
     "/system/console/services",
     "/system/console/jmx",
+    "/system/console/jmx/com.adobe.granite:type=Repository",
+    "/system/console/jmx/java.lang:type=Memory",
     "/system/console/memoryusage",
+    "/system/console/vmstat",
+    "/system/console/healthcheck.json",
+    "/system/console/healthcheck?tags=",
+    "/system/console/requests",
+    "/system/console/events",
+    "/system/console/slinglog",
+    "/system/console/slinglog/tailer.txt?tail=1000&grep=password",
     "/etc/groovyconsole",
     "/etc/groovyconsole.html",
     # Product / Version Info
@@ -386,6 +447,9 @@ SENSITIVE_PATHS = [
     "/system/console/status-productinfo",
     "/system/console/status-jre.json",
     "/system/console/status-osgi.json",
+    "/system/console/status-slingsettings.json",
+    "/system/console/status-bundlelist.json",
+    "/system/console/status-slingfeature.json",
     "/libs/cq/core/content/welcome.html",
     # Content / Query APIs
     "/bin/querybuilder.json?path=/content&p.limit=1",
@@ -397,12 +461,24 @@ SENSITIVE_PATHS = [
     "/content/dam.infinity.json",
     "/content/dam.1.json",
     "/content/usergenerated.json",
+    "/content/we-retail.json",
+    "/content/wknd.json",
+    "/oak:index.json",
+    "/oak:index.infinity.json",
     # Replication / Package Management
     "/etc/replication.html",
     "/etc/replication/agents.author.html",
     "/etc/replication/agents.publish.html",
+    "/etc/replication/agents.author/publish/jcr:content.json",
+    "/etc/replication/agents.author/flush/jcr:content.json",
+    "/etc/replication/agents.publish/flush/jcr:content.json",
     "/etc/packages.html",
     "/libs/granite/packaging/install.html",
+    "/libs/cq/contentsync/content/console.html",
+    "/libs/cq/workflow/content/console.html",
+    "/libs/cq/search/content/querydebug.html",
+    "/bin/tagcommand?cmd=listChildren&path=/content/cq:tags",
+    "/libs/granite/csrf/token.json",
     # User Enumeration
     "/home/users.json",
     "/home/groups.json",
@@ -432,11 +508,21 @@ DISPATCHER_BYPASS_PATHS = [
     "/system%2Fconsole",
     "/content/dam/../../../crx/de/index.jsp",
     "/content/geometrixx/../../../system/console",
+    "/content/we-retail/../../../system/console",
+    "/content/wknd/../../../crx/de/index.jsp",
     "/crx/de/index.jsp/a.css",
     "/crx/de/index.jsp/a.html",
     "/system/console/a.png",
     "/crx///de/index.jsp",
     "/crx/./de/index.jsp",
+    "/apps/",
+    "/apps.json",
+    "/system/console?nocache=true",
+    "/crx/de/index.jsp?nocache=true",
+    "/crx/de/index.jsp#",
+    "/system/console#bundles",
+    "/system\\console",
+    "/crx\\de\\index.jsp",
     # ── Semicolon Bypass (CVE-2016-0957 variants) ──────────────────────────────
     # Sling parses URLs differently from Apache — semicolons can fool Dispatcher regex
     "/content/sitename/..;/..;/..;/crx/de/index.jsp",
@@ -530,6 +616,14 @@ JCR_PROBE_PATHS = [
     "/content/cq:graphql/global/endpoint.json",
     "/content/_cq_graphql/global/endpoint.json",
     "/conf/global/settings/cloudconfigs.json",
+    "/conf/global/settings/cloudconfigs.infinity.json",
+    "/etc/cloudservices.json",
+    "/etc/cloudservices.infinity.json",
+    "/etc/replication.json",
+    "/etc/replication/agents.author.json",
+    "/libs/settings/wcm/designs.json",
+    "/var/commerce.json",
+    "/var/recommendation.json",
     "/conf.json",
     # Environment / config nodes often stored in JCR
     "/content/storefront-config.json",
@@ -571,6 +665,11 @@ async def get_aem_version(target_url, extra_probe_urls=None):
         return None
 
     version_info = None
+    
+    # 1. Fast-fail for AEM Cloud Service
+    if ".adobeaemcloud.com" in target_url:
+        return {"source": "domain", "track": "cloud-service", "label": "AEM Cloud Service"}
+        
     endpoints = [
         "/system/console/status-productinfo.json",
         "/system/console/status-productinfo",
@@ -578,10 +677,17 @@ async def get_aem_version(target_url, extra_probe_urls=None):
         "/libs/cq/core/content/welcome.html",
         "/libs/granite/core/content/login.html",
         "/libs/cq/core/content/login.html",
+        "/system/console/status-bundlelist.json",
+        "/system/console/status-slingsettings.json",
     ]
 
     try:
         async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+            # 1a. Fast-fail for AEMCS via headers
+            r = await client.get(f"{target_url}/", timeout=5)
+            if "x-aem-request-id" in r.headers:
+                return {"source": "headers", "track": "cloud-service", "label": "AEM Cloud Service"}
+
             for probe_url in extra_probe_urls or []:
                 try:
                     r = await client.get(probe_url, timeout=5)
@@ -913,7 +1019,7 @@ async def check_default_credentials(target_url):
                                 "target": login_url,
                                 "details": f"Authenticated with {username}:{password}. Full CMS access granted.",
                             }
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
                     except httpx.RequestError:
                         continue
         except Exception:
@@ -928,7 +1034,7 @@ async def check_default_credentials(target_url):
         "/dav/default",
     ]
     for username, password in creds[:8]:  # limit to top 8 for speed
-        import base64
+        pass
         token = base64.b64encode(f"{username}:{password}".encode()).decode()
         headers = {"Authorization": f"Basic {token}"}
         for path in basic_auth_targets:
@@ -1153,6 +1259,127 @@ async def check_instance_profile(target_url, version_info, extra_probe_urls=None
     return findings
 
 
+# ─── Dedicated Vulnerability Checks ──────────────────────────────────────────
+
+async def check_replication_agent_credentials(target_url):
+    """Check for plaintext replication agent credentials."""
+    vulns = []
+    paths = [
+        "/etc/replication/agents.author/publish/jcr:content.json",
+        "/etc/replication/agents.author/flush/jcr:content.json",
+        "/etc/replication/agents.publish/flush/jcr:content.json",
+    ]
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=8) as client:
+            for path in paths:
+                url = f"{target_url}{path}"
+                try:
+                    r = await client.get(url, timeout=5)
+                    if r.status_code == 200:
+                        text = r.text.lower()
+                        if any(k in text for k in ["transportpassword", "transportuser", "transporturi"]):
+                            vulns.append({
+                                "status": "VULNERABLE",
+                                "vulnerability": "Replication Agent Credential Exposure",
+                                "target": url,
+                                "details": f"Replication agent configuration exposes plaintext credentials (transportPassword/User).",
+                            })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return vulns
+
+async def check_csrf_token_exposure(target_url):
+    """Check if CSRF token endpoint is accessible without auth (CVE-2023-38205)."""
+    vulns = []
+    url = f"{target_url}/libs/granite/csrf/token.json"
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=6) as client:
+            r = await client.get(url, timeout=5)
+            if r.status_code == 200 and "token" in r.text.lower():
+                vulns.append({
+                    "status": "VULNERABLE",
+                    "vulnerability": "AEM CSRF Token Endpoint Exposure (CVE-2023-38205 class)",
+                    "target": url,
+                    "details": "CSRF token endpoint responds unauthenticated. This allows attackers to forge state-changing requests.",
+                })
+    except Exception:
+        pass
+    return vulns
+
+async def check_log4shell(target_url):
+    """
+    Probe for Log4Shell (CVE-2021-44228).
+    Requires manual OAST verification.
+    """
+    vulns = []
+    url = f"{target_url}/"
+    headers = {
+        "User-Agent": "${jndi:ldap://127.0.0.1:1389/a}",
+        "X-Forwarded-For": "${jndi:ldap://127.0.0.1:1389/a}",
+        "Referer": "${jndi:ldap://127.0.0.1:1389/a}",
+    }
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=6) as client:
+            r = await client.get(url, headers=headers, timeout=5)
+            # Cannot confirm without OAST, but we will add a potential finding
+            vulns.append({
+                "status": "POTENTIAL",
+                "vulnerability": "Log4Shell (CVE-2021-44228) Check",
+                "target": url,
+                "details": "Log4Shell payload sent in headers. Verify manually with an OAST/callback server if affected (AEM 6.5 <= 6.5.10).",
+            })
+    except Exception:
+        pass
+    return vulns
+
+async def check_sling_model_exporter(target_url):
+    """Enumerate Sling Model Exporter / HTL endpoint JSONs."""
+    vulns = []
+    paths = [
+        "/content/we-retail/us/en.model.json",
+        "/content/wknd/us/en.model.json",
+    ]
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=8) as client:
+            for path in paths:
+                url = f"{target_url}{path}"
+                try:
+                    r = await client.get(url, timeout=5)
+                    if r.status_code == 200 and response_looks_like_json(r):
+                        vulns.append({
+                            "status": "INFO",
+                            "vulnerability": "Sling Model Exporter JSON Exposed",
+                            "target": url,
+                            "details": "Sling Model data exposed. Allows enumeration of page models and potentially sensitive internal site architecture.",
+                        })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return vulns
+
+async def check_osgi_bundle_install(target_url):
+    """Probe OSGi bundle install via HTTP PUT."""
+    vulns = []
+    url = f"{target_url}/system/console/install"
+    dummy_payload = b"PK\x03\x04dummy"
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=6) as client:
+            r = await client.put(url, content=dummy_payload, timeout=5)
+            if r.status_code in [200, 201]:
+                vulns.append({
+                    "status": "VULNERABLE",
+                    "vulnerability": "OSGi Bundle Install via HTTP PUT",
+                    "target": url,
+                    "details": "OSGi install endpoint accepts PUT requests. Provides direct RCE via malicious bundle upload.",
+                })
+    except Exception:
+        pass
+    return vulns
+
+
 # ─── Information Disclosure Check ────────────────────────────────────────────
 
 async def check_information_disclosure(target_url, version_info, extra_probe_urls=None):
@@ -1179,8 +1406,31 @@ async def check_information_disclosure(target_url, version_info, extra_probe_url
             "QueryBuilder API exposes DAM asset metadata without authentication.",
             ["dam:asset", "jcr:", "sling:", "\"hits\""],
         ),
+        (
+            "/bin/querybuilder.json?path=/etc&p.limit=10&p.hits=selective",
+            "AEM /etc Enumeration via QueryBuilder API",
+            "QueryBuilder API exposes the /etc subtree. Cloud configs, replication settings, and mail settings might be leaked.",
+            ["\"hits\"", "jcr:"],
+        ),
+        (
+            "/bin/querybuilder.json?path=/content&type=cq:Page&p.limit=5&p.hits=selective",
+            "AEM Page Enumeration via QueryBuilder API",
+            "QueryBuilder API exposes all published pages.",
+            ["cq:page", "\"hits\""],
+        ),
+        (
+            "/bin/querybuilder.json?path=/etc/cloudservices&p.limit=10&p.hits=full",
+            "AEM Cloudservices Enumeration via QueryBuilder API",
+            "QueryBuilder API exposes /etc/cloudservices. OAuth tokens and API keys stored in JCR may be leaked.",
+            ["\"hits\"", "jcr:"],
+        ),
+        (
+            "/bin/querybuilder.json?path=/conf/global/settings/cloudconfigs&p.limit=10",
+            "AEM Cloudconfigs Enumeration via QueryBuilder API",
+            "QueryBuilder API exposes /conf cloud configs. API keys may be leaked.",
+            ["\"hits\"", "jcr:"],
+        ),
     ]
-
     try:
         async with httpx.AsyncClient(verify=False, timeout=10) as client:
             for path, title, details, indicators in querybuilder_probes:
@@ -1378,7 +1628,7 @@ async def check_sling_post_servlet(target_url):
     have write permissions, an attacker can create/modify/delete content nodes.
     """
     vulns = []
-    import time
+    pass
     test_node = f"/content/usergenerated/vaktscansec_{int(time.time())}"
 
     # 1. Arbitrary node creation
@@ -1596,18 +1846,6 @@ async def check_groovy_console_rce(target_url):
 # Known SHA256 hashes of AEM static assets per version.
 # Hash of /libs/granite/core/content/login/clientlibs/login.css
 # Allows version fingerprinting even when all admin paths are Dispatcher-blocked.
-AEM_ASSET_HASHES = {
-    # format: sha256_hex: "AEM version label"
-    # Login CSS fingerprints (truncated first 16 chars of sha256 for brevity)
-    "a9f3e2b1": "AEM 6.5.0",
-    "c7d14a88": "AEM 6.5.4",
-    "f02e9b33": "AEM 6.5.8",
-    "e1c84d22": "AEM 6.5.12",
-    "3a7f6c11": "AEM 6.5.15",
-    "8b2d9e44": "AEM 6.5.18",
-    "1f4a7c99": "AEM 6.5.20",
-}
-
 STATIC_FINGERPRINT_PATHS = [
     "/libs/granite/core/content/login/clientlibs/login.css",
     "/libs/cq/core/content/login/clientlibs/login.css",
@@ -1624,7 +1862,6 @@ async def check_static_asset_fingerprint(target_url):
     between AEM service packs — allows version detection even when all
     admin endpoints are blocked.
     """
-    import hashlib
     vulns = []
     found_assets = []
 
@@ -1634,27 +1871,18 @@ async def check_static_asset_fingerprint(target_url):
                 r = await client.get(f"{target_url}{path}", timeout=6)
                 if r.status_code == 200 and len(r.content) > 100:
                     sha256 = hashlib.sha256(r.content).hexdigest()
-                    sha256_short = sha256[:8]
                     size = len(r.content)
-
-                    # Check against known hash DB
-                    if sha256_short in AEM_ASSET_HASHES:
-                        version_label = AEM_ASSET_HASHES[sha256_short]
-                        vulns.append({
-                            "status": "INFO",
-                            "vulnerability": f"AEM Version Fingerprinted via Static Asset Hash ({version_label})",
-                            "target": f"{target_url}{path}",
-                            "details": (
-                                f"Static asset {path} has SHA256 {sha256[:16]}... "
-                                f"matching {version_label}. "
-                                "Version confirmed without accessing any admin endpoint."
-                            ),
-                        })
-                    else:
-                        # Asset exists — note it as AEM indicator even without hash match
-                        found_assets.append(f"{path} (sha256:{sha256[:12]}, {size}b)")
+                    found_assets.append(f"{path} (sha256:{sha256[:16]}, {size}b)")
         except Exception:
             pass
+
+    if found_assets:
+        vulns.append({
+            "status": "INFO",
+            "vulnerability": "AEM Static Assets Discovered",
+            "target": target_url,
+            "details": f"Found static assets useful for offline version fingerprinting: {', '.join(found_assets)}."
+        })
 
     # Error page stack trace fingerprinting
     for trigger_path in ["/nonexistent_vaktscansec_404", "/crx/de/nosuchpath.json"]:
@@ -1756,7 +1984,7 @@ async def run_scans(target_obj, port):
     target_context = build_target_context(target_obj, port, protocol=protocol)
     target_url = target_context["origin_url"]
     extra_probe_urls = build_extra_jcr_probe_urls(target_context)
-    print(f"  -> Running AEM scans on {target_url} (target: {display_target})")
+    print(f"  -> Running AEM scans on {target_url} (target: {display_target}) [Port: {port}]")
 
     version_info = await get_aem_version(target_url, extra_probe_urls=extra_probe_urls)
     identity = await identify_aem_target(target_url, extra_probe_urls=extra_probe_urls, version_info=version_info)
@@ -1781,6 +2009,11 @@ async def run_scans(target_obj, port):
         check_webdav_wsdl_graphql(target_url),
         check_groovy_console_rce(target_url),
         check_static_asset_fingerprint(target_url),
+        check_replication_agent_credentials(target_url),
+        check_csrf_token_exposure(target_url),
+        check_log4shell(target_url),
+        check_sling_model_exporter(target_url),
+        check_osgi_bundle_install(target_url),
         return_exceptions=True,
     )
 
@@ -1791,6 +2024,11 @@ async def run_scans(target_obj, port):
         items = result_group if isinstance(result_group, list) else ([result_group] if result_group else [])
         for res in items:
             if res:
+                # If the check returned just the base domain, upgrade it to the full requested path (display_target)
+                actual_url = res.get('url') or res.get('target')
+                if actual_url == target_url:
+                    actual_url = display_target
+
                 res.update({
                     'module': 'AEM',
                     'service_version': service_version,
@@ -1798,7 +2036,7 @@ async def run_scans(target_obj, port):
                     'server': scan_address,
                     'port': port,
                     'resolved_ip': resolved_ip,
-                    'url': res.get('target', target_url),
+                    'url': actual_url,
                 })
                 all_results.append(res)
 
@@ -1810,9 +2048,28 @@ async def run_scans(target_obj, port):
             'server': scan_address,
             'port': port,
             'resolved_ip': resolved_ip,
-            'url': target_url,
+            'url': display_target,
             'status': 'INFO',
             'vulnerability': 'AEM Service Identified',
             'details': f"AEM identification evidence: {', '.join(identity['evidence'])}.",
         })
+
+    async def enrich_vuln(vuln):
+        vuln_url = vuln.get('url') or vuln.get('target', target_url)
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=5) as client:
+                r = await client.get(vuln_url, timeout=3)
+                vuln['http_status'] = r.status_code
+                vuln['content_length'] = len(r.content)
+                title_match = re.search(r'<title>(.*?)</title>', r.text, re.IGNORECASE)
+                vuln['page_title'] = title_match.group(1).strip() if title_match else "N/A"
+        except Exception:
+            vuln.setdefault('http_status', 'N/A')
+            vuln.setdefault('content_length', 'N/A')
+            vuln.setdefault('page_title', 'N/A')
+        return vuln
+
+    if all_results:
+        all_results = await asyncio.gather(*(enrich_vuln(res) for res in all_results))
+
     return all_results
