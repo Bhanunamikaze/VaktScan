@@ -40,6 +40,8 @@ from modules import (
     domain_scan,
     js_paths,
     aem,
+    cpanel,
+    dns_recon,
 )
 
 # Map service names to their corresponding modules
@@ -50,6 +52,7 @@ SERVICE_TO_MODULE = {
     "prometheus": prometheus,
     "nextjs": react_to_shell,
     "aem": aem,
+    "cpanel": cpanel,
 }
 
 
@@ -551,6 +554,51 @@ async def main(
     if nmap_enabled and not recon_domains:
         print(f"{Colors.RED}[!] Error: --nmap cannot be used without -m recon.{Colors.RESET}")
         sys.exit(1)
+
+    # --- DNS RECON MODE (-m dns) ---
+    if module_mode == 'dns':
+        dns_targets = []
+        if domain_scan_file:
+            dns_targets.extend(load_subdomains_file(domain_scan_file))
+        if recon_domains:
+            dns_targets.extend(expand_recon_inputs(recon_domains))
+        # Also accept a plain targets file with one domain per line.
+        if targets_file and os.path.isfile(targets_file):
+            try:
+                with open(targets_file, 'r', encoding='utf-8') as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            dns_targets.append(line)
+            except Exception:
+                pass
+        dns_targets = list(dict.fromkeys(dns_targets))
+        if not dns_targets:
+            print(
+                f"{Colors.RED}[!] -m dns requires at least one domain.\n"
+                f"    Provide via --sub-domains <file>, --recon-domain <DOMAIN ...>, "
+                f"or a targets file with one domain per line.{Colors.RESET}"
+            )
+            sys.exit(1)
+        print(f"{Colors.CYAN}[*] Starting DNS recon on {len(dns_targets)} domain(s)...{Colors.RESET}")
+        findings = await dns_recon.run_dns_recon(dns_targets, concurrency=concurrency)
+        if findings:
+            for f in findings:
+                status_color = {
+                    'CRITICAL':   Colors.RED + Colors.BOLD,
+                    'VULNERABLE': Colors.BRIGHT_RED,
+                    'POTENTIAL':  Colors.YELLOW,
+                    'INFO':       Colors.BLUE,
+                }.get(f.get('status', 'INFO'), Colors.WHITE)
+                print(f"{status_color}[{f['status']}]{Colors.RESET} {f['vulnerability']} on {Colors.UNDERLINE}{f['target']}{Colors.RESET}")
+                print(f"    {Colors.GRAY}{f['details']}{Colors.RESET}")
+            if output_csv:
+                csv_file = save_results_to_csv(findings)
+                if csv_file:
+                    print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
+        else:
+            print(f"{Colors.GREEN}[*] DNS recon completed; no findings.{Colors.RESET}")
+        return
 
     # --- JS PATHS MODE (-m js-paths) ---
     if module_mode == 'js-paths':
@@ -1317,7 +1365,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-m", "--module",
         choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs",
-                 "domain-scan", "recon", "js-paths", "aem"],
+                 "domain-scan", "recon", "js-paths", "aem", "cpanel", "dns"],
         help=(
             "Scan/run the specified module. "
             "Use 'recon' for subdomain enumeration, "

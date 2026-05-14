@@ -342,6 +342,74 @@ async def validate_aem(target_or_scan_address, port, timeout=5):
             continue
     return False
 
+async def validate_cpanel(target_or_scan_address, port, timeout=5):
+    """
+    Validates if cPanel / WHM / Webmail / cpdavd is running on the given
+    address:port. Honours full-URL inputs the same way validate_aem does.
+    Returns True if any cPanel daemon fingerprint matches, False otherwise.
+    """
+    scan_address, supplied_origin, supplied_url, supplied_path = _extract_aem_validation_context(target_or_scan_address, port)
+    protocols = ['https', 'http']
+
+    # Strong fingerprint markers that appear in cpsrvd / cpdavd responses.
+    cpanel_indicators = [
+        'cpsrvd', 'cpanel', 'webhost manager', 'whm', 'paper_lantern',
+        'jupiter', 'cpsess', 'cpanelbranding', 'cpanel_magic_revision',
+        'cpaneld', 'webmaild', 'cpdavd', 'cpanellgd',
+    ]
+    header_markers = ['cpsrvd', 'cpanel']
+
+    candidate_bases = []
+    if supplied_origin:
+        candidate_bases.append(supplied_origin.rstrip('/'))
+    for protocol in protocols:
+        candidate = f"{protocol}://{scan_address}:{port}"
+        if candidate not in candidate_bases:
+            candidate_bases.append(candidate)
+
+    paths = [
+        "/",
+        "/login/",
+        "/cgi-sys/defaultwebpage.cgi",
+        "/unprotected/redirect.html",
+        "/cpanelbranding/",
+        "/webmail/",
+        "/json-api/cpanel?cpanel_jsonapi_apiversion=2&cpanel_jsonapi_module=Branding&cpanel_jsonapi_func=spritelist",
+    ]
+
+    for base_url in candidate_bases:
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=False, follow_redirects=False) as client:
+                for path in paths:
+                    try:
+                        r = await client.get(f"{base_url}{path}")
+                    except Exception:
+                        continue
+
+                    server_hdr = r.headers.get("server", "").lower()
+                    powered_hdr = r.headers.get("x-powered-by", "").lower()
+                    if any(m in server_hdr for m in header_markers):
+                        return True
+                    if any(m in powered_hdr for m in header_markers):
+                        return True
+                    # cPanel-specific custom headers
+                    for hdr in r.headers:
+                        if hdr.lower().startswith("x-cpanel"):
+                            return True
+
+                    if r.status_code in (200, 301, 302, 401, 403):
+                        body = (r.text or "")[:8192].lower()
+                        if any(ind in body for ind in cpanel_indicators):
+                            return True
+                        # cPanel-specific Location redirector
+                        loc = r.headers.get("location", "").lower()
+                        if any(ind in loc for ind in ("cpsess", "/login/", "cpanel")):
+                            return True
+        except Exception:
+            continue
+    return False
+
+
 async def validate_service(service, target_or_scan_address, port):
     """
     Validates if a specific service is running on the given address:port.
@@ -354,11 +422,12 @@ async def validate_service(service, target_or_scan_address, port):
         'prometheus': validate_prometheus,
         'nextjs': validate_nextjs,
         'aem': validate_aem,
+        'cpanel': validate_cpanel,
     }
-    
+
     validator = validators.get(service)
     if validator:
-        if service == 'aem':
+        if service in ('aem', 'cpanel'):
             return await validator(target_or_scan_address, port)
         return await validator(_extract_scan_address(target_or_scan_address), port)
     return False

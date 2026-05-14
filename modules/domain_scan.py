@@ -37,6 +37,75 @@ DEFAULT_PAGE_SIGNATURES = {
     "buy this domain":         "Domain parking",
 }
 
+# Subdomain-takeover fingerprints. Each entry is (vendor, body_marker,
+# trigger_status_codes, severity). A finding fires when a 404/200 response
+# body contains the marker — the dangling DNS still resolves but the
+# back-end service has been deprovisioned, so an attacker who re-claims the
+# vendor slot inherits the subdomain.
+#
+# Source-set: maintained by https://github.com/EdOverflow/can-i-take-over-xyz
+# plus cPanel-specific defaultwebpage.cgi (orphaned cPanel account).
+TAKEOVER_SIGNATURES = [
+    ("GitHub Pages",     "There isn't a GitHub Pages site here.",                             (200, 404),       "CRITICAL"),
+    ("AWS S3",           "NoSuchBucket",                                                       (200, 404),       "CRITICAL"),
+    ("AWS S3",           "The specified bucket does not exist",                                (200, 404),       "CRITICAL"),
+    ("Heroku",           "No such app",                                                        (200, 404),       "CRITICAL"),
+    ("Heroku",           "herokucdn.com/error-pages/no-such-app.html",                         (200, 404),       "CRITICAL"),
+    ("Shopify",          "Sorry, this shop is currently unavailable.",                         (200, 404),       "HIGH"),
+    ("Bitbucket",        "Repository not found",                                               (404,),           "HIGH"),
+    ("Ghost",            "The thing you were looking for is no longer here, or never was",     (200, 404),       "HIGH"),
+    ("Pantheon",         "The gods are wise, but do not know of the site which you seek",      (200, 404),       "HIGH"),
+    ("Surge.sh",         "project not found",                                                  (200, 404),       "HIGH"),
+    ("Tumblr",           "There's nothing here.",                                              (200, 404),       "HIGH"),
+    ("Tumblr",           "Whatever you were looking for doesn't currently exist at this address", (200, 404),    "HIGH"),
+    ("UserVoice",        "This UserVoice subdomain is currently available!",                   (200, 404),       "HIGH"),
+    ("WordPress.com",    "Do you want to register",                                            (200, 404),       "MEDIUM"),
+    ("Cargo",            "404 Not Found",                                                      (404,),           "INFO"),
+    ("Fastly",           "Fastly error: unknown domain",                                       (200, 404),       "HIGH"),
+    ("Fastly",           "Please check that this domain has been added to a service",          (200, 404),       "HIGH"),
+    ("Cloudfront",       "ERROR: The request could not be satisfied",                          (403, 404),       "MEDIUM"),
+    ("Webflow",          "The page you are looking for doesn't exist or has been moved",       (404,),           "MEDIUM"),
+    ("Tilda",            "Please renew your subscription",                                     (200, 404),       "HIGH"),
+    ("Unbounce",         "The requested URL was not found on this server.",                   (404,),           "INFO"),
+    ("Strikingly",       "But if you're looking to build your own website",                    (404,),           "HIGH"),
+    ("Vercel",           "The deployment could not be found on Vercel",                        (404,),           "HIGH"),
+    ("Netlify",          "Not Found - Request ID",                                             (404,),           "MEDIUM"),
+    ("Azure",            "404 Web Site not found",                                             (404,),           "HIGH"),
+    ("Read the Docs",    "unknown to Read the Docs",                                           (404,),           "HIGH"),
+    ("Help Scout",       "No settings were found for this company",                            (200, 404),       "HIGH"),
+    ("HelpJuice",        "We could not find what you're looking for.",                         (404,),           "MEDIUM"),
+    ("Intercom",         "This page is reserved for artistic dogs",                            (404,),           "HIGH"),
+    ("Statuspage",       "You are being redirected",                                           (302, 404),       "MEDIUM"),
+    ("Acquia",           "The site you are looking for could not be found",                    (404,),           "HIGH"),
+    ("Tave",             "<h1>Error 404: Page Not Found</h1>",                                 (404,),           "INFO"),
+    ("Zendesk",          "Help Center Closed",                                                 (200, 404),       "HIGH"),
+    ("cPanel orphan",    "<title>Default Web Site Page</title>",                              (200, 404),       "HIGH"),
+    ("cPanel orphan",    "cgi-sys/defaultwebpage.cgi",                                         (200, 404),       "HIGH"),
+    ("LaunchRock",       "It looks like you may have taken a wrong turn somewhere",            (404,),           "HIGH"),
+    ("Smugmug",          "<h1>Page Not Found</h1>",                                            (404,),           "INFO"),
+    ("ngrok",            "Tunnel not found",                                                   (404,),           "HIGH"),
+    ("Worksites.net",    "Hello! Sorry, but this website is",                                  (200, 404),       "MEDIUM"),
+    ("Pingdom",          "public report page not activated",                                   (200, 404),       "MEDIUM"),
+    ("Brightcove",       "<p class=\"bc-gallery-error-code\">Error Code: 404</p>",            (404,),           "HIGH"),
+    ("Anima",            "If this is your website and you've just created it",                 (404,),           "MEDIUM"),
+    ("Kinsta",           "No Site For Domain",                                                 (404,),           "HIGH"),
+    ("Wishpond",         "https://www.wishpond.com/404?campaign=true",                         (200, 404),       "HIGH"),
+    ("Hatena Blog",      "404 Blog is not found",                                              (404,),           "HIGH"),
+    ("Aftership",        "Oops.</h2><p class=\"text-muted text-tight\">The page you're looking for doesn't exist.", (404,), "MEDIUM"),
+    ("Help Juice",       "We could not find what you're looking for.",                         (404,),           "MEDIUM"),
+    ("Pixpa",            "Sorry, this page is no longer available.",                           (404,),           "MEDIUM"),
+    ("Teamwork",         "Oops - We didn't find your site.",                                   (404,),           "HIGH"),
+    ("JetBrains",        "is not a registered InCloud YouTrack",                               (200, 404),       "HIGH"),
+    ("Smartling",        "Domain is not configured",                                           (200, 404),       "MEDIUM"),
+    ("Surveygizmo",      "data-html-name=\"Default error page\"",                              (404,),           "MEDIUM"),
+    ("Mashery",          "Unrecognized domain <strong>",                                       (200, 404),       "HIGH"),
+    ("Thinkific",        "You may have mistyped the address",                                  (404,),           "MEDIUM"),
+    ("Tictail",          "to buy this domain.",                                                (200, 404),       "MEDIUM"),
+    ("Uservoice",        "This UserVoice instance does not exist",                             (200, 404),       "HIGH"),
+    ("Wishpond",         "https://www.wishpond.com/404",                                       (404,),           "HIGH"),
+    ("Wpengine",         "The site you were looking for couldn't be found",                    (200, 404),       "HIGH"),
+]
+
 class SubResourceParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -120,6 +189,34 @@ class DomainScanner:
             "page_title":      httpx_entry.get('title', 'N/A'),
             "content_length":  str(httpx_entry.get('content_length', 'N/A'))
         }
+
+    def detect_takeover_from_response(self, httpx_entry: dict, status_code: int, body_excerpt: str) -> dict | None:
+        """
+        Match a single (status, body) pair against TAKEOVER_SIGNATURES.
+        Returns a finding dict (already in the canonical reporting schema)
+        when a vendor fingerprint matches. Body is matched case-insensitive.
+        """
+        if not body_excerpt:
+            return None
+        lower = body_excerpt[:8192].lower()
+        for vendor, marker, allowed_codes, severity in TAKEOVER_SIGNATURES:
+            if status_code not in allowed_codes:
+                continue
+            if marker.lower() not in lower:
+                continue
+            status = "CRITICAL" if severity == "CRITICAL" else "VULNERABLE"
+            return self._create_vuln_entry(
+                httpx_entry,
+                f"Subdomain takeover candidate: {vendor}",
+                status,
+                severity,
+                (
+                    f"HTTP {status_code} response body matches a known {vendor} takeover fingerprint "
+                    f"('{marker[:80]}'). DNS still resolves to {vendor} but the back-end service is "
+                    "deprovisioned — re-registering the slot lets an attacker serve content on this hostname."
+                ),
+            )
+        return None
 
     def detect_default_pages(self, httpx_data: list) -> list[dict]:
         """Detect default/parked pages based on httpx titles and inferred body content without extra requests."""
@@ -252,6 +349,22 @@ class DomainScanner:
                                 entry, "Directory Listing Enabled", "VULNERABLE", "HIGH",
                                 "Found 'Index of /' in response body"
                             ))
+
+                        # Subdomain-takeover signatures (also re-fetches a
+                        # /<random> path to surface vendor-specific 404
+                        # markers that only appear on missing routes).
+                        takeover = self.detect_takeover_from_response(entry, resp.status_code, resp.text)
+                        if takeover:
+                            findings.append(takeover)
+                        else:
+                            try:
+                                rand_path = f"/_vakt_{int(time.time() * 1000) % 100000}_takeover"
+                                miss = await client.get(url.rstrip('/') + rand_path)
+                                takeover = self.detect_takeover_from_response(entry, miss.status_code, miss.text)
+                                if takeover:
+                                    findings.append(takeover)
+                            except Exception:
+                                pass
 
                         # 2. CORS Misconfig
                         cors_headers = {'Origin': 'https://evil.com'}

@@ -4,3 +4,13 @@ scripts/__pycache__/
 scan_state_*
 .codex
 recon_results/
+# Added by code-review-graph
+.code-review-graph/
+scan_results*
+target
+AGENTS.md
+CLAUDE.md 
+GEMINI.md
+.claude/
+.mcp.json
+plan.md
