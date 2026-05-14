@@ -1,0 +1,121 @@
+{
+  "_meta": {
+    "source": "https://news.cpanel.com/category/security-advisories/ + cve.org",
+    "schema_version": 1,
+    "description": "cPanel & WHM Targeted Security Release (TSR) archive. Refreshed by scripts/build_cpanel_tsr.py. Each entry is a TSR bulletin with affected version ranges; check_version_vulnerabilities matches the detected cPanel version against every range and emits a finding when the host falls inside an unpatched window."
+  },
+  "bulletins": [
+    {
+      "id": "TSR-2024-0006",
+      "published": "2024-12-10",
+      "severity": "HIGH",
+      "affected_versions": [">=11.110.0.0,<11.118.0.30", ">=11.120.0.0,<11.122.0.4"],
+      "fixed_in": ["11.118.0.30", "11.122.0.4"],
+      "cves": ["CVE-2024-43442", "CVE-2024-42475"],
+      "surface": ["cpanel", "whm"],
+      "auth_required": false,
+      "observable": false,
+      "summary": "SEC-741 SQL injection (privileged) and reflected XSS in cPanel and WHM."
+    },
+    {
+      "id": "TSR-2024-0005",
+      "published": "2024-10-15",
+      "severity": "HIGH",
+      "affected_versions": [">=11.110.0.0,<11.118.0.20", ">=11.120.0.0,<11.122.0.0"],
+      "fixed_in": ["11.118.0.20", "11.122.0.0"],
+      "cves": [],
+      "surface": ["cpanel", "whm", "webmail"],
+      "auth_required": true,
+      "observable": false,
+      "summary": "Multiple authenticated XSS and information-disclosure issues."
+    },
+    {
+      "id": "TSR-2023-0005",
+      "published": "2023-04-25",
+      "severity": "HIGH",
+      "affected_versions": [">=11.109.9999.116,<11.109.9999.117", ">=11.110.0.0,<11.110.0.32", ">=11.111.0.0,<11.111.0.10", ">=11.112.0.0,<11.112.0.5"],
+      "fixed_in": ["11.109.9999.117", "11.110.0.32", "11.111.0.10", "11.112.0.5"],
+      "cves": ["CVE-2023-29489"],
+      "surface": ["cpanel", "whm", "webmail"],
+      "auth_required": false,
+      "observable": true,
+      "summary": "Reflected XSS via /cpanelwebcall/. Mass-exploited Assetnote disclosure."
+    },
+    {
+      "id": "TSR-2022-0003",
+      "published": "2022-11-15",
+      "severity": "MEDIUM",
+      "affected_versions": [">=11.100.0.0,<11.102.0.18", ">=11.106.0.0,<11.108.0.0"],
+      "fixed_in": ["11.102.0.18", "11.108.0.0"],
+      "cves": [
+        "CVE-2022-44762", "CVE-2022-44763", "CVE-2022-44764", "CVE-2022-44765",
+        "CVE-2022-44766", "CVE-2022-44767", "CVE-2022-44768", "CVE-2022-44769",
+        "CVE-2022-44770", "CVE-2022-44771", "CVE-2022-44772", "CVE-2022-44773"
+      ],
+      "surface": ["cpanel", "whm", "webmail"],
+      "auth_required": false,
+      "observable": true,
+      "summary": "Open-redirect + reflected XSS family on /login and WHM error pages."
+    },
+    {
+      "id": "TSR-2021-0007",
+      "published": "2021-11-09",
+      "severity": "HIGH",
+      "affected_versions": [">=11.94.0.0,<11.94.0.19", ">=11.98.0.0,<11.100.0.5"],
+      "fixed_in": ["11.94.0.19", "11.100.0.5"],
+      "cves": ["CVE-2021-38583", "CVE-2021-38560", "CVE-2021-38561", "CVE-2021-38562", "CVE-2021-38563", "CVE-2021-38564", "CVE-2021-38565", "CVE-2021-38566", "CVE-2021-38567"],
+      "surface": ["cpanel", "whm"],
+      "auth_required": false,
+      "observable": true,
+      "summary": "SSRF in fetch_ssl_certificates_for_fqdns + information-disclosure family."
+    },
+    {
+      "id": "TSR-2020-0004",
+      "published": "2020-11-19",
+      "severity": "MEDIUM",
+      "affected_versions": [">=11.86.0.0,<11.86.0.32", ">=11.88.0.0,<11.92.0.10"],
+      "fixed_in": ["11.86.0.32", "11.92.0.10"],
+      "cves": ["CVE-2020-27339", "CVE-2020-27340"],
+      "surface": ["whm"],
+      "auth_required": true,
+      "observable": false,
+      "summary": "Stored XSS in WHM Manage API Tokens and account-creation forms."
+    },
+    {
+      "id": "TSR-2019-0004",
+      "published": "2019-08-30",
+      "severity": "MEDIUM",
+      "affected_versions": [">=11.78.0.0,<11.78.0.34", ">=11.80.0.0,<11.82.0.6"],
+      "fixed_in": ["11.78.0.34", "11.82.0.6"],
+      "cves": ["CVE-2019-20384", "CVE-2019-11680"],
+      "surface": ["cpanel"],
+      "auth_required": false,
+      "observable": true,
+      "summary": "Reflected XSS in /cgi-sys/addon_*.cgi and login.cgi."
+    },
+    {
+      "id": "TSR-2018-0001",
+      "published": "2018-01-15",
+      "severity": "MEDIUM",
+      "affected_versions": [">=11.66.0.0,<11.66.0.36", ">=11.68.0.0,<11.70.0.18"],
+      "fixed_in": ["11.66.0.36", "11.70.0.18"],
+      "cves": ["CVE-2018-4083"],
+      "surface": ["cpanel"],
+      "auth_required": false,
+      "observable": false,
+      "summary": "Information disclosure in cPanel."
+    },
+    {
+      "id": "TSR-2017-0006",
+      "published": "2017-09-15",
+      "severity": "MEDIUM",
+      "affected_versions": ["<11.66.0.0"],
+      "fixed_in": ["11.66.0.0"],
+      "cves": ["CVE-2017-12824"],
+      "surface": ["cpanel"],
+      "auth_required": true,
+      "observable": false,
+      "summary": "Stored XSS in API tokens UI (cPanel ≤66)."
+    }
+  ]
+}

@@ -20,6 +20,9 @@ An advanced, high-performance security scanner designed for comprehensive vulner
   - **Grafana**: 18+ CVEs, default creds, path traversal, XSS, plugin misconfigurations.
   - **Prometheus**: Dashboard exposure, configuration leaks, target enumeration, Node Exporter analysis, pprof exposure.
   - **Next.js (React)**: react-to-shell RCE (CVE-2025-55182) and associated supply chain checks.
+  - **cPanel & WHM**: full primary-port matrix (2077–2080, 2082/3, 2086/7, 2089, 2095/6, 9998/9, 80/443) plus co-resident service banners (Exim 21Nails, Dovecot, ProFTPD, OpenSSH regreSSHion). Oracle-validated checks for CVE-2023-29489, CVE-2022-44762/3, CVE-2019-11680, CVE-2021-38583; version-anchored TSR matrix; bundled-component CVE matrix covering Apache mod_rewrite (CVE-2024-38476/7), PHP CGI (CVE-2024-4577), Roundcube (CVE-2024-37383), WHMCS (CVE-2024-25602), Horde RCE (CVE-2022-30287), AWStats, phpMyAdmin, Softaculous, Mailman, ownCloud (CVE-2023-49103), OpenSSL Heartbleed. Also: PROXY-protocol misconfig, HTTP/2 ALPN detection, SSI execution, HTTP request smuggling, branding-upload exposure, license-server (2089) banner, guarded WHM default-credential probe (opt-in via `VAKTSCAN_AGGRESSIVE_CPANEL=1`). Anti-FP post-filter with stock-error baselining, WAF/cPHulk detection, content-type sanity, length-delta thresholding, dedup of TSR + observable rows.
+- **Subdomain takeover (-m domain-scan)**: 58-signature fingerprint table covering GitHub Pages, AWS S3, Heroku, Shopify, Fastly, Cloudfront, Webflow, Tilda, Vercel, Netlify, Azure, Read the Docs, Statuspage, Acquia, Zendesk, cPanel orphan default page, LaunchRock, Strikingly, Kinsta, JetBrains, Mashery, WP Engine, etc. Per-URL probe of root + random-path 404s.
+- **DNS attack surface (-m dns)**: dedicated module with pure-stdlib DNS wire-format encoder/decoder. Per domain: A/AAAA/MX/NS/TXT/SOA/CAA/DNSKEY records, SPF policy classification (`+all`, `?all`, multi-record), DMARC presence + `p=none` detection, DKIM selector probing across 16 common selectors, CAA absence flag, DNSSEC missing flag. Per nameserver: AXFR zone transfer attempt (CRITICAL on success), open-recursion test, `version.bind` CHAOS TXT banner.
 
 ###  Advanced Vulnerability Detection
 - **Smart Vulnerability Deduplication**: If the same vulnerability is discovered on both a hostname and its corresponding IP, the scanner now treats it as a single finding and reports it against the hostname, providing cleaner and more actionable reports.
@@ -138,6 +141,17 @@ python main.py -m domain-scan --sub-domains subs.txt
 
 # Traditional service-only scan
 python main.py targets.txt -m elasticsearch
+
+# cPanel / WHM / Webmail / WebDisk one-point-of-contact scan
+python main.py targets.txt -m cpanel
+python main.py -m cpanel --sub-domains subs.txt
+
+# Subdomain takeover detection (built into the domain-scan module)
+python main.py -m domain-scan --sub-domains subs.txt
+
+# Dedicated DNS attack-surface scan (SPF/DMARC/DKIM/AXFR/recursion/CAA/DNSSEC)
+python main.py -m dns --sub-domains domains.txt
+python main.py -m dns --recon-domain target.com
 
 # Deep JavaScript analysis & endpoint extraction
 python main.py -m js-paths --url https://example.com

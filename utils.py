@@ -209,6 +209,29 @@ def get_service_ports():
         "prometheus": [9090, 9100, 9101, 9102, 9103, 9104],
         "nextjs": [3000, 80, 443, 8080],
         "aem": [4502, 4503, 80, 443, 8080, 8443],
+        "cpanel": [
+            2077, 2078, 2079, 2080,    # cpdavd (WebDisk / CalDAV / CardDAV)
+            2082, 2083,                # cPanel user
+            2086, 2087,                # WHM root/reseller
+            2089,                      # cPanel autoconfig
+            2095, 2096,                # Webmail
+            9998, 9999,                # alt cpsrvd listeners
+            80, 443,                   # Apache fronting (/cpanel, /whm, etc.)
+        ],
+        "cpanel_adjacent": [
+            25, 26, 465, 587,          # Exim SMTP
+            110, 143, 993, 995,        # Dovecot IMAP/POP3
+            21,                        # FTP (Pure-FTPd / ProFTPD)
+            53,                        # DNS (BIND / PowerDNS)
+            3306,                      # MySQL / MariaDB
+            5432,                      # PostgreSQL
+            22,                        # OpenSSH
+            2768,                      # Mailman
+            783,                       # spamd
+            1097, 2812,                # tailwatchd / queueprocd
+            8053,                      # PowerDNS web UI
+            953,                       # BIND control / dnsadmin
+        ],
         "web": [
             80, 81, 443, 444, 591, 593, 832,
             981, 1010, 1311, 2082, 2083, 2086, 2087,

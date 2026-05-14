@@ -1,0 +1,105 @@
+{
+  "_meta": {
+    "source": "NVD JSON 2.0 feed (https://nvd.nist.gov/feeds/json/cve/2.0/) filtered by cpe:2.3:a:<vendor>:<product>",
+    "schema_version": 1,
+    "description": "Bundled-component CVE table for components that cPanel installs by default. Refreshed by scripts/build_bundled_cves.py. Each entry is matched against the detected component banner; check_bundled_apache_php / check_mail_dns_ftp_db_banners / check_webmail_exposure / check_whmcs / etc. read this table and emit a finding when a host runs an unpatched version."
+  },
+  "components": {
+    "apache_httpd": [
+      {"cve": "CVE-2024-38476", "severity": "HIGH", "affected_versions": [">=2.4.0,<2.4.60"], "summary": "mod_rewrite RewriteRule backend confusion → SSRF/info-leak"},
+      {"cve": "CVE-2024-38477", "severity": "HIGH", "affected_versions": [">=2.4.0,<2.4.60"], "summary": "mod_proxy null-pointer crash"},
+      {"cve": "CVE-2024-38473", "severity": "HIGH", "affected_versions": [">=2.4.0,<2.4.60"], "summary": "mod_proxy encoding confusion"},
+      {"cve": "CVE-2024-38474", "severity": "HIGH", "affected_versions": [">=2.4.0,<2.4.60"], "summary": "mod_rewrite substitution misuse"},
+      {"cve": "CVE-2024-38475", "severity": "CRITICAL", "affected_versions": [">=2.4.0,<2.4.60"], "summary": "mod_rewrite improper escaping → server-file disclosure"},
+      {"cve": "CVE-2023-25690", "severity": "CRITICAL", "affected_versions": [">=2.4.0,<2.4.56"], "summary": "mod_proxy HTTP request smuggling"},
+      {"cve": "CVE-2022-31813", "severity": "HIGH", "affected_versions": [">=2.4.0,<2.4.54"], "summary": "mod_proxy X-Forwarded-* SSRF"},
+      {"cve": "CVE-2017-9798", "severity": "MEDIUM", "affected_versions": [">=2.2.0,<2.2.35", ">=2.4.0,<2.4.28"], "summary": "Optionsbleed memory disclosure"}
+    ],
+    "php": [
+      {"cve": "CVE-2024-4577", "severity": "CRITICAL", "affected_versions": [">=8.1.0,<8.1.29", ">=8.2.0,<8.2.20", ">=8.3.0,<8.3.8"], "summary": "PHP CGI argument injection → RCE"},
+      {"cve": "CVE-2024-2961", "severity": "HIGH", "affected_versions": [">=8.1.0,<8.1.28", ">=8.2.0,<8.2.18", ">=8.3.0,<8.3.6"], "summary": "iconv() buffer overflow"},
+      {"cve": "CVE-2023-3247", "severity": "HIGH", "affected_versions": [">=8.0.0,<8.0.30", ">=8.1.0,<8.1.21", ">=8.2.0,<8.2.7"], "summary": "SOAP HTTP Digest auth flaw"}
+    ],
+    "exim": [
+      {"cve": "CVE-2019-10149", "severity": "CRITICAL", "affected_versions": [">=4.87,<4.92"], "summary": "Return of the WIZard — unauth RCE"},
+      {"cve": "CVE-2020-28017", "severity": "CRITICAL", "affected_versions": [">=4.0.0,<4.94.2"], "summary": "21Nails — integer overflow in receive_msg()"},
+      {"cve": "CVE-2020-28018", "severity": "CRITICAL", "affected_versions": [">=4.0.0,<4.94.2"], "summary": "21Nails — use-after-free in tls-openssl.c"},
+      {"cve": "CVE-2020-28019", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.94.2"], "summary": "21Nails — failure to reset BDAT state"},
+      {"cve": "CVE-2020-28020", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.94.2"], "summary": "21Nails — integer overflow in receive_msg()"},
+      {"cve": "CVE-2020-28021", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.94.2"], "summary": "21Nails — new-line injection in auth spool"},
+      {"cve": "CVE-2020-28022", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.94.2"], "summary": "21Nails — heap OOB write/read in extract_option()"},
+      {"cve": "CVE-2020-28023", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.94.2"], "summary": "21Nails — OOB read in smtp_setup_msg()"},
+      {"cve": "CVE-2020-28024", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.94.2"], "summary": "21Nails — buffer underflow in smtp_ungetc()"},
+      {"cve": "CVE-2020-28025", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.94.2"], "summary": "21Nails — OOB read in pdkim_finish_bodyhash()"},
+      {"cve": "CVE-2020-28026", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.94.2"], "summary": "21Nails — line truncation/injection in spool_read_header()"},
+      {"cve": "CVE-2023-42115", "severity": "CRITICAL", "affected_versions": [">=4.0.0,<4.96.1"], "summary": "Exim AUTH OOB write"},
+      {"cve": "CVE-2023-42116", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.96.1"], "summary": "Exim SMTP NTLM challenge stack-overflow"},
+      {"cve": "CVE-2023-42117", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.96.1"], "summary": "Exim improper neutralization"},
+      {"cve": "CVE-2023-42118", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.96.1"], "summary": "Exim libspf2 integer underflow"},
+      {"cve": "CVE-2023-42119", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.96.1"], "summary": "Exim dnsdb lookup OOB read"}
+    ],
+    "dovecot": [
+      {"cve": "CVE-2024-23184", "severity": "HIGH", "affected_versions": [">=2.0.0,<2.3.21.1"], "summary": "Header parsing memory exhaustion"},
+      {"cve": "CVE-2024-23185", "severity": "HIGH", "affected_versions": [">=2.0.0,<2.3.21.1"], "summary": "Header parsing memory exhaustion (companion)"},
+      {"cve": "CVE-2022-30550", "severity": "HIGH", "affected_versions": [">=2.0.0,<2.3.19.1"], "summary": "Authenticated remote user impersonation"}
+    ],
+    "openssh": [
+      {"cve": "CVE-2024-6387", "severity": "HIGH", "affected_versions": [">=8.5p1,<9.8p1"], "summary": "regreSSHion — race-condition RCE in sshd"},
+      {"cve": "CVE-2023-38408", "severity": "CRITICAL", "affected_versions": [">=5.5,<9.3p2"], "summary": "ssh-agent forwarding RCE"}
+    ],
+    "openssl": [
+      {"cve": "CVE-2014-0160", "severity": "CRITICAL", "affected_versions": [">=1.0.1,<1.0.1g"], "summary": "Heartbleed — memory disclosure"},
+      {"cve": "CVE-2022-3602", "severity": "HIGH", "affected_versions": [">=3.0.0,<3.0.7"], "summary": "X.509 email address 4-byte buffer overflow"}
+    ],
+    "proftpd": [
+      {"cve": "CVE-2015-3306", "severity": "CRITICAL", "affected_versions": [">=1.3.5,<1.3.5a"], "summary": "mod_copy unauth file copy → RCE"}
+    ],
+    "roundcube": [
+      {"cve": "CVE-2024-37383", "severity": "HIGH", "affected_versions": [">=1.5.0,<1.5.7", ">=1.6.0,<1.6.7"], "summary": "Stored XSS via SVG animate — actively exploited"},
+      {"cve": "CVE-2024-42008", "severity": "HIGH", "affected_versions": [">=1.0.0,<1.5.8", ">=1.6.0,<1.6.8"], "summary": "Reflected XSS via crafted email attachment"},
+      {"cve": "CVE-2024-42009", "severity": "HIGH", "affected_versions": [">=1.0.0,<1.5.8", ">=1.6.0,<1.6.8"], "summary": "DOM-based XSS in /program/js/app.js"},
+      {"cve": "CVE-2024-42010", "severity": "HIGH", "affected_versions": [">=1.0.0,<1.5.8", ">=1.6.0,<1.6.8"], "summary": "Info disclosure via mail.css"},
+      {"cve": "CVE-2023-43770", "severity": "MEDIUM", "affected_versions": [">=1.4.0,<1.4.15", ">=1.5.0,<1.5.5", ">=1.6.0,<1.6.4"], "summary": "Stored XSS in plain-text message handling"},
+      {"cve": "CVE-2021-44025", "severity": "HIGH", "affected_versions": [">=1.0.0,<1.4.12", ">=1.5.0,<1.5.2"], "summary": "SSRF via image preview"},
+      {"cve": "CVE-2020-12640", "severity": "HIGH", "affected_versions": [">=1.0.0,<1.4.4"], "summary": "Path traversal in plugin installer"},
+      {"cve": "CVE-2020-12641", "severity": "CRITICAL", "affected_versions": [">=1.0.0,<1.4.4"], "summary": "Argument injection in rcube_image::convert()"}
+    ],
+    "horde": [
+      {"cve": "CVE-2022-30287", "severity": "CRITICAL", "affected_versions": [">=5.0.0,<5.2.23"], "summary": "Pre-auth RCE via Horde_Form"}
+    ],
+    "phpmyadmin": [
+      {"cve": "CVE-2023-25727", "severity": "MEDIUM", "affected_versions": [">=4.0.0,<4.9.11", ">=5.0.0,<5.1.4"], "summary": "Reflected XSS in SQL editor"},
+      {"cve": "CVE-2022-23807", "severity": "HIGH", "affected_versions": [">=4.0.0,<4.9.11", ">=5.0.0,<5.1.3"], "summary": "CSRF / authentication bypass"},
+      {"cve": "CVE-2022-23808", "severity": "MEDIUM", "affected_versions": [">=4.0.0,<4.9.11", ">=5.0.0,<5.1.3"], "summary": "XSS in setup script"}
+    ],
+    "whmcs": [
+      {"cve": "CVE-2024-25602", "severity": "CRITICAL", "affected_versions": [">=8.0.0,<8.10.1"], "summary": "Unauth RCE — actively exploited"},
+      {"cve": "CVE-2023-40703", "severity": "HIGH", "affected_versions": [">=7.0.0,<8.7.0"], "summary": "IDOR / client portal cross-tenant read"},
+      {"cve": "CVE-2022-29173", "severity": "HIGH", "affected_versions": [">=7.0.0,<8.5.1"], "summary": "SSRF in curl wrapper"}
+    ],
+    "softaculous": [
+      {"cve": "CVE-2022-39354", "severity": "CRITICAL", "affected_versions": ["<6.4.0"], "summary": "Auth bypass in Remote v6"}
+    ],
+    "mailman": [
+      {"cve": "CVE-2023-1689", "severity": "MEDIUM", "affected_versions": [">=2.0,<2.1.40"], "summary": "Reflected XSS in admin web UI"}
+    ],
+    "awstats": [
+      {"cve": "CVE-2017-1000501", "severity": "HIGH", "affected_versions": [">=6.0,<7.7"], "summary": "Path traversal → RCE"},
+      {"cve": "CVE-2010-3389", "severity": "MEDIUM", "affected_versions": [">=6.0,<7.0"], "summary": "Path traversal"}
+    ],
+    "powerdns": [
+      {"cve": "CVE-2023-22617", "severity": "HIGH", "affected_versions": [">=4.6.0,<4.6.4"], "summary": "Auth-bypass in API"}
+    ],
+    "bind": [
+      {"cve": "CVE-2023-2828", "severity": "HIGH", "affected_versions": [">=9.0.0,<9.16.42"], "summary": "Cache memory limit bypass DoS"}
+    ],
+    "mysql": [],
+    "postgresql": [],
+    "owncloud": [
+      {"cve": "CVE-2023-49103", "severity": "CRITICAL", "affected_versions": [">=10.6.0,<10.13.3"], "summary": "graphapi env-var disclosure → cred theft"}
+    ],
+    "imagemagick": [
+      {"cve": "CVE-2016-3714", "severity": "CRITICAL", "affected_versions": [">=6.0.0,<6.9.3.10"], "summary": "ImageTragick — coder RCE"}
+    ]
+  }
+}
