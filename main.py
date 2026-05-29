@@ -43,6 +43,7 @@ from modules import (
     cpanel,
     dns_recon,
     service_recon,
+    web_checks,
 )
 
 # Map service names to their corresponding modules
@@ -1081,6 +1082,11 @@ async def main(
                         if nuclei_results:
                             print(f"{Colors.GREEN}[+] Nuclei: {len(nuclei_results)} finding(s).{Colors.RESET}")
                             for v in nuclei_results:
+                                state_manager.add_vulnerability(v)
+                        wc_results = await web_checks.run_checks(alive_urls, concurrency)
+                        if wc_results:
+                            print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
+                            for v in wc_results:
                                 state_manager.add_vulnerability(v)
                 else:
                     print(f"{Colors.YELLOW}[!] No alive web services found on open web ports.{Colors.RESET}")

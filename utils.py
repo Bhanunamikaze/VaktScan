@@ -237,16 +237,26 @@ def get_service_ports():
             21, 22, 25, 53, 88, 111, 123, 135,
             # SMB / SNMP / LDAP
             139, 161, 389, 445, 465, 587, 593, 636,
-            # Rsync / VMware / MSSQL / Oracle / NFS / Docker
-            873, 902, 1433, 1521, 2049, 2375, 2376,
-            # etcd / MySQL / RDP / PostgreSQL
-            2379, 2380, 3306, 3389, 5432,
+            # Rsync / VMware / MSSQL / Oracle / NFS / ZooKeeper / Docker
+            623, 873, 902, 1433, 1521, 2049, 2181, 2375, 2376,
+            # etcd / Loki / MySQL / RDP / GlassFish / PostgreSQL
+            2379, 2380, 3100, 3306, 3389, 4848, 5432,
             # AMQP / VNC / CouchDB / WinRM
             5671, 5672, 5900, 5901, 5984, 5985, 5986,
-            # Redis / K8s / AJP / Jolokia / Cassandra / Kubelet
-            6379, 6443, 8009, 8778, 9042, 9160, 10250,
-            # Memcached / MongoDB / ActiveMQ
-            11211, 27017, 61616,
+            # Redis / K8s / WebLogic / Splunk / Spring Actuator
+            6379, 6443, 7001, 7002, 8000, 8009,
+            # Spring Actuator / Nexus / Artifactory / Hadoop YARN / Splunk REST
+            8080, 8081, 8082, 8088, 8089, 8090,
+            # TeamCity / Vault / Spring Actuator TLS / Consul
+            8111, 8200, 8443, 8500, 8501,
+            # Jolokia / Jupyter / Solr / SonarQube / MinIO / Kafka / Alertmanager
+            8778, 8888, 8889, 8983, 9000, 9001, 9042, 9092, 9093,
+            # Cassandra / Zipkin / Portainer TLS / Hadoop HDFS / JBoss
+            9160, 9411, 9443, 9870, 9990,
+            # Kubelet / Envoy Admin / RabbitMQ Management / Jaeger
+            10250, 11211, 15000, 15001, 15672, 16686,
+            # MongoDB / Hadoop HDFS Legacy / ActiveMQ
+            27017, 50070, 61616,
         ],
         "web": [
             80, 81, 443, 444, 591, 593, 832,

@@ -16,3 +16,4 @@ from . import js_paths
 from . import aem
 from . import cpanel
 from . import dns_recon
+from . import web_checks
