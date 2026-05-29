@@ -1,150 +1,116 @@
 # VaktScan — ASM Coverage TODO
 
-Current state: port scan → service identification → CVE/vuln checks → web recon → DNS recon → JS analysis.
+Current state: port scan → service identification → CVE/vuln checks → web recon → DNS recon → JS analysis → cPanel module → DNS recon module.
 
 ---
 
-## 1. Missing Service / Protocol Modules
+## 1. False Positive Validation (NEW — HIGHEST PRIORITY)
 
-### Infrastructure & DevOps (High Value)
+These are the same class of bug as the cPanel false positive fix. Every item here produces noisy, incorrect findings today.
 
-| Service | Ports | What to check |
+### service_recon.py — missing service identity gates
+
+**Root problem**: Port 8080 (and other shared ports) triggers Spring Boot, Tomcat, Jenkins, Traefik, JBoss, and Hadoop YARN checks simultaneously without first confirming which service is actually present.
+
+**Root fix — `service_fingerprint()` dispatch guard**
+- Implement a lightweight `service_fingerprint(host, port)` function that probes the root URL once and returns a set of detected technologies based on: `Server` header, `X-Powered-By`, response body keywords, and specific path probes
+- `PORT_DISPATCH` entries for shared ports (8080, 9000, 8081, 8443) must only invoke a check when the fingerprint confirms that service is present
+- This single fix gates all per-service checks below
+
+**Per-check fixes (required even after fingerprint guard)**
+
+| Check | Current behavior | Required fix |
 |---|---|---|
-| **Apache Tomcat** | 8080, 8443 | Manager UI default creds (`/manager/html`), CVE-2019-0232, PUT method RCE |
-| **Spring Boot Actuator** | 8080, 8081, 8443 | `/actuator/env`, `/actuator/heapdump`, `/actuator/mappings`, `/actuator/logfile` |
-| **Jupyter Notebook** | 8888, 8889 | Unauthenticated `/api/kernels` → direct RCE |
-| **Apache Solr** | 8983 | Unauthenticated admin, CVE-2019-17558 (VelocityResponseWriter RCE) |
-| **Apache Hadoop HDFS** | 50070, 9870 | Unauthenticated NameNode web UI — file listing/download |
-| **Apache Hadoop YARN** | 8088 | Unauthenticated ResourceManager REST API — RCE via app submission |
-| **ZooKeeper** | 2181 | `ruok`, `dump`, `stat` commands — unauthenticated config/cluster data |
-| **Kafka** | 9092 | Unauthenticated broker — topic listing, message consumption |
-| **RabbitMQ** | 15672, 5672 | Management UI default `guest:guest`, virtual host enum |
-| **HashiCorp Consul** | 8500, 8501 | Unauthenticated KV store, service catalog, ACL bypass |
-| **HashiCorp Vault** | 8200 | Unauthenticated `/v1/sys/health`, `/v1/sys/seal-status`, secret listing |
-| **MinIO** | 9000, 9001 | Unauthenticated bucket listing, default `minioadmin:minioadmin` |
-| **IPMI** | 623 | Cipher suite 0 auth bypass (`ipmitool -I lanplus -C 0`), hash capture |
-| **Java RMI** | 1099, 1098 | BaRMIe enum, rmg.jar, beanshooter — deserialization gadget check |
-| **WebLogic** | 7001, 7002, 4848 | CVE-2019-2725, CVE-2020-14882 (unauth RCE), `/console` default creds |
-| **JBoss / WildFly** | 8080, 9990 | Unauthenticated admin console (`/jmx-console`, `/web-console`) |
-| **GlassFish** | 4848 | Default `admin:` (blank password) on admin console |
+| `check_spring_actuator` | Any `/actuator/env` 200 → VULNERABLE | Require "spring" or "actuator" in response body or headers |
+| `check_tomcat` | `/manager/html` 401 → fires finding | 401 is correct auth behavior — only fire if 200 without auth, or if default creds actually succeed (confirm via response body, not just status) |
+| `check_traefik` | `/dashboard/` 200 → fires | Require "traefik" in response body or headers |
+| `check_portainer` | `/api/status` any 200 JSON → INFO | Require "portainer" keyword in response body |
+| `check_sonarqube` | `/api/system/status` any JSON 200 → fires | Require "sonarQube" or `"status":"UP"` in body |
+| `check_teamcity` | CVE-2024-27198 `/app/rest/users` 200 → fires | Require actual user data in response body, not just HTTP 200 |
+| `check_minio` | Default cred check fires without service confirmation | Detect MinIO by response headers (`x-amz-request-id` or "minio" in `Server` header) before attempting default cred check |
+| `check_consul` | `/v1/catalog/services` any 200 JSON → HIGH | Require consul-specific fields (`Service`, `Datacenter`) in response body |
 
-### Monitoring & Observability
+### web_checks.py — missing body validation
 
-| Service | Ports | What to check |
+| Check | Current behavior | Required fix |
 |---|---|---|
-| **Alertmanager** | 9093 | Unauthenticated — silence all alerts, read receiver configs |
-| **Loki** | 3100 | Unauthenticated log query API |
-| **Jaeger** | 16686 | Unauthenticated tracing UI — service/endpoint enumeration |
-| **Zipkin** | 9411 | Unauthenticated trace data |
-| **Splunk** | 8000, 8089 | Default `admin:changeme`, unauthenticated REST API |
-| **Nagios / Zabbix** | 80, 10051 | Default creds, CVE checks |
-| **Traefik** | 8080 | Dashboard exposed (`/dashboard/`), route enumeration |
+| `check_sensitive_files` — `.git/HEAD` | HTTP 200 → VULNERABLE | Require `"ref: refs/heads/"` in body (catch-all servers return 200 for everything) |
+| `check_sensitive_files` — `.env` | HTTP 200 → VULNERABLE | Require `"="` in body and at least one line matching `KEY=value` pattern, minimum 20 chars |
+| `check_sensitive_files` — backup files (`.zip`, `.tar.gz`) | HTTP 200 → fires | Check `Content-Type` for `application/zip` or `application/octet-stream` to confirm actual file download |
+| `check_admin_panels` | `/admin` 401 → VULNERABLE | 401 means auth is working correctly — downgrade to INFO; only fire VULNERABLE if 200 AND body contains login form markers (`input type=password`, login form HTML) |
+| `check_directory_listing` | "Index of" text in body → fires | Require at least 3 file entries visible, not just the "Index of" string which appears in some legitimate page content |
+
+---
+
+## 2. Missing Service Checks
 
 ### CI/CD & DevTools
 
 | Service | Ports | What to check |
 |---|---|---|
-| **Jenkins** | 8080 | *(partially done)* Add CVE-2024-23897 (file read), CSRF bypass |
-| **GitLab** | 80, 443 | Public projects, user enum via `/api/v4/users`, unauthenticated API |
-| **Jira** | 8080 | Unauthenticated project listing, CVE-2022-0540 (auth bypass) |
-| **Confluence** | 8090, 8443 | CVE-2023-22518, CVE-2022-26134 (OGNL RCE) — unauthenticated |
-| **SonarQube** | 9000 | Default `admin:admin`, public project source code exposure |
-| **Nexus Repository** | 8081 | Default `admin:admin123`, unauthenticated repo browsing |
-| **Artifactory** | 8081, 8082 | Default `admin:password`, anonymous artifact access |
-| **TeamCity** | 8111 | CVE-2024-27198 (auth bypass RCE), guest access |
-| **Portainer** | 9000, 9443 | Unauthenticated Docker/K8s management, default creds |
+| **Jenkins** | 8080 | *(partial)* Add CVE-2024-23897 (arbitrary file read via CLI) |
+| **GitLab** | 80, 443 | Public projects listing, user enumeration via `/api/v4/users`, unauthenticated API access |
+| **Jira** | 8080 | CVE-2022-0540 (authentication bypass) — unauthenticated project access |
+| **Confluence** | 8090, 8443 | CVE-2023-22518 (improper auth), CVE-2022-26134 (OGNL RCE) — both unauthenticated |
 
 ### Cloud-Native
 
 | Service | Ports | What to check |
 |---|---|---|
-| **ArgoCD** | 80, 443 | CVE-2022-29165 (auth bypass), unauthenticated API, default `admin:` |
-| **Rancher** | 80, 443 | Unauthenticated API, default creds |
-| **Istio/Envoy** | 15000, 15001 | Admin API exposed — config dump, traffic interception |
-| **OpenTelemetry Collector** | 4317, 4318, 55679 | Unauthenticated gRPC/HTTP OTLP ingestion |
+| **ArgoCD** | 80, 443 | CVE-2022-29165 (authentication bypass), unauthenticated API |
+| **Rancher** | 80, 443 | Unauthenticated API access |
+| **OpenTelemetry Collector** | 4317, 4318, 55679 | Unauthenticated gRPC/HTTP OTLP ingestion — telemetry data exfil |
 
----
+### Infrastructure & Monitoring
 
-## 2. Missing Web Application Checks
-
-### HTTP Security Headers Audit
-- Missing: `Strict-Transport-Security`, `Content-Security-Policy`, `X-Frame-Options`,
-  `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`
-- Add to `domain_scan.py` or a new `headers_audit.py` module
-
-### Exposed Sensitive Files & Paths
-- `.git/` directory exposed (git repo clone possible)
-- `.env` / `.env.local` / `.env.production` file exposed
-- `phpinfo.php` / `info.php`
-- `wp-config.php`, `config.php`, `database.yml`, `secrets.yml`
-- Backup files: `.bak`, `.old`, `.zip`, `.tar.gz`, `~` suffix
-- `/.well-known/security.txt` — parse for contact/scope info (positive signal)
-- `/crossdomain.xml`, `/clientaccesspolicy.xml` — flash/Silverlight CORS
-- `robots.txt` — enumerate disallowed paths as attack surface
-
-### API Surface Discovery
-- GraphQL introspection endpoint exposed (`/graphql`, `/api/graphql`)
-- Swagger / OpenAPI spec exposed (`/swagger.json`, `/openapi.json`, `/api-docs`)
-- gRPC reflection enabled (port 50051)
-- OData endpoints (`/$metadata`)
-
-### Authentication Issues
-- Admin panels auto-detected and flagged: `/admin`, `/administrator`,
-  `/wp-admin`, `/phpmyadmin`, `/adminer.php`
-- HTTP Basic Auth prompts on sensitive paths (401 check)
-- Default credential spray for detected CMS/apps (WordPress, Joomla, Drupal)
-
-### SSL / TLS Gaps
-- Certificate expiry < 30 days → WARNING, expired → CRITICAL
-- Self-signed certificate detection
-- Weak cipher suites (RC4, 3DES, NULL, EXPORT)
-- Missing HSTS / HSTS preload
-- Certificate CN mismatch
+| Service | Ports | What to check |
+|---|---|---|
+| **Java RMI** | 1099, 1098 | BaRMIe enum, rmg.jar, beanshooter — deserialization gadget check |
+| **Nagios / Zabbix** | 80, 10051 | Default credential check |
+| **IPMI** | 623 | Cipher suite 0 authentication bypass (`ipmitool -I lanplus -C 0`), hash capture |
 
 ---
 
 ## 3. Missing Recon / Discovery
 
 ### Cloud Asset Discovery
-- **AWS**: S3 bucket enumeration (permutation-based), CloudFront origin IP leak,
-  EC2 metadata endpoint (169.254.169.254) SSRF indicator, public AMIs
+
+- **AWS**: S3 bucket enumeration (permutation-based), CloudFront origin IP leak, EC2 metadata endpoint (169.254.169.254) SSRF indicator
 - **Azure**: Blob storage enumeration, Azure AD tenant discovery
 - **GCP**: GCS bucket enumeration, GCP metadata endpoint SSRF
 
 ### Passive Intelligence
-- **Shodan** API integration — pull known open ports/banners for target IPs
-- **Censys** API integration — certificate and host data
-- **FOFA** / **Hunter.io** integration
-- **GreyNoise** — tag IPs as scanners/bots vs real services
-- **CISA KEV** cross-reference — flag CVEs on CISA Known Exploited list
-- **EPSS scoring** — enrich CVE findings with exploitation probability
+
+- **Shodan** API integration — pull known open ports/banners for target IPs without active scanning
+- **Censys** API integration — certificate and host data enrichment
 
 ### Certificate Transparency
+
 - Monitor CT logs for new subdomains (crt.sh polling, Certstream)
 - Alert on newly issued certificates for target domain
 
-### Email Security (Extend dns_recon)
+### Email Security (extend dns_recon)
+
 - MX record banner grabbing (mail server version)
 - SMTP open relay test
-- Email spoofing simulation (SPF/DMARC bypass check)
 - BIMI record check
 
 ---
 
-## 4. Missing Vulnerability Correlation
+## 4. Vulnerability Correlation
 
-- **Version → CVE mapping**: detected service version → NVD lookup → filter by CVSS ≥ 7
+- **Version → CVE mapping**: detected service version → NVD API lookup → filter by CVSS ≥ 7
 - **CPE generation** from banner strings for accurate CVE matching
-- **Nuclei template sync**: auto-pull latest community templates before scan
-- **Metasploit module cross-reference**: flag findings that have public exploit modules
+- **CISA KEV cross-reference**: flag CVEs that appear on CISA's Known Exploited Vulnerabilities catalog
+- **EPSS scoring**: enrich CVE findings with FIRST.org exploitation probability score
+- **Nuclei template auto-sync**: pull latest community templates before scan run
 
 ---
 
-## 5. Output / Reporting Gaps
+## 5. Output / Reporting
 
-- **SARIF output format** — for GitHub/GitLab security tab integration
 - **JSON output** — machine-readable per-finding export
-- **Severity deduplication across modules** — same CVE found by multiple modules counted once
+- **SARIF output format** — for GitHub/GitLab security tab integration
 - **Risk scoring per asset** — aggregate severity of all findings per IP/domain
 - **Delta reports** — "new since last scan" vs "resolved since last scan"
 - **Executive summary** — finding counts by severity, top 5 critical assets
@@ -153,10 +119,7 @@ Current state: port scan → service identification → CVE/vuln checks → web 
 
 ## 6. Operational / Platform
 
-- **Scan scheduling** — cron-based recurring scans per target
-- **Asset inventory persistence** — SQLite/Postgres store of discovered assets across runs
-- **Change detection** — alert when new port opens or service version changes
-- **Rate limiting / politeness** — respect robots.txt, configurable req/s cap
+- **Asset inventory persistence** — SQLite store of discovered assets across runs
 - **Proxy support** — route scans through Burp / upstream proxy
 - **IPv6 scanning** — currently IPv4 only
 
@@ -164,13 +127,14 @@ Current state: port scan → service identification → CVE/vuln checks → web 
 
 ## Priority Order
 
-1. **Spring Boot Actuator** — extremely common in enterprise, `/actuator/heapdump` = credentials
-2. **Jupyter unauthenticated** — direct RCE, very common in data teams
-3. **Exposed .git / .env files** — trivially exploitable, widespread
-4. **HTTP security headers audit** — fast, zero network cost beyond existing httpx data
-5. **Hadoop YARN unauthenticated RCE** — critical, often internet-exposed in cloud envs
-6. **Consul / Vault unauthenticated** — common in Kubernetes clusters
-7. **GraphQL introspection** — exposes full API schema unauthenticated
-8. **SSL cert expiry** — ops visibility, low noise
-9. **IPMI cipher 0** — critical on bare-metal infra
-10. **Shodan/Censys passive enrichment** — zero-noise context with no active scanning
+1. **False positive validation — service_recon.py + web_checks.py** (URGENT — prevents noise, same class of bug as cPanel FP fix)
+   - Start with `service_fingerprint()` dispatch guard, then per-check body validation
+2. **Shodan/Censys passive enrichment** — zero-noise context, no active scanning required
+3. **Jira CVE-2022-0540 + Confluence CVE-2023-22518/CVE-2022-26134** — actively exploited in the wild
+4. **JSON output** — unblocks downstream integrations and delta reports
+5. **CISA KEV cross-reference** — immediate severity context for existing findings
+6. **Java RMI checks** — deserialization via BaRMIe/rmg.jar/beanshooter
+7. **GitLab public project exposure + user enumeration**
+8. **Asset inventory persistence (SQLite)** — required for delta reports and change detection
+9. **EPSS scoring** — enriches CVE findings with exploitation probability
+10. **Delta reports** — new vs resolved findings across scan runs
