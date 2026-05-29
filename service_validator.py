@@ -410,6 +410,15 @@ async def validate_cpanel(target_or_scan_address, port, timeout=5):
     return False
 
 
+async def validate_service_recon(scan_address, port, timeout=3):
+    """
+    service_recon handles its own per-port dispatch logic — any open port
+    in its list is worth running against. Skip the TCP probe and just
+    return True so run_scans is always invoked.
+    """
+    return True
+
+
 async def validate_service(service, target_or_scan_address, port):
     """
     Validates if a specific service is running on the given address:port.
@@ -423,6 +432,7 @@ async def validate_service(service, target_or_scan_address, port):
         'nextjs': validate_nextjs,
         'aem': validate_aem,
         'cpanel': validate_cpanel,
+        'service_recon': validate_service_recon,
     }
 
     validator = validators.get(service)

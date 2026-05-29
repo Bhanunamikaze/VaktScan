@@ -1050,6 +1050,40 @@ async def main(
             state_manager.update_phase("port_scanning_complete")
             domain_label = os.path.splitext(os.path.basename(targets_file))[0]
             save_port_scan_csv(open_ports_results, domain_label)
+
+            # Run httpx + nuclei on any open web ports found (80, 443, 8080, etc.)
+            # These ports have no specific service module — probe them directly.
+            web_port_set = set(full_service_ports.get("web", []))
+            web_probe_urls = []
+            for target_obj, data in open_ports_results:
+                for port in data.get("open_ports", []):
+                    if port in web_port_set:
+                        host = target_obj.get("display_target") or target_obj.get("scan_address")
+                        for scheme in ("http", "https"):
+                            from utils import format_url
+                            web_probe_urls.append(format_url(scheme, host, port))
+            web_probe_urls = sorted(set(web_probe_urls))
+
+            if web_probe_urls:
+                print(f"{Colors.CYAN}[*] Probing {len(web_probe_urls)} open web port URL(s) with httpx...{Colors.RESET}")
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                web_output_dir = os.path.join("recon_results", f"web_probe_{domain_label}_{timestamp}")
+                os.makedirs(web_output_dir, exist_ok=True)
+                http_runner = httpx_runner.HTTPXRunner(output_dir=web_output_dir)
+                httpx_data = await http_runner.run_httpx(web_probe_urls, concurrency)
+                if httpx_data:
+                    http_runner.save_csv(httpx_data, domain_label)
+                    alive_urls = sorted({e.get("url") for e in httpx_data if e.get("url")})
+                    print(f"{Colors.GREEN}[+] {len(alive_urls)} alive web URL(s) found.{Colors.RESET}")
+                    if alive_urls:
+                        nuclei_inst = nuclei_runner.NucleiRunner(output_dir=web_output_dir)
+                        nuclei_results = await nuclei_inst.run_nuclei(alive_urls)
+                        if nuclei_results:
+                            print(f"{Colors.GREEN}[+] Nuclei: {len(nuclei_results)} finding(s).{Colors.RESET}")
+                            for v in nuclei_results:
+                                state_manager.add_vulnerability(v)
+                else:
+                    print(f"{Colors.YELLOW}[!] No alive web services found on open web ports.{Colors.RESET}")
         else:
             print(f"[*] Using previously scanned port results...")
             open_ports_results = {}
