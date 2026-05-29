@@ -305,7 +305,7 @@ async def get_cpanel_version(client, origin_url):
 
 # ─── Identification (gate for all checks) ─────────────────────────────────────
 
-async def identify_cpanel_target(client, origin_url, version_info):
+async def identify_cpanel_target(client, origin_url, version_info, port=80):
     """
     Confidence-scored fingerprint. A target is "identified" once score ≥ 3.
 
@@ -371,7 +371,22 @@ async def identify_cpanel_target(client, origin_url, version_info):
         pass
 
     evidence = list(dict.fromkeys(evidence))
-    return {'identified': score >= 3, 'score': score, 'evidence': evidence[:10]}
+
+    # On generic HTTP/S ports (80, 443, 8080, 8443) a score of 3 is trivially
+    # reached by any server that 302-redirects /login/. Require at least one
+    # hard cPanel signal (cpsrvd Server header, x-cpanel response header,
+    # detected version, or magic_revision asset) before identifying.
+    generic_port = port in (80, 443, 8080, 8443)
+    if generic_port:
+        has_hard_signal = any(
+            ev.startswith(('header:cpsrvd', 'header:x-cpanel', 'version:', 'magic_revision:'))
+            for ev in evidence
+        )
+        identified = has_hard_signal and score >= 3
+    else:
+        identified = score >= 3
+
+    return {'identified': identified, 'score': score, 'evidence': evidence[:10]}
 
 
 # ─── Finding helper ───────────────────────────────────────────────────────────
@@ -851,6 +866,20 @@ async def check_sensitive_paths(client, ctx, baselines):
                     continue
 
         loc = r.headers.get('location', '')
+
+        # For redirects, only fire if the Location points to a recognisable
+        # cPanel endpoint (port or path marker). Generic HTTPS redirects
+        # (e.g. http→https on non-cPanel servers) produce 302s too and would
+        # otherwise flood findings.
+        if r.status_code in (301, 302):
+            _CPANEL_LOC = (
+                'cpanel', 'cpsess', 'whostmgr', 'webmail', 'webdisk', 'cpaneld',
+                ':2082', ':2083', ':2086', ':2087', ':2095', ':2096',
+                ':2077', ':2078', ':2079', ':2080', ':9998', ':9999',
+            )
+            if not loc or not any(m in loc.lower() for m in _CPANEL_LOC):
+                continue
+
         details = f"{label}. HTTP {r.status_code} from {path}."
         if loc:
             details += f" Location: {loc[:200]}"
@@ -1059,6 +1088,10 @@ async def check_crlf_injection(client, ctx):
     payload = f"/login/?goto_uri=%0d%0a{marker}:1"
     r = await _safe_get(client, origin + payload, timeout=5, follow_redirects=False)
     if r is None:
+        return out
+    # CRLF via goto_uri only works through the redirect Location header.
+    # Non-redirect responses (400, 404) cannot carry the injected header.
+    if r.status_code not in (301, 302, 303, 307, 308):
         return out
     if marker in str(r.headers).lower():
         out.append(_finding(
@@ -1500,7 +1533,7 @@ async def check_webmail_exposure(client, ctx):
         if r is None or r.status_code not in (200, 301, 302):
             continue
         body = (r.text or '')[:8192]
-        if product not in body.lower() and product != 'horde':
+        if product not in body.lower():
             continue
         m = ver_pat.search(body)
         version = m.group(1) if m else None
@@ -2225,7 +2258,7 @@ async def run_scans(target_obj, port, adjacent_open_ports=None):
 
         # Version + identification (gate every subsequent check).
         version_info = await get_cpanel_version(client, origin)
-        identity = await identify_cpanel_target(client, origin, version_info)
+        identity = await identify_cpanel_target(client, origin, version_info, ctx['port'])
         if not identity['identified']:
             return []
 

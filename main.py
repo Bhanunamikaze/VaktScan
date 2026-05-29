@@ -592,10 +592,9 @@ async def main(
                 }.get(f.get('status', 'INFO'), Colors.WHITE)
                 print(f"{status_color}[{f['status']}]{Colors.RESET} {f['vulnerability']} on {Colors.UNDERLINE}{f['target']}{Colors.RESET}")
                 print(f"    {Colors.GRAY}{f['details']}{Colors.RESET}")
-            if output_csv:
-                csv_file = save_results_to_csv(findings)
-                if csv_file:
-                    print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
+            csv_file = save_results_to_csv(findings)
+            if csv_file:
+                print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
         else:
             print(f"{Colors.GREEN}[*] DNS recon completed; no findings.{Colors.RESET}")
         return
@@ -1016,12 +1015,10 @@ async def main(
             print(f"{Colors.YELLOW}[*] Module filter: Scanning only {module_filter.capitalize()} services{Colors.RESET}")
             service_ports = {module_filter: service_ports.get(module_filter, [])}
         
-        # Default scan ports (standard VaktScan mode)
-        all_ports_to_scan = [
-            port
-            for ports in service_ports.values()
-            for port in ports
-        ]
+        # Scan all ports from every service definition (service modules + web + cpanel_adjacent + etc.)
+        all_ports_to_scan = list(set(
+            port for ports in full_service_ports.values() for port in ports
+        ))
         
         if custom_ports:
             try:
@@ -1049,6 +1046,8 @@ async def main(
             )
             print(f"{Colors.GREEN}[+] Port scanning complete.{Colors.RESET}")
             state_manager.update_phase("port_scanning_complete")
+            domain_label = os.path.splitext(os.path.basename(targets_file))[0]
+            save_port_scan_csv(open_ports_results, domain_label)
         else:
             print(f"[*] Using previously scanned port results...")
             open_ports_results = {}
@@ -1180,7 +1179,7 @@ async def main(
     else:
         print(f"{Colors.GREEN}[*] No vulnerabilities found.{Colors.RESET}")
     
-    if output_csv and final_vulnerabilities:
+    if final_vulnerabilities:
         csv_file = save_results_to_csv(final_vulnerabilities)
         if csv_file:
             print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
@@ -1225,7 +1224,9 @@ async def process_streaming_scan(
     if module_filter:
         service_ports = {module_filter: service_ports.get(module_filter, [])}
     
-    all_ports_to_scan = [port for ports in service_ports.values() for port in ports]
+    all_ports_to_scan = list(set(
+        port for ports in base_ports.values() for port in ports
+    ))
     if custom_ports:
         try:
             custom_port_list = [int(p.strip()) for p in custom_ports.split(',')]
@@ -1234,13 +1235,14 @@ async def process_streaming_scan(
         except ValueError: pass
 
     all_vulnerabilities = []
+    all_port_scan_results = []
     chunk_count = 0
-    
+
     try:
         async for target_chunk in process_targets_streaming(raw_targets, chunk_size):
             chunk_count += 1
             print(f"\n{Colors.BRIGHT_CYAN}=== Processing Chunk {chunk_count}/{total_chunks} ({len(target_chunk):,} targets) ==={Colors.RESET}")
-            
+
             open_ports_results = await scan_ports(
                 target_chunk,
                 all_ports_to_scan,
@@ -1249,6 +1251,7 @@ async def process_streaming_scan(
                 connect_timeout=connect_timeout,
                 retries=port_retries,
             )
+            all_port_scan_results.extend(open_ports_results)
             chunk_vulnerabilities = await process_chunk_services(open_ports_results, service_ports, module_filter, custom_ports, state_manager)
             all_vulnerabilities.extend(chunk_vulnerabilities)
             
@@ -1260,7 +1263,10 @@ async def process_streaming_scan(
 
     except KeyboardInterrupt:
         print(f"\n[!] Streaming scan interrupted.")
-    
+
+    if all_port_scan_results:
+        save_port_scan_csv(all_port_scan_results, "streaming")
+
     await print_final_results(all_vulnerabilities, output_csv)
     return all_vulnerabilities
 
@@ -1319,7 +1325,7 @@ async def print_final_results(all_vulnerabilities, output_csv):
             print(f"[!] {result['status']}: {result['vulnerability']} on {result['target']}")
     else:
         print("[*] No vulnerabilities found.")
-    if output_csv and final_vulnerabilities:
+    if final_vulnerabilities:
         save_results_to_csv(final_vulnerabilities)
 
 if __name__ == "__main__":
