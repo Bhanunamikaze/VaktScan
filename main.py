@@ -42,6 +42,7 @@ from modules import (
     aem,
     cpanel,
     dns_recon,
+    service_recon,
 )
 
 # Map service names to their corresponding modules
@@ -53,6 +54,7 @@ SERVICE_TO_MODULE = {
     "nextjs": react_to_shell,
     "aem": aem,
     "cpanel": cpanel,
+    "service_recon": service_recon,
 }
 
 
