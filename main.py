@@ -4,6 +4,7 @@ import sys
 import os
 import signal
 import csv
+import json
 import time
 import ipaddress
 
@@ -44,6 +45,7 @@ from modules import (
     dns_recon,
     service_recon,
     web_checks,
+    cisa_kev,
 )
 
 # Map service names to their corresponding modules
@@ -212,9 +214,60 @@ def save_results_to_csv(vulnerabilities, filename=None):
         
         print(f"{Colors.GREEN}[+] Results saved to {filename}{Colors.RESET}")
         return filename
-        
+
     except Exception as e:
         print(f"{Colors.RED}[!] Error saving CSV file: {e}{Colors.RESET}")
+        return None
+
+def save_results_to_json(vulnerabilities, filename=None):
+    """Save vulnerability results to JSON format."""
+    if not filename:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"scan_results_{timestamp}.json"
+
+    fields = [
+        'Timestamp', 'Status', 'Vulnerability', 'Hostname', 'IP Address',
+        'Port', 'URL', 'Payload_URL', 'Module', 'Service_Version',
+        'Severity', 'Details', 'HTTP_Status', 'Page_Title', 'Content_Length',
+    ]
+
+    try:
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        records = []
+        for vuln in vulnerabilities:
+            hostname = vuln.get('target', 'N/A')
+            try:
+                ipaddress.ip_address(hostname)
+                hostname = ''
+            except ValueError:
+                pass
+
+            records.append({
+                'Timestamp':       timestamp,
+                'Status':          vuln.get('status', 'UNKNOWN'),
+                'Vulnerability':   vuln.get('vulnerability', 'N/A'),
+                'Hostname':        hostname,
+                'IP Address':      vuln.get('resolved_ip', 'N/A'),
+                'Port':            vuln.get('port', 'N/A'),
+                'URL':             vuln.get('url', 'N/A'),
+                'Payload_URL':     vuln.get('payload_url', 'N/A'),
+                'Module':          vuln.get('module', 'N/A'),
+                'Service_Version': vuln.get('service_version', 'N/A'),
+                'Severity':        vuln.get('severity', 'N/A'),
+                'Details':         vuln.get('details', 'N/A'),
+                'HTTP_Status':     str(vuln.get('http_status', 'N/A')),
+                'Page_Title':      vuln.get('page_title', 'N/A'),
+                'Content_Length':  str(vuln.get('content_length', 'N/A')),
+            })
+
+        with open(filename, 'w', encoding='utf-8') as jf:
+            json.dump(records, jf, indent=2)
+
+        print(f"{Colors.GREEN}[+] Results saved to {filename}{Colors.RESET}")
+        return filename
+
+    except Exception as e:
+        print(f"{Colors.RED}[!] Error saving JSON file: {e}{Colors.RESET}")
         return None
 
 async def run_recon_followups(
@@ -598,6 +651,7 @@ async def main(
             csv_file = save_results_to_csv(findings)
             if csv_file:
                 print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
+            save_results_to_json(findings)
         else:
             print(f"{Colors.GREEN}[*] DNS recon completed; no findings.{Colors.RESET}")
         return
@@ -1221,11 +1275,15 @@ async def main(
     else:
         print(f"{Colors.GREEN}[*] No vulnerabilities found.{Colors.RESET}")
     
+    final_vulnerabilities = await cisa_kev.enrich_findings_with_kev(final_vulnerabilities)
+    print(f"{Colors.CYAN}[*] CISA KEV cross-reference complete.{Colors.RESET}")
+
     if final_vulnerabilities:
         csv_file = save_results_to_csv(final_vulnerabilities)
         if csv_file:
             print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
-    
+        save_results_to_json(final_vulnerabilities)
+
     state_manager.mark_completed()
     print(f"\n{state_manager.get_scan_summary()}")
     print(f"{Colors.BRIGHT_GREEN}[*] Scan finished.{Colors.RESET}")
@@ -1361,6 +1419,8 @@ async def process_chunk_services(open_ports_results, service_ports, module_filte
 
 async def print_final_results(all_vulnerabilities, output_csv):
     final_vulnerabilities = deduplicate_vulnerabilities(all_vulnerabilities)
+    final_vulnerabilities = await cisa_kev.enrich_findings_with_kev(final_vulnerabilities)
+    print(f"[*] CISA KEV cross-reference complete.")
     print(f"\n{Colors.BRIGHT_CYAN}=== Final Vulnerability Results ==={Colors.RESET}")
     if final_vulnerabilities:
         for result in final_vulnerabilities:
@@ -1369,6 +1429,7 @@ async def print_final_results(all_vulnerabilities, output_csv):
         print("[*] No vulnerabilities found.")
     if final_vulnerabilities:
         save_results_to_csv(final_vulnerabilities)
+        save_results_to_json(final_vulnerabilities)
 
 if __name__ == "__main__":
     if len(sys.argv) == 1 or '-h' in sys.argv or '--help' in sys.argv:
