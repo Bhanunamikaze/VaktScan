@@ -46,7 +46,9 @@ from modules import (
     service_recon,
     web_checks,
     cisa_kev,
+    epss,
     jenkins,
+    passive_intel,
 )
 
 # Map service names to their corresponding modules
@@ -1279,6 +1281,8 @@ async def main(
     
     final_vulnerabilities = await cisa_kev.enrich_findings_with_kev(final_vulnerabilities)
     print(f"{Colors.CYAN}[*] CISA KEV cross-reference complete.{Colors.RESET}")
+    final_vulnerabilities = await epss.enrich_findings_with_epss(final_vulnerabilities)
+    final_vulnerabilities = await passive_intel.enrich_findings_with_passive_intel(final_vulnerabilities)
 
     if final_vulnerabilities:
         csv_file = save_results_to_csv(final_vulnerabilities)
@@ -1423,6 +1427,8 @@ async def print_final_results(all_vulnerabilities, output_csv):
     final_vulnerabilities = deduplicate_vulnerabilities(all_vulnerabilities)
     final_vulnerabilities = await cisa_kev.enrich_findings_with_kev(final_vulnerabilities)
     print(f"[*] CISA KEV cross-reference complete.")
+    final_vulnerabilities = await epss.enrich_findings_with_epss(final_vulnerabilities)
+    final_vulnerabilities = await passive_intel.enrich_findings_with_passive_intel(final_vulnerabilities)
     print(f"\n{Colors.BRIGHT_CYAN}=== Final Vulnerability Results ==={Colors.RESET}")
     if final_vulnerabilities:
         for result in final_vulnerabilities:

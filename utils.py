@@ -238,8 +238,8 @@ def get_service_ports():
             21, 22, 25, 53, 88, 111, 123, 135,
             # SMB / SNMP / LDAP
             139, 161, 389, 445, 465, 587, 593, 636,
-            # Rsync / VMware / MSSQL / Oracle / NFS / ZooKeeper / Docker
-            623, 873, 902, 1433, 1521, 2049, 2181, 2375, 2376,
+            # Rsync / VMware / Java RMI / MSSQL / Oracle / NFS / ZooKeeper / Docker
+            623, 873, 902, 1098, 1099, 1433, 1521, 2049, 2181, 2375, 2376,
             # etcd / Loki / MySQL / RDP / GlassFish / PostgreSQL
             2379, 2380, 3100, 3306, 3389, 4848, 5432,
             # AMQP / VNC / CouchDB / WinRM

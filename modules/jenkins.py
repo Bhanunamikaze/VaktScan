@@ -9,7 +9,6 @@ CSRF protection, job/queue visibility, log/audit access.
 """
 
 import asyncio
-import re
 import httpx
 
 MODULE_NAME = 'Jenkins'
@@ -231,7 +230,7 @@ async def check_cve_2024_23897(client, origin):
     return False, None
 
 
-async def spray_default_creds(host, port, protocol, origin):
+async def spray_default_creds(origin):
     """Try common default credentials via HTTP Basic Auth."""
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
         for user, password in DEFAULT_CREDS:
@@ -244,7 +243,7 @@ async def spray_default_creds(host, port, protocol, origin):
     return None, None
 
 
-async def run_scans(target_obj, port, **_kwargs):
+async def run_scans(target_obj, port, **_):
     host = target_obj['scan_address']
     resolved_ip = target_obj.get('resolved_ip', host)
     display = target_obj.get('display_target', host)
@@ -420,7 +419,7 @@ async def run_scans(target_obj, port, **_kwargs):
             ))
 
         # ── Default credential spray ──────────────────────────────────────
-        user, password = await spray_default_creds(host, port, protocol, origin)
+        user, password = await spray_default_creds(origin)
         if user:
             findings.append(_finding(
                 'VULNERABLE', 'CRITICAL', f'Jenkins Default Credentials Valid ({user}:{password})',

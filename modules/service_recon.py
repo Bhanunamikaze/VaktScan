@@ -11,7 +11,8 @@ Covers: FTP, SSH, SMTP, DNS, Kerberos, RPC, NTP, SMB, SNMP, LDAP, MySQL, Postgre
         ZooKeeper, Kafka, HashiCorp Consul, HashiCorp Vault, MinIO, Apache Solr,
         Apache Tomcat, WebLogic, JBoss/WildFly, GlassFish, Alertmanager, Loki,
         Jaeger, Zipkin, Splunk, Traefik, Portainer, RabbitMQ Management, IPMI,
-        Nexus Repository, Artifactory, TeamCity, SonarQube, Istio/Envoy admin.
+        Nexus Repository, Artifactory, TeamCity, SonarQube, Istio/Envoy admin,
+        Java RMI Registry.
 """
 
 import asyncio
@@ -2369,6 +2370,44 @@ async def check_gitlab(host, port, target, resolved_ip):
     return out
 
 
+# ─── Java RMI (1099, 1098) ────────────────────────────────────────────────────
+
+async def check_java_rmi(host, port, target, resolved_ip):
+    out = []
+    # TCP: RMI registry magic header check
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=5)
+        banner = await asyncio.wait_for(reader.read(64), timeout=3)
+        writer.close()
+        if banner and (b'JRMI' in banner or b'\x4a\x52\x4d\x49' in banner or len(banner) > 4):
+            out.append(_finding('VULNERABLE', 'HIGH', 'Java RMI Registry Exposed',
+                f'Java RMI registry responding on port {port}. Potential deserialization attack surface. '
+                f'Use BaRMIe/rmg.jar/beanshooter for further enumeration.',
+                target, resolved_ip, port, url=f'rmi://{host}:{port}'))
+    except Exception:
+        pass
+
+    # BaRMIe if available
+    if _bin('BaRMIe_v1.01.jar') or _bin('java'):
+        jar = _bin('BaRMIe_v1.01.jar')
+        if jar:
+            stdout, _, rc = await _run(['java', '-jar', jar, '-enum', host, str(port)], timeout=30)
+            if stdout and rc == 0:
+                out.append(_finding('POTENTIAL', 'HIGH', 'Java RMI BaRMIe Enumeration',
+                    f'BaRMIe output:\n{stdout[:400]}',
+                    target, resolved_ip, port, url=f'rmi://{host}:{port}'))
+
+    # rmg.jar if available
+    if _bin('rmg.jar') or shutil.which('rmg.jar'):
+        stdout, _, rc = await _run(['java', '-jar', '/usr/local/bin/rmg.jar', 'enum', host, str(port)], timeout=30)
+        if stdout and rc == 0 and 'rmg' in stdout.lower():
+            out.append(_finding('POTENTIAL', 'HIGH', 'Java RMI rmg Enumeration',
+                f'remote-method-guesser output:\n{stdout[:400]}',
+                target, resolved_ip, port, url=f'rmi://{host}:{port}'))
+
+    return out
+
+
 # ─── Fingerprint helper ──────────────────────────────────────────────────────
 
 async def _fingerprint(host, port, timeout=5):
@@ -2450,6 +2489,8 @@ PORT_DISPATCH = {
     636:   check_ldap,
     873:   check_rsync,
     902:   check_vmware,
+    1098:  check_java_rmi,
+    1099:  check_java_rmi,
     1433:  check_mssql,
     1521:  check_oracle,
     2049:  check_nfs,
