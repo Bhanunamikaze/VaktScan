@@ -46,6 +46,7 @@ from modules import (
     service_recon,
     web_checks,
     cisa_kev,
+    jenkins,
 )
 
 # Map service names to their corresponding modules
@@ -58,6 +59,7 @@ SERVICE_TO_MODULE = {
     "aem": aem,
     "cpanel": cpanel,
     "service_recon": service_recon,
+    "jenkins": jenkins,
 }
 
 

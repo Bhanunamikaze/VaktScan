@@ -232,6 +232,7 @@ def get_service_ports():
             8053,                      # PowerDNS web UI
             953,                       # BIND control / dnsadmin
         ],
+        "jenkins": [8080, 8090, 8443, 8888],
         "service_recon": [
             # FTP / SSH / SMTP / DNS / Kerberos / RPC / NTP
             21, 22, 25, 53, 88, 111, 123, 135,

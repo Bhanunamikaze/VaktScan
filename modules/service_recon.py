@@ -2476,8 +2476,7 @@ PORT_DISPATCH = {
     7002:  check_weblogic,
     8000:  check_splunk,
     8009:  check_ajp,
-    8080:  [check_spring_actuator, check_jenkins, check_jenkins_cves,
-            check_jira, check_tomcat, check_traefik],
+    8080:  [check_spring_actuator, check_jira, check_tomcat, check_traefik],
     8081:  check_nexus,
     8082:  check_artifactory,
     8088:  check_hadoop_yarn,
@@ -2521,8 +2520,7 @@ SHARED_PORTS = {80, 443, 8080, 8081, 8082, 8083, 8090, 8443, 9000, 9001, 9443}
 CHECK_REQUIRES_TAG = {
     check_spring_actuator: 'spring',
     check_tomcat:          'tomcat',
-    check_jenkins:         'jenkins',
-    check_jenkins_cves:    'jenkins',
+
     check_jira:            'jira',
     check_confluence:      'confluence',
     check_gitlab:          'gitlab',

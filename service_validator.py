@@ -410,6 +410,22 @@ async def validate_cpanel(target_or_scan_address, port, timeout=5):
     return False
 
 
+async def validate_jenkins(scan_address, port, timeout=5):
+    """Validate Jenkins by checking X-Jenkins header or body fingerprint."""
+    for scheme in ('http', 'https'):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
+                r = await client.get(f'{scheme}://{scan_address}:{port}/')
+                if 'X-Jenkins' in r.headers or 'X-Hudson' in r.headers:
+                    return True
+                body = (r.text or '')[:4096].lower()
+                if 'jenkins' in body or 'hudson' in body:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 async def validate_service_recon(scan_address, port, timeout=3):
     """
     service_recon handles its own per-port dispatch logic — any open port
@@ -432,6 +448,7 @@ async def validate_service(service, target_or_scan_address, port):
         'nextjs': validate_nextjs,
         'aem': validate_aem,
         'cpanel': validate_cpanel,
+        'jenkins': validate_jenkins,
         'service_recon': validate_service_recon,
     }
 
