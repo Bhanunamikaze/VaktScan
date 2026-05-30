@@ -1106,7 +1106,18 @@ async def check_consul(host, port, target, resolved_ip):
         # /v1/catalog/services — service registry listing
         try:
             r = await client.get(f'{scheme}://{host}:{port}/v1/catalog/services')
+            # Confirm Consul's specific response: a dict where values are arrays (service tags)
+            is_consul_catalog = False
             if r.status_code == 200:
+                try:
+                    data = r.json()
+                    if isinstance(data, dict):
+                        # Consul catalog: {"consul": [], "service1": ["tag1"], ...}
+                        if 'consul' in data or all(isinstance(v, list) for v in data.values()):
+                            is_consul_catalog = True
+                except Exception:
+                    pass
+            if is_consul_catalog:
                 out.append(_finding('VULNERABLE', 'HIGH', 'HashiCorp Consul Service Catalog Exposed',
                     'Consul /v1/catalog/services accessible without ACL token — '
                     'full service registry exposed.',
@@ -1175,9 +1186,16 @@ async def check_minio(host, port, target, resolved_ip):
         # Check for MinIO at root
         try:
             r = await client.get(f'http://{host}:{port}/')
-            if r.status_code in (200, 403) and any(
+            server_hdr = r.headers.get('server', '').lower()
+            has_amz_header = any('x-amz' in h.lower() for h in r.headers)
+            body_has_minio = any(
                 w in r.text.lower() for w in ('minio', 'listbuckets', 'buckets', 'xmlbody')
-            ):
+            )
+            # Require MinIO body keywords AND (x-amz header or 'minio' in Server header)
+            is_minio = r.status_code in (200, 403) and (
+                body_has_minio and (has_amz_header or 'minio' in server_hdr)
+            )
+            if is_minio:
                 out.append(_finding('INFO', 'INFO', 'MinIO Object Storage Detected',
                     f'MinIO detected at http://{host}:{port}/ (HTTP {r.status_code}).',
                     target, resolved_ip, port,
@@ -1267,6 +1285,30 @@ async def check_tomcat(host, port, target, resolved_ip):
     out = []
     scheme = 'https' if port == 8443 else 'http'
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+        # Pre-check: confirm Tomcat is actually running via root response headers or body
+        try:
+            root = await client.get(f'{scheme}://{host}:{port}/')
+            server_hdr = root.headers.get('server', '').lower()
+            root_body = root.text.lower()
+            is_tomcat = any(w in server_hdr for w in ('apache-coyote', 'apache tomcat', 'coyote'))
+            if not is_tomcat:
+                is_tomcat = any(w in root_body for w in ('apache tomcat', 'coyote', 'apache-coyote'))
+            # Also accept a 401 from /manager/html with Tomcat in WWW-Authenticate or body
+            if not is_tomcat:
+                try:
+                    mgr = await client.get(f'{scheme}://{host}:{port}/manager/html')
+                    www_auth = mgr.headers.get('www-authenticate', '').lower()
+                    if mgr.status_code == 401 and (
+                        'tomcat' in www_auth or 'tomcat' in mgr.text.lower()
+                    ):
+                        is_tomcat = True
+                except Exception:
+                    pass
+            if not is_tomcat:
+                return out
+        except Exception:
+            return out
+
         # /manager/html — unauthenticated access
         try:
             r = await client.get(f'{scheme}://{host}:{port}/manager/html')
@@ -1461,7 +1503,8 @@ async def check_alertmanager(host, port, target, resolved_ip):
 
         try:
             r = await client.get(f'http://{host}:{port}/api/v2/alerts')
-            if r.status_code == 200:
+            # Alertmanager always returns a JSON array — confirm body starts with '['
+            if r.status_code == 200 and r.text.strip().startswith('['):
                 out.append(_finding('VULNERABLE', 'HIGH', 'Alertmanager API /alerts Unauthenticated',
                     'Alertmanager /api/v2/alerts accessible without auth — '
                     'active alerts can be read and silenced.',
@@ -1505,7 +1548,10 @@ async def check_loki(host, port, target, resolved_ip):
             r = await client.get(
                 f'http://{host}:{port}/loki/api/v1/query'
                 f'?query=%7Bjob%3D%22%22%7D')
-            if r.status_code == 200:
+            # Confirm Loki query format: response must contain 'streams' or 'result'
+            if r.status_code == 200 and any(
+                w in r.text.lower() for w in ('streams', 'result')
+            ):
                 out.append(_finding('VULNERABLE', 'HIGH', 'Loki Unauthenticated Log Query',
                     'Loki /loki/api/v1/query accessible without auth — '
                     'arbitrary log queries possible.',
@@ -1524,7 +1570,16 @@ async def check_jaeger(host, port, target, resolved_ip):
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
         try:
             r = await client.get(f'http://{host}:{port}/api/services')
+            # Jaeger's specific response format: {"data": [...], "total": N, ...}
+            is_jaeger = False
             if r.status_code == 200:
+                try:
+                    data = r.json()
+                    if isinstance(data, dict) and 'data' in data and 'total' in data:
+                        is_jaeger = True
+                except Exception:
+                    pass
+            if is_jaeger:
                 out.append(_finding('VULNERABLE', 'HIGH', 'Jaeger API /services Unauthenticated',
                     'Jaeger /api/services accessible without auth — '
                     'full service list from distributed tracing exposed.',
@@ -1536,7 +1591,16 @@ async def check_jaeger(host, port, target, resolved_ip):
 
         try:
             r = await client.get(f'http://{host}:{port}/api/traces?service=vaktscan-probe')
+            # Confirm Jaeger trace format: {"data": [...], "total": N, ...}
+            is_jaeger_traces = False
             if r.status_code == 200:
+                try:
+                    data = r.json()
+                    if isinstance(data, dict) and 'data' in data and 'total' in data:
+                        is_jaeger_traces = True
+                except Exception:
+                    pass
+            if is_jaeger_traces:
                 out.append(_finding('VULNERABLE', 'HIGH', 'Jaeger API /traces Unauthenticated',
                     'Jaeger /api/traces accessible without auth — '
                     'distributed trace data exposed.',
@@ -1555,7 +1619,18 @@ async def check_zipkin(host, port, target, resolved_ip):
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
         try:
             r = await client.get(f'http://{host}:{port}/api/v2/services')
+            # Zipkin returns a JSON array of service name strings — confirm structure
+            is_zipkin = False
             if r.status_code == 200:
+                try:
+                    data = r.json()
+                    if isinstance(data, list) and all(isinstance(s, str) for s in data):
+                        is_zipkin = True
+                except Exception:
+                    # Empty array '[]' also confirms Zipkin
+                    if r.text.strip() in ('[]', '[ ]'):
+                        is_zipkin = True
+            if is_zipkin:
                 out.append(_finding('VULNERABLE', 'HIGH', 'Zipkin API /services Unauthenticated',
                     'Zipkin /api/v2/services accessible without auth — '
                     'service topology from distributed tracing exposed.',
@@ -1611,7 +1686,15 @@ async def check_traefik(host, port, target, resolved_ip):
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
         try:
             r = await client.get(f'http://{host}:{port}/dashboard/')
-            if r.status_code == 200 and any(w in r.text.lower() for w in ('traefik', 'dashboard')):
+            server_hdr = r.headers.get('server', '').lower()
+            powered_hdr = r.headers.get('x-powered-by', '').lower()
+            body_lower = r.text.lower()
+            is_traefik = (
+                'traefik' in body_lower
+                or 'traefik' in server_hdr
+                or 'traefik' in powered_hdr
+            )
+            if r.status_code == 200 and is_traefik:
                 out.append(_finding('VULNERABLE', 'HIGH', 'Traefik Dashboard Unauthenticated',
                     'Traefik /dashboard/ accessible without auth — '
                     'routing configuration and backend services exposed.',
@@ -1623,7 +1706,11 @@ async def check_traefik(host, port, target, resolved_ip):
 
         try:
             r = await client.get(f'http://{host}:{port}/api/rawdata')
-            if r.status_code == 200:
+            body_lower = r.text.lower()
+            has_routing_data = any(
+                w in body_lower for w in ('routers', 'services', 'middlewares')
+            )
+            if r.status_code == 200 and has_routing_data:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Traefik /api/rawdata Unauthenticated',
                     'Traefik /api/rawdata accessible without auth — '
                     'full routing table with all backends and middleware exposed.',
@@ -1643,9 +1730,19 @@ async def check_portainer(host, port, target, resolved_ip):
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
         try:
             r = await client.get(f'{scheme}://{host}:{port}/api/status')
-            if r.status_code == 200 and any(
-                w in r.text.lower() for w in ('portainer', 'version', 'instanceid')
-            ):
+            # Confirm it's actually Portainer: 'portainer' in body OR JSON has 'Version' key
+            is_portainer = False
+            if r.status_code == 200:
+                if 'portainer' in r.text.lower() or 'instanceid' in r.text.lower():
+                    is_portainer = True
+                else:
+                    try:
+                        data = r.json()
+                        if isinstance(data, dict) and 'Version' in data:
+                            is_portainer = True
+                    except Exception:
+                        pass
+            if is_portainer:
                 out.append(_finding('INFO', 'INFO', 'Portainer API Detected',
                     f'Portainer /api/status accessible (HTTP {r.status_code}): {r.text[:200]}',
                     target, resolved_ip, port,
@@ -1842,9 +1939,14 @@ async def check_teamcity(host, port, target, resolved_ip):
         # CVE-2024-27198 — authentication bypass to /app/rest/users
         try:
             r = await client.get(f'http://{host}:{port}/app/rest/users')
-            if r.status_code == 200 and any(
-                w in r.text.lower() for w in ('user', 'username', 'id')
-            ):
+            body_lower = r.text.lower()
+            # Require 'user' AND ('username' or 'href') — TeamCity's user list structure
+            is_tc_users = (
+                r.status_code == 200
+                and 'user' in body_lower
+                and any(w in body_lower for w in ('username', 'href'))
+            )
+            if is_tc_users:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'TeamCity CVE-2024-27198 Auth Bypass',
                     'TeamCity /app/rest/users accessible without auth — '
                     'CVE-2024-27198 authentication bypass, full user listing exposed.',
@@ -1865,9 +1967,11 @@ async def check_sonarqube(host, port, target, resolved_ip):
         # /api/system/status — service detection and version
         try:
             r = await client.get(f'http://{host}:{port}/api/system/status')
-            if r.status_code == 200 and any(
-                w in r.text.lower() for w in ('sonarqube', 'status', 'version')
-            ):
+            # Require 'sonarqube' or the specific '"status"' JSON key to confirm service identity
+            is_sonar = r.status_code == 200 and any(
+                w in r.text.lower() for w in ('sonarqube', '"status"')
+            )
+            if is_sonar:
                 out.append(_finding('INFO', 'INFO', 'SonarQube Detected',
                     f'SonarQube /api/system/status accessible: {r.text[:200]}',
                     target, resolved_ip, port,
@@ -1881,9 +1985,13 @@ async def check_sonarqube(host, port, target, resolved_ip):
         # /api/projects/search — project source code disclosure
         try:
             r = await client.get(f'http://{host}:{port}/api/projects/search')
-            if r.status_code == 200 and any(
-                w in r.text.lower() for w in ('components', 'key', 'paging')
-            ):
+            # Require both 'components' and 'paging' keys — Consul's specific response structure
+            is_sonar_projects = False
+            if r.status_code == 200:
+                body_lower = r.text.lower()
+                if 'components' in body_lower and 'paging' in body_lower:
+                    is_sonar_projects = True
+            if is_sonar_projects:
                 out.append(_finding('VULNERABLE', 'HIGH', 'SonarQube Projects Unauthenticated',
                     'SonarQube /api/projects/search accessible without auth — '
                     'project source and analysis data exposed.',
@@ -1947,6 +2055,60 @@ async def check_envoy_admin(host, port, target, resolved_ip):
             except Exception:
                 pass
     return out
+
+
+# ─── Fingerprint helper ──────────────────────────────────────────────────────
+
+async def _fingerprint(host, port, timeout=5):
+    """
+    Single root-URL probe to identify what's actually running.
+    Returns a set of lowercase technology tags based on Server header,
+    X-Powered-By, response body keywords, and specific paths.
+    """
+    tags = set()
+    for scheme in ('http', 'https'):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, verify=False, follow_redirects=True) as client:
+                r = await client.get(f'{scheme}://{host}:{port}/')
+                server = r.headers.get('server', '').lower()
+                powered = r.headers.get('x-powered-by', '').lower()
+                body = (r.text or '')[:4096].lower()
+                blob = server + ' ' + powered + ' ' + body
+                for tag, markers in [
+                    ('spring',        ['spring', 'actuator', 'whitelabel error']),
+                    ('tomcat',        ['apache tomcat', 'apache-coyote', 'coyote']),
+                    ('jenkins',       ['jenkins', 'hudson']),
+                    ('traefik',       ['traefik']),
+                    ('jboss',         ['jboss', 'wildfly', 'undertow', 'jbossas']),
+                    ('yarn',          ['hadoop', 'yarn', 'resourcemanager']),
+                    ('sonarqube',     ['sonarqube', 'sonar']),
+                    ('portainer',     ['portainer']),
+                    ('minio',         ['minio', 'x-amz-request-id']),
+                    ('consul',        ['consul', 'hashicorp']),
+                    ('grafana',       ['grafana']),
+                    ('jupyter',       ['jupyter', 'ipython']),
+                    ('splunk',        ['splunk']),
+                    ('teamcity',      ['teamcity', 'jetbrains']),
+                    ('nexus',         ['nexus', 'sonatype']),
+                    ('artifactory',   ['artifactory', 'jfrog']),
+                    ('rabbitmq',      ['rabbitmq']),
+                    ('glassfish',     ['glassfish', 'payara']),
+                    ('weblogic',      ['weblogic', 'oracle weblogic']),
+                    ('zipkin',        ['zipkin']),
+                    ('loki',          ['loki']),
+                    ('jaeger',        ['jaeger']),
+                    ('alertmanager',  ['alertmanager']),
+                ]:
+                    if any(m in blob for m in markers):
+                        tags.add(tag)
+                # Check for x-amz-* headers (MinIO / S3-compatible)
+                for h in r.headers:
+                    if 'x-amz' in h.lower():
+                        tags.add('minio')
+                break
+        except Exception:
+            continue
+    return tags
 
 
 # ─── Dispatch ────────────────────────────────────────────────────────────────
@@ -2034,6 +2196,34 @@ PORT_DISPATCH = {
 }
 
 
+# Ports where multiple services compete — fingerprint before running checks
+SHARED_PORTS = {8080, 8081, 8082, 8083, 8090, 8443, 9000, 9001, 9443}
+
+# Map check function → required fingerprint tag (None = always run)
+CHECK_REQUIRES_TAG = {
+    check_spring_actuator: 'spring',
+    check_tomcat:          'tomcat',
+    check_jenkins:         'jenkins',
+    check_traefik:         'traefik',
+    check_jboss:           'jboss',
+    check_hadoop_yarn:     'yarn',
+    check_sonarqube:       'sonarqube',
+    check_portainer:       'portainer',
+    check_minio:           'minio',
+    check_splunk:          'splunk',
+    check_teamcity:        'teamcity',
+    check_nexus:           'nexus',
+    check_artifactory:     'artifactory',
+    check_zipkin:          'zipkin',
+    check_loki:            'loki',
+    check_jaeger:          'jaeger',
+    check_alertmanager:    'alertmanager',
+    check_glassfish:       'glassfish',
+    check_weblogic:        'weblogic',
+    check_rabbitmq:        'rabbitmq',
+}
+
+
 async def run_scans(target_obj, port, **_kwargs):
     scan_address = target_obj['scan_address']
     resolved_ip  = target_obj.get('resolved_ip', scan_address)
@@ -2042,6 +2232,13 @@ async def run_scans(target_obj, port, **_kwargs):
     check_fn = PORT_DISPATCH.get(port)
     if check_fn is None:
         return []
+
+    # On shared ports, fingerprint first and skip if the service tag is absent
+    required_tag = CHECK_REQUIRES_TAG.get(check_fn)
+    if required_tag and port in SHARED_PORTS:
+        tags = await _fingerprint(scan_address, port)
+        if required_tag not in tags:
+            return []
 
     try:
         findings = await check_fn(scan_address, port, display, resolved_ip)

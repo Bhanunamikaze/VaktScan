@@ -142,29 +142,29 @@ async def check_security_headers(url: str, client: httpx.AsyncClient) -> list[di
             ),
         ))
 
-    # Missing X-Content-Type-Options
-    if "x-content-type-options" not in h:
+    # Combine all INFO-level missing headers into a single finding to reduce noise
+    _info_headers = {
+        "x-content-type-options": (
+            "X-Content-Type-Options (absent: browsers may MIME-sniff responses)"
+        ),
+        "referrer-policy": (
+            "Referrer-Policy (absent: full Referer URLs may leak to third-party origins)"
+        ),
+        "permissions-policy": (
+            "Permissions-Policy (absent: browser feature access is unrestricted)"
+        ),
+    }
+    missing_info_headers = [desc for hdr, desc in _info_headers.items() if hdr not in h]
+    if missing_info_headers:
         findings.append(_make_finding(
             **base,
-            vulnerability="Missing X-Content-Type-Options Header",
+            vulnerability="Security Headers Missing",
             status="INFO",
             severity="LOW",
             details=(
-                "The X-Content-Type-Options: nosniff header is absent. Browsers may MIME-sniff "
-                "responses, potentially executing scripts embedded in non-script responses."
-            ),
-        ))
-
-    # Missing Referrer-Policy
-    if "referrer-policy" not in h:
-        findings.append(_make_finding(
-            **base,
-            vulnerability="Missing Referrer-Policy Header",
-            status="INFO",
-            severity="LOW",
-            details=(
-                "The Referrer-Policy header is not set. Full Referer URLs (which may contain "
-                "sensitive path/query parameters) will be leaked to third-party origins."
+                "The following informational security headers are not set: "
+                + "; ".join(missing_info_headers)
+                + "."
             ),
         ))
 
@@ -267,6 +267,11 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
         # robots.txt — INFO regardless, enumerate disallowed
         if path == "/robots.txt":
             if status_code == 200 and len(body) > 10:
+                # Require it actually looks like robots.txt, not a catch-all HTML page
+                if "<html" in body.lower():
+                    return
+                if not re.search(r"(?i)^user-agent:", body, re.MULTILINE):
+                    return
                 disallowed = re.findall(r"(?im)^disallow:\s*(.+)$", body)
                 details = "robots.txt is publicly accessible."
                 if disallowed:
@@ -308,6 +313,9 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
         # crossdomain.xml — check for wildcard
         if path == "/crossdomain.xml":
             if status_code == 200 and len(body) > 10:
+                # Only fire if body actually contains a cross-domain policy element
+                if "<cross-domain-policy" not in body.lower():
+                    return
                 wildcard = 'domain="*"' in body or "domain='*'" in body
                 details = "crossdomain.xml is accessible."
                 sev = "MEDIUM"
@@ -334,6 +342,59 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
 
         # Generic sensitive file — only fire if 200 and not an error page
         if status_code == 200 and not _is_error_page(body, status_code):
+
+            # ── Content validation to eliminate catch-all false positives ──────
+
+            # .git/HEAD — require canonical git HEAD content
+            if path == "/.git/HEAD":
+                if len(body) < 10:
+                    return
+                if not re.search(r"ref: refs/", body):
+                    return
+
+            # .git/config — require [core] section typical of git config
+            if path == "/.git/config":
+                if "[core]" not in body and "[remote" not in body:
+                    return
+
+            # .env variants — require at least one KEY=VALUE line
+            if path in ("/.env", "/.env.local", "/.env.production", "/.env.backup"):
+                if not re.search(r"^[A-Z_][A-Z0-9_]*=.+", body, re.MULTILINE):
+                    return
+
+            # Backup / archive files — require binary content type or substantial size
+            _backup_exts = (".zip", ".tar.gz", ".bak", ".old")
+            if any(path.endswith(ext) for ext in _backup_exts):
+                content_type = resp.headers.get("content-type", "").lower()
+                content_length_bytes = len(resp.content)
+                _binary_types = (
+                    "application/zip", "application/x-tar",
+                    "application/octet-stream", "application/x-gzip",
+                )
+                is_binary_ct = any(t in content_type for t in _binary_types)
+                is_large_enough = content_length_bytes > 1024
+                if not (is_binary_ct or is_large_enough):
+                    return
+                if "text/html" in content_type or "<html" in body.lower():
+                    return
+
+            # phpinfo.php / info.php — require PHP output markers
+            if path in ("/phpinfo.php", "/info.php"):
+                if "PHP Version" not in body and "phpinfo()" not in body:
+                    return
+
+            # wp-config.php — require WordPress config constants
+            if path == "/wp-config.php":
+                if not any(k in body for k in ("DB_NAME", "DB_PASSWORD", "table_prefix")):
+                    return
+
+            # adminer — require Adminer UI markers
+            if path in ("/adminer.php", "/adminer"):
+                if not any(k in body for k in ("adminer", "Adminer", "Login")):
+                    return
+
+            # ──────────────────────────────────────────────────────────────────
+
             status = _SEVERITY_TO_STATUS.get(severity, "VULNERABLE")
             details_map = {
                 "CRITICAL": (
@@ -395,7 +456,7 @@ async def check_graphql(url: str, client: httpx.AsyncClient) -> list[dict]:
         except Exception:
             continue
 
-        if resp.status_code == 200 and "__schema" in resp.text:
+        if resp.status_code == 200 and "__schema" in resp.text and "types" in resp.text:
             findings.append(_make_finding(
                 url=url,
                 payload_url=probe_url,
@@ -572,9 +633,11 @@ async def check_ssl_expiry(url: str, client: httpx.AsyncClient) -> list[dict]:  
 
 _ADMIN_PATHS = [
     "/admin", "/administrator", "/admin/login", "/admin.php",
-    "/cp", "/controlpanel", "/dashboard", "/manage", "/management",
+    "/dashboard", "/manage", "/management",
     "/backend", "/cms", "/portal",
 ]
+
+_ADMIN_REALM_KEYWORDS = ("admin", "administrator", "management", "control")
 
 _LOGIN_FORM_RE = re.compile(
     r'<form[^>]*>.*?(?:type=["\']password["\']|name=["\']password["\'])',
@@ -602,7 +665,9 @@ async def check_admin_panels(url: str, client: httpx.AsyncClient) -> list[dict]:
         base = dict(url=url, payload_url=probe_url, http_status=str(sc),
                     page_title=title, content_length=cl)
 
-        has_login_form = bool(_LOGIN_FORM_RE.search(resp.text))
+        has_login_form = (
+            'type="password"' in resp.text or "type='password'" in resp.text
+        )
 
         if sc == 200 and has_login_form:
             findings.append(_make_finding(
@@ -616,18 +681,33 @@ async def check_admin_panels(url: str, client: httpx.AsyncClient) -> list[dict]:
                     "brute-force, credential stuffing, and authentication bypass attacks."
                 ),
             ))
-        elif sc in (200, 401):
+        elif sc == 200:
+            # Accessible path but no login form — low noise finding only
             findings.append(_make_finding(
                 **base,
-                vulnerability=f"Admin Panel Detected: {path}",
+                vulnerability=f"Admin Path Accessible: {path}",
                 status="INFO",
-                severity="MEDIUM",
+                severity="LOW",
                 details=(
-                    f"An admin or management interface is reachable at '{probe_url}' "
-                    f"(HTTP {sc}). Verify that strong authentication is enforced and "
-                    "access is restricted to authorised networks."
+                    f"The path '{probe_url}' returned HTTP 200 but no login form was detected. "
+                    "Verify the content does not expose sensitive functionality."
                 ),
             ))
+        elif sc == 401:
+            # Only fire for 401 if the WWW-Authenticate realm suggests admin access
+            www_auth = resp.headers.get("www-authenticate", "").lower()
+            if any(kw in www_auth for kw in _ADMIN_REALM_KEYWORDS):
+                findings.append(_make_finding(
+                    **base,
+                    vulnerability=f"Admin Panel Detected (Auth Required): {path}",
+                    status="INFO",
+                    severity="LOW",
+                    details=(
+                        f"The path '{probe_url}' returned HTTP 401 with an admin-related "
+                        f"authentication realm ('{resp.headers.get('www-authenticate', '')}')."
+                        " Verify strong credentials and network-level access controls are in place."
+                    ),
+                ))
 
     await asyncio.gather(*[probe(p) for p in _ADMIN_PATHS], return_exceptions=True)
     return findings
@@ -658,8 +738,20 @@ async def check_directory_listing(url: str, client: httpx.AsyncClient) -> list[d
         if resp.status_code != 200:
             return
 
-        body_lower = resp.text[:8192].lower()
-        if any(m in body_lower for m in _DIR_LISTING_MARKERS):
+        body = resp.text[:8192]
+        body_lower = body.lower()
+
+        # Require at least 2 of 3 conditions to reduce false positives from
+        # pages that mention "index of" in regular prose content.
+        conditions_met = 0
+        if "index of" in body_lower:
+            conditions_met += 1
+        if "parent directory" in body_lower:
+            conditions_met += 1
+        if len(re.findall(r'href="[^"]+\.[a-z0-9]{1,5}"', body, re.IGNORECASE)) >= 3:
+            conditions_met += 1
+
+        if conditions_met >= 2:
             title = _extract_title(resp.text)
             findings.append(_make_finding(
                 url=url,
@@ -718,15 +810,13 @@ async def _try_wp_default_creds(origin: str, client: httpx.AsyncClient) -> list[
         except Exception:
             continue
 
-        # Success indicators: redirect to /wp-admin/ or logout link present
+        # Success indicators: redirect to /wp-admin/ OR Dashboard in body without error message
         location = post_resp.headers.get("location", "")
-        body = post_resp.text.lower()
-        if (
-            "wp-admin" in location
-            or "dashboard" in location
-            or "log-out" in body
-            or "wp-admin/profile.php" in body
-        ):
+        body = post_resp.text
+        body_lower = body.lower()
+        redirected_to_admin = "wp-admin" in location or "dashboard" in location
+        has_dashboard = "Dashboard" in body and "incorrect password" not in body_lower
+        if redirected_to_admin or has_dashboard:
             findings.append(_make_finding(
                 url=origin,
                 payload_url=login_url,
@@ -781,13 +871,8 @@ async def _try_joomla_default_creds(origin: str, client: httpx.AsyncClient) -> l
         except Exception:
             continue
 
-        body = post_resp.text.lower()
         location = post_resp.headers.get("location", "")
-        if (
-            "administrator/index.php" in location
-            or "com_cpanel" in body
-            or "logout" in body
-        ):
+        if "administrator/index.php" in location:
             findings.append(_make_finding(
                 url=origin,
                 payload_url=login_url,
@@ -842,14 +927,8 @@ async def _try_drupal_default_creds(origin: str, client: httpx.AsyncClient) -> l
         except Exception:
             continue
 
-        body = post_resp.text.lower()
-        location = post_resp.headers.get("location", "")
-        if (
-            "/user/" in location
-            or "admin/dashboard" in location
-            or "log out" in body
-            or "edit account" in body
-        ):
+        body = post_resp.text
+        if "Log out" in body:
             findings.append(_make_finding(
                 url=origin,
                 payload_url=login_url,
