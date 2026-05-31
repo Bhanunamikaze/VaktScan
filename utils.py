@@ -240,8 +240,8 @@ def get_service_ports():
             139, 161, 389, 445, 465, 587, 593, 636,
             # Rsync / VMware / Java RMI / MSSQL / Oracle / NFS / ZooKeeper / Docker
             623, 873, 902, 1098, 1099, 1433, 1521, 2049, 2181, 2375, 2376,
-            # etcd / Loki / MySQL / RDP / GlassFish / PostgreSQL
-            2379, 2380, 3100, 3306, 3389, 4848, 5432,
+            # etcd / Loki / MySQL / RDP / OpenTelemetry gRPC+HTTP / GlassFish / PostgreSQL
+            2379, 2380, 3100, 3306, 3389, 4317, 4318, 4848, 5432,
             # AMQP / VNC / CouchDB / WinRM
             5671, 5672, 5900, 5901, 5984, 5985, 5986,
             # Redis / K8s / WebLogic / Splunk / Spring Actuator

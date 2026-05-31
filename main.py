@@ -49,6 +49,7 @@ from modules import (
     epss,
     jenkins,
     passive_intel,
+    inventory,
 )
 
 # Map service names to their corresponding modules
@@ -1015,7 +1016,11 @@ async def main(
 
     # Initialize state manager
     state_manager = ScanStateManager(targets_file, concurrency)
-    
+
+    # Inventory: initialise DB and open a new scan run
+    inventory.init_db()
+    run_id = inventory.start_scan_run(targets_file or 'recon')
+
     try:
         # Load existing state or start fresh
         is_resume = resume or state_manager.load_existing_state()
@@ -1109,6 +1114,16 @@ async def main(
             state_manager.update_phase("port_scanning_complete")
             domain_label = os.path.splitext(os.path.basename(targets_file))[0]
             save_port_scan_csv(open_ports_results, domain_label)
+
+            # Persist discovered assets into inventory
+            for _target_obj, _data in open_ports_results:
+                _open_ports = _data.get('open_ports', [])
+                if not _open_ports:
+                    continue
+                _ip       = _target_obj.get('resolved_ip') or _target_obj.get('scan_address', '')
+                _hostname = _target_obj.get('display_target', '')
+                if _ip:
+                    inventory.upsert_asset(_ip, _hostname, _open_ports)
 
             # Run httpx + nuclei on any open web ports found (80, 443, 8080, etc.)
             # These ports have no specific service module — probe them directly.
@@ -1283,6 +1298,11 @@ async def main(
     print(f"{Colors.CYAN}[*] CISA KEV cross-reference complete.{Colors.RESET}")
     final_vulnerabilities = await epss.enrich_findings_with_epss(final_vulnerabilities)
     final_vulnerabilities = await passive_intel.enrich_findings_with_passive_intel(final_vulnerabilities)
+
+    # Inventory delta report
+    delta = inventory.save_findings(run_id, final_vulnerabilities)
+    inventory.complete_scan_run(run_id, len(final_vulnerabilities))
+    inventory.print_delta_report(delta)
 
     if final_vulnerabilities:
         csv_file = save_results_to_csv(final_vulnerabilities)

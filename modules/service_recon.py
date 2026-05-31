@@ -2408,6 +2408,384 @@ async def check_java_rmi(host, port, target, resolved_ip):
     return out
 
 
+# ─── ArgoCD (80 / 443) ───────────────────────────────────────────────────────
+
+async def check_argocd(host, port, target, resolved_ip):
+    out = []
+    scheme = 'https' if port == 443 else 'http'
+    async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+        # Detect ArgoCD via /api/v1/applications
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/api/v1/applications')
+            if r.status_code == 200 and 'items' in r.text:
+                out.append(_finding('INFO', 'INFO', 'ArgoCD Instance Detected',
+                    f'ArgoCD /api/v1/applications accessible (HTTP {r.status_code}).',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/api/v1/applications',
+                    http_status=r.status_code))
+            else:
+                # Also try /healthz as a lighter probe
+                try:
+                    rh = await client.get(f'{scheme}://{host}:{port}/healthz')
+                    if rh.status_code == 200 and 'ok' in rh.text.lower():
+                        out.append(_finding('INFO', 'INFO', 'ArgoCD Instance Detected',
+                            f'ArgoCD /healthz responded ok (HTTP {rh.status_code}).',
+                            target, resolved_ip, port,
+                            url=f'{scheme}://{host}:{port}/healthz',
+                            http_status=rh.status_code))
+                    else:
+                        return out
+                except Exception:
+                    return out
+        except Exception:
+            return out
+
+        # CVE-2022-29165 — authentication bypass via empty password
+        try:
+            r = await client.post(
+                f'{scheme}://{host}:{port}/api/v1/session',
+                json={'username': 'admin', 'password': ''})
+            if r.status_code == 200 and 'token' in r.text.lower():
+                out.append(_finding('VULNERABLE', 'CRITICAL',
+                    'CVE-2022-29165 ArgoCD Authentication Bypass',
+                    'ArgoCD /api/v1/session returned a token with admin:(blank password) — '
+                    'CVE-2022-29165 authentication bypass.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/api/v1/session',
+                    payload_url=f'{scheme}://{host}:{port}/api/v1/session',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+        # Unauthenticated cluster list
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/api/v1/clusters')
+            if r.status_code == 200:
+                out.append(_finding('VULNERABLE', 'CRITICAL',
+                    'ArgoCD Cluster List Exposed (unauth)',
+                    'ArgoCD /api/v1/clusters accessible without authentication — '
+                    'managed cluster credentials may be exposed.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/api/v1/clusters',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+        # Unauthenticated repository list
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/api/v1/repositories')
+            if r.status_code == 200:
+                out.append(_finding('VULNERABLE', 'HIGH',
+                    'ArgoCD Repository List Exposed (unauth)',
+                    'ArgoCD /api/v1/repositories accessible without authentication — '
+                    'Git repository URLs and credentials may be exposed.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/api/v1/repositories',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+        # Unauthenticated settings
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/api/v1/settings')
+            if r.status_code == 200:
+                out.append(_finding('VULNERABLE', 'HIGH',
+                    'ArgoCD Settings Exposed (unauth)',
+                    'ArgoCD /api/v1/settings accessible without authentication.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/api/v1/settings',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+    return out
+
+
+# ─── Rancher (80 / 443) ───────────────────────────────────────────────────────
+
+async def check_rancher(host, port, target, resolved_ip):
+    out = []
+    scheme = 'https' if port == 443 else 'http'
+    async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+        # Detect Rancher via /v3
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/v3')
+            body_lower = r.text.lower()
+            if r.status_code == 200 and any(w in body_lower for w in ('rancher', 'cattle')):
+                out.append(_finding('INFO', 'INFO', 'Rancher Instance Detected',
+                    f'Rancher /v3 accessible (HTTP {r.status_code}).',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/v3',
+                    http_status=r.status_code))
+            else:
+                return out
+        except Exception:
+            return out
+
+        # Unauthenticated settings
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/v3/settings')
+            if r.status_code == 200:
+                out.append(_finding('VULNERABLE', 'HIGH',
+                    'Rancher Settings API Accessible (unauth)',
+                    'Rancher /v3/settings accessible without authentication.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/v3/settings',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+        # Unauthenticated cluster list
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/v3/clusters')
+            if r.status_code == 200:
+                out.append(_finding('VULNERABLE', 'CRITICAL',
+                    'Rancher Cluster List Exposed (unauth)',
+                    'Rancher /v3/clusters accessible without authentication — '
+                    'full managed cluster inventory exposed.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/v3/clusters',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+        # Unauthenticated user list
+        try:
+            r = await client.get(f'{scheme}://{host}:{port}/v3/users')
+            if r.status_code == 200:
+                out.append(_finding('VULNERABLE', 'HIGH',
+                    'Rancher User List Exposed (unauth)',
+                    'Rancher /v3/users accessible without authentication.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/v3/users',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+        # Try default admin:admin via Basic auth
+        try:
+            r = await client.get(
+                f'{scheme}://{host}:{port}/v3',
+                auth=('admin', 'admin'))
+            body_lower = r.text.lower()
+            if r.status_code == 200 and any(w in body_lower for w in ('rancher', 'cattle')):
+                out.append(_finding('VULNERABLE', 'CRITICAL',
+                    'Rancher Default Credentials (admin:admin)',
+                    'Rancher /v3 accessible with default credentials admin:admin.',
+                    target, resolved_ip, port,
+                    url=f'{scheme}://{host}:{port}/v3',
+                    http_status=r.status_code))
+        except Exception:
+            pass
+
+    return out
+
+
+# ─── OpenTelemetry (4317 / 4318 / 55679) ─────────────────────────────────────
+
+async def check_opentelemetry(host, port, target, resolved_ip):
+    out = []
+
+    # Port 4318 — HTTP receiver
+    if port == 4318:
+        async with httpx.AsyncClient(timeout=8, verify=False) as client:
+            try:
+                r = await client.get(f'http://{host}:{port}/v1/traces')
+                if r.status_code in (200, 405):
+                    # 405 Method Not Allowed means endpoint exists (accepts POST)
+                    out.append(_finding('VULNERABLE', 'HIGH',
+                        'OpenTelemetry HTTP Receiver Exposed',
+                        f'OpenTelemetry HTTP receiver at /v1/traces responded HTTP {r.status_code} '
+                        '(endpoint exists and accepts POST) — allows injecting arbitrary telemetry '
+                        'or reading trace data.',
+                        target, resolved_ip, port,
+                        url=f'http://{host}:{port}/v1/traces',
+                        http_status=r.status_code))
+            except Exception:
+                pass
+        return out
+
+    # Port 55679 — zPages debug interface
+    if port == 55679:
+        async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+            detected = False
+            for path, label in (
+                ('/debug/tracez',     'TraceZ'),
+                ('/debug/servicez',   'ServiceZ'),
+                ('/debug/pipelinez',  'PipelineZ'),
+                ('/debug/extensionz', 'ExtensionZ'),
+            ):
+                try:
+                    r = await client.get(f'http://{host}:{port}{path}')
+                    if r.status_code == 200:
+                        detected = True
+                        out.append(_finding('VULNERABLE', 'HIGH',
+                            'OpenTelemetry zPages Debug Interface Exposed',
+                            f'OpenTelemetry zPages {label} at {path} accessible without auth — '
+                            'exposes internal pipeline, service, and trace debug data.',
+                            target, resolved_ip, port,
+                            url=f'http://{host}:{port}{path}',
+                            http_status=r.status_code))
+                except Exception:
+                    pass
+            if not detected:
+                pass
+        return out
+
+    # Port 4317 — gRPC receiver (TCP banner check)
+    if port == 4317:
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=5)
+            writer.close()
+            out.append(_finding('INFO', 'INFO',
+                'OpenTelemetry gRPC Receiver Exposed',
+                f'OpenTelemetry gRPC receiver port {port} is accepting connections — '
+                'allows injecting arbitrary telemetry spans and metrics.',
+                target, resolved_ip, port,
+                url=f'grpc://{host}:{port}'))
+        except Exception:
+            pass
+        return out
+
+    return out
+
+
+# ─── Nagios / Zabbix (80 / 443 / 10051) ──────────────────────────────────────
+
+async def check_nagios_zabbix(host, port, target, resolved_ip):
+    out = []
+
+    # Port 10051 — Zabbix server TCP banner
+    if port == 10051:
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=5)
+            writer.close()
+            out.append(_finding('INFO', 'INFO',
+                'Zabbix Server Port Exposed',
+                f'Zabbix server port {port} is accepting connections on {host}.',
+                target, resolved_ip, port,
+                url=f'zabbix://{host}:{port}'))
+        except Exception:
+            pass
+        return out
+
+    # HTTP/HTTPS web checks (ports 80 / 443)
+    scheme = 'https' if port == 443 else 'http'
+    async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+
+        # ── Nagios detection ──────────────────────────────────────────────────
+        nagios_detected = False
+        for nagios_path in ('/nagios/', '/nagiosxi/'):
+            try:
+                r = await client.get(f'{scheme}://{host}:{port}{nagios_path}')
+                if r.status_code == 200 and 'nagios' in r.text.lower():
+                    nagios_detected = True
+                    out.append(_finding('INFO', 'INFO', 'Nagios Web Interface Detected',
+                        f'Nagios web interface at {nagios_path} accessible (HTTP {r.status_code}).',
+                        target, resolved_ip, port,
+                        url=f'{scheme}://{host}:{port}{nagios_path}',
+                        http_status=r.status_code))
+                    break
+            except Exception:
+                pass
+
+        if nagios_detected:
+            # Try default credentials admin:nagios and admin:admin
+            for user, passwd in (('admin', 'nagios'), ('admin', 'admin')):
+                try:
+                    r = await client.get(
+                        f'{scheme}://{host}:{port}/nagios/',
+                        auth=(user, passwd))
+                    if r.status_code == 200 and 'nagios' in r.text.lower():
+                        out.append(_finding('VULNERABLE', 'CRITICAL',
+                            f'Nagios Default Credentials ({user}:{passwd})',
+                            f'Nagios web interface accessible with {user}:{passwd}.',
+                            target, resolved_ip, port,
+                            url=f'{scheme}://{host}:{port}/nagios/',
+                            http_status=r.status_code))
+                        break
+                except Exception:
+                    pass
+
+            # Nagios CGI status — unauthenticated
+            try:
+                r = await client.get(f'{scheme}://{host}:{port}/nagios/cgi-bin/status.cgi')
+                if r.status_code == 200:
+                    out.append(_finding('VULNERABLE', 'HIGH',
+                        'Nagios Status CGI Accessible (unauth)',
+                        'Nagios /nagios/cgi-bin/status.cgi accessible without authentication — '
+                        'host and service status exposed.',
+                        target, resolved_ip, port,
+                        url=f'{scheme}://{host}:{port}/nagios/cgi-bin/status.cgi',
+                        http_status=r.status_code))
+            except Exception:
+                pass
+
+        # ── Zabbix detection ──────────────────────────────────────────────────
+        zabbix_detected = False
+        for zabbix_path in ('/zabbix/', '/zabbix/index.php'):
+            try:
+                r = await client.get(f'{scheme}://{host}:{port}{zabbix_path}')
+                if r.status_code == 200 and 'zabbix' in r.text.lower():
+                    zabbix_detected = True
+                    out.append(_finding('INFO', 'INFO', 'Zabbix Web Interface Detected',
+                        f'Zabbix web interface at {zabbix_path} accessible (HTTP {r.status_code}).',
+                        target, resolved_ip, port,
+                        url=f'{scheme}://{host}:{port}{zabbix_path}',
+                        http_status=r.status_code))
+                    break
+            except Exception:
+                pass
+
+        if zabbix_detected:
+            # Try default credentials Admin:zabbix via login form POST
+            try:
+                r = await client.post(
+                    f'{scheme}://{host}:{port}/zabbix/index.php',
+                    data={'name': 'Admin', 'password': 'zabbix', 'autologin': '1', 'enter': 'Sign in'})
+                if r.status_code == 200 and 'zabbix' in r.text.lower() and 'sign in' not in r.text.lower():
+                    out.append(_finding('VULNERABLE', 'CRITICAL',
+                        'Zabbix Default Credentials (Admin:zabbix)',
+                        'Zabbix login form accepted Admin:zabbix — '
+                        'full monitoring system access.',
+                        target, resolved_ip, port,
+                        url=f'{scheme}://{host}:{port}/zabbix/index.php',
+                        http_status=r.status_code))
+            except Exception:
+                pass
+
+        # Zabbix JSON-RPC API — try default credentials
+        try:
+            r = await client.post(
+                f'{scheme}://{host}:{port}/zabbix/api_jsonrpc.php',
+                json={
+                    'jsonrpc': '2.0',
+                    'method': 'user.login',
+                    'params': {'user': 'Admin', 'password': 'zabbix'},
+                    'id': 1,
+                })
+            if r.status_code == 200:
+                body = r.text.lower()
+                try:
+                    data = r.json()
+                    has_result = 'result' in data and 'error' not in data
+                except Exception:
+                    has_result = 'result' in body and 'error' not in body
+                if has_result:
+                    out.append(_finding('VULNERABLE', 'CRITICAL',
+                        'Zabbix Default Credentials (Admin:zabbix)',
+                        'Zabbix JSON-RPC API user.login succeeded with Admin:zabbix — '
+                        'full API access granted.',
+                        target, resolved_ip, port,
+                        url=f'{scheme}://{host}:{port}/zabbix/api_jsonrpc.php',
+                        payload_url=f'{scheme}://{host}:{port}/zabbix/api_jsonrpc.php',
+                        http_status=r.status_code))
+        except Exception:
+            pass
+
+    return out
+
+
 # ─── Fingerprint helper ──────────────────────────────────────────────────────
 
 async def _fingerprint(host, port, timeout=5):
@@ -2452,6 +2830,8 @@ async def _fingerprint(host, port, timeout=5):
                     ('jira',          ['jira', 'atlassian jira']),
                     ('confluence',    ['confluence', 'atlassian confluence']),
                     ('gitlab',        ['gitlab']),
+                    ('argocd',        ['argocd', 'argo cd']),
+                    ('rancher',       ['rancher', 'cattle']),
                 ]:
                     if any(m in blob for m in markers):
                         tags.add(tag)
@@ -2472,7 +2852,7 @@ PORT_DISPATCH = {
     22:    check_ssh,
     25:    check_smtp,
     53:    check_dns,
-    80:    check_gitlab,
+    80:    [check_gitlab, check_argocd, check_rancher, check_nagios_zabbix],
     88:    check_kerberos,
     111:   check_rpc,
     123:   check_ntp,
@@ -2480,7 +2860,7 @@ PORT_DISPATCH = {
     139:   check_smb,
     161:   check_snmp,
     389:   check_ldap,
-    443:   check_gitlab,
+    443:   [check_gitlab, check_argocd, check_rancher, check_nagios_zabbix],
     445:   check_smb,
     465:   check_smtp,
     587:   check_smtp,
@@ -2502,6 +2882,8 @@ PORT_DISPATCH = {
     3100:  check_loki,
     3306:  check_mysql,
     3389:  check_rdp,
+    4317:  check_opentelemetry,
+    4318:  check_opentelemetry,
     4848:  check_glassfish,
     5432:  check_postgresql,
     5671:  check_activemq,
@@ -2542,6 +2924,7 @@ PORT_DISPATCH = {
     9443:  check_portainer,
     9870:  check_hadoop_hdfs,
     9990:  check_jboss,
+    10051: check_nagios_zabbix,
     10250: check_kubernetes,
     11211: check_memcached,
     15000: check_envoy_admin,
@@ -2550,12 +2933,13 @@ PORT_DISPATCH = {
     16686: check_jaeger,
     27017: check_mongodb,
     50070: check_hadoop_hdfs,
+    55679: check_opentelemetry,
     61616: check_activemq,
 }
 
 
 # Ports where multiple services compete — fingerprint before running checks
-SHARED_PORTS = {80, 443, 8080, 8081, 8082, 8083, 8090, 8443, 9000, 9001, 9443}
+SHARED_PORTS = {80, 443, 8080, 8081, 8082, 8083, 8090, 8443, 9000, 9001, 9443}  # ports with multiple competing checks
 
 # Map check function → required fingerprint tag (None = always run)
 CHECK_REQUIRES_TAG = {
@@ -2565,6 +2949,8 @@ CHECK_REQUIRES_TAG = {
     check_jira:            'jira',
     check_confluence:      'confluence',
     check_gitlab:          'gitlab',
+    check_argocd:          'argocd',
+    check_rancher:         'rancher',
     check_traefik:         'traefik',
     check_jboss:           'jboss',
     check_hadoop_yarn:     'yarn',
