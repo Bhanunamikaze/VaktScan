@@ -1592,7 +1592,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "-m", "--module",
         choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs",
-                 "domain-scan", "recon", "js-paths", "aem", "cpanel", "dns"],
+                 "domain-scan", "recon", "js-paths", "aem", "cpanel", "dns",
+                 "jenkins", "service_recon"],
         help=(
             "Scan/run the specified module. "
             "Use 'recon' for subdomain enumeration, "

@@ -254,10 +254,10 @@ def get_service_ports():
             8778, 8888, 8889, 8983, 9000, 9001, 9042, 9092, 9093,
             # Cassandra / Zipkin / Portainer TLS / Hadoop HDFS / JBoss
             9160, 9411, 9443, 9870, 9990,
-            # Kubelet / Envoy Admin / RabbitMQ Management / Jaeger
-            10250, 11211, 15000, 15001, 15672, 16686,
+            # Kubelet / Zabbix Server / Envoy Admin / RabbitMQ Management / Jaeger
+            10051, 10250, 11211, 15000, 15001, 15672, 16686,
             # MongoDB / Hadoop HDFS Legacy / ActiveMQ
-            27017, 50070, 61616,
+            27017, 50070, 55679, 61616,
         ],
         "web": [
             80, 81, 443, 444, 591, 593, 832,
