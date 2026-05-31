@@ -168,3 +168,65 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 9. **EPSS scoring** — enriches CVE findings with exploitation probability
 10. **Delta reports** — new vs resolved findings across scan runs
 11. **Google Dorking** — domain/subdomain targets only; surfaces open S3/Azure/GCP buckets and leaked credentials indexed by Google via Custom Search API
+
+---
+
+## 7. CLI Redesign — Subcommands + Unified Pipeline
+
+This section tracks the full CLI redesign approved in the June 2026 brainstorm.
+
+### Design Goals
+- argparse subparsers: scan, enum, probe, dns, cloud, js-paths, google-dork
+- `scan <domain>` runs the full pipeline (enum → all checks → reports/)
+- `scan <ip/cidr>` runs port scan → web checks → service vuln checks
+- All modules return the same finding schema
+- CSV auto-generated in reports/ for every run (no flag needed)
+- Subdomain enum is ON by default for domain targets; --no-subdomain-enum to skip
+
+### Tasks
+
+#### 7.1 CLI Architecture
+- [ ] Refactor main.py to use argparse subparsers (scan, enum, probe, dns, cloud, js-paths, google-dork)
+- [ ] Auto-detect target type (IP/CIDR/domain/file) inside scan subcommand
+- [ ] Add --no-subdomain-enum flag to scan subcommand
+- [ ] Add -m/--module flag to scan subcommand (all modules by default, one module when specified)
+- [ ] Write per-subcommand help text that is accurate and complete
+- [ ] Pass args.module only as module_filter (remove the double-pass bug where it's sent as both module_filter and module_mode)
+
+#### 7.2 Full Scan Pipeline (Domain)
+- [ ] Wire full domain pipeline in scan subcommand: enum → DNS recon → cloud enum → port scan → httpx → web checks + nuclei (parallel) → service vuln checks → dirsearch → gau + waybackurls → JS paths → enrichments → CSV
+- [ ] Run DNS recon and cloud enum in parallel (both take domain, no dependency on each other)
+- [ ] Run web checks and nuclei in parallel on alive URLs (currently sequential)
+- [ ] Run GAU and waybackurls in parallel (currently sequential)
+- [ ] Run per-host service vuln checks in parallel (each host/port is independent)
+- [ ] After enum, feed discovered subs + primary domain together into port scan
+
+#### 7.3 probe Subcommand
+- [ ] Implement probe subcommand: accepts a file of hosts/URLs and runs httpx → web checks + nuclei (parallel) → dirsearch → gau → waybackurls → JS paths
+- [ ] Wire probe as the reusable web-pipeline step (used internally by scan after enum, and standalone)
+
+#### 7.4 Unified Finding Schema
+- [ ] Define canonical finding schema in a shared module (e.g. utils.py or a new findings.py)
+- [ ] Patch elastic, kibana, grafana, prometheus modules to emit all required schema keys
+- [ ] Patch aem, cpanel, jenkins, service_recon, react_to_shell modules similarly
+- [ ] Patch dns_recon, cloud_enum, web_checks, domain_scan to match schema
+- [ ] Patch js_paths module to match schema
+- [ ] Add schema validation helper function that normalises a finding dict (fills missing keys with N/A)
+
+#### 7.5 Reporting — reports/ Directory
+- [ ] Create reports/ directory at startup in all scan paths (scan, probe, dns, cloud, js-paths, google-dork)
+- [ ] Move save_results_to_csv() to always write into reports/ with naming: reports/{subcommand}_{target}_{timestamp}.csv
+- [ ] Move save_port_scan_csv() to reports/ as well
+- [ ] Ensure every subcommand writes its CSV at the end regardless of --csv flag (make it always-on)
+- [ ] Remove --csv flag (CSV is now always generated)
+- [ ] Extend existing reporting/inventory module rather than duplicating output logic
+
+#### 7.6 Google Dork Subcommand
+- [ ] Implement google-dork subcommand (domain target, --google-api-key, --google-cx flags)
+- [ ] Wire google-dork into the full scan pipeline (runs after cloud enum, before port scan) for domain targets
+- [ ] Rate limit to 1 req/s, deduplicate results across dork categories
+- [ ] Emit findings in canonical schema with severity INFO
+
+#### 7.7 enum Subcommand
+- [ ] Implement enum subcommand: subdomain discovery only (amass, subfinder, etc.), writes subs to reports/{domain}_subdomains_{timestamp}.txt
+- [ ] Add --probe flag to enum that auto-chains into probe subcommand when done
