@@ -19,6 +19,7 @@ import asyncio
 import os
 import re
 import shutil
+import socket
 
 import httpx
 
@@ -1802,7 +1803,59 @@ async def check_rabbitmq(host, port, target, resolved_ip):
 
 async def check_ipmi(host, port, target, resolved_ip):
     out = []
-    # Cipher 0 authentication bypass — no password required
+
+    # ── UDP probe: send RMCP+ Get Channel Authentication Capabilities request ──
+    # IPMI runs over UDP 623. We wrap the blocking socket call in run_in_executor
+    # so it doesn't stall the event loop.
+    RMCP_AUTH_CAP = (
+        b'\x06\x00\xff\x07'   # RMCP header: version, reserved, seq, class=IPMI
+        b'\x00\x00\x00\x00'   # ASF presence ping fields (session ID = 0)
+        b'\x00\x00\x00\x00'   # Message tag / reserved
+        b'\x00\x09'           # payload length = 9 bytes
+        b'\x20\x18\x00\x00'   # target addr, net fn/LUN, checksum, source addr
+        b'\x00\x38\x00'       # source LUN / cmd (Get Channel Auth Caps = 0x38)
+        b'\x00\x00\x00'       # channel number, privilege level, padding
+    )
+
+    def _udp_probe(h, p):
+        """Blocking UDP send/recv — runs in executor thread."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(2)
+        try:
+            sock.sendto(RMCP_AUTH_CAP, (h, p))
+            data, _ = sock.recvfrom(512)
+            return data
+        except Exception:
+            return None
+        finally:
+            sock.close()
+
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(None, _udp_probe, host, port)
+
+    if response:
+        # Port is open and responded — flag exposure
+        out.append(_finding('INFO', 'INFO', 'IPMI Port Exposed',
+            f'IPMI UDP port {port} responded to an RMCP+ probe — '
+            'IPMI management interface is network-accessible. '
+            'Check for cipher suite 0 bypass (CVE-2013-4786).',
+            target, resolved_ip, port,
+            url=f'ipmi://{host}:{port}'))
+
+        # Check for cipher suite 0 indicator in response.
+        # In a valid Get Channel Auth Capabilities response the auth-type
+        # support byte is at offset 22 (0-indexed). Bit 0 set means
+        # "None" (no-auth / cipher 0) is advertised.
+        if len(response) > 22 and (response[22] & 0x01):
+            out.append(_finding('VULNERABLE', 'HIGH',
+                'IPMI Cipher Suite 0 Authentication Bypass',
+                'IPMI response advertises "None" authentication type (bit 0 of '
+                'auth-support byte set) — cipher suite 0 bypass likely possible. '
+                'CVE-2013-4786 / IPMI 2.0 RAKP allows offline hash capture.',
+                target, resolved_ip, port,
+                url=f'ipmi://{host}:{port}'))
+
+    # ── ipmitool confirmation (when available) ────────────────────────────────
     if _bin('ipmitool'):
         stdout, _, rc = await _run(
             ['ipmitool', '-I', 'lanplus', '-C', '0',
@@ -1827,6 +1880,7 @@ async def check_ipmi(host, port, target, resolved_ip):
                 'IPMI management interface accessible without credentials.',
                 target, resolved_ip, port,
                 url=f'ipmi://{host}:{port}'))
+
     return out
 
 

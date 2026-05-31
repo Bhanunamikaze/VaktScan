@@ -275,6 +275,85 @@ def save_results_to_json(vulnerabilities, filename=None):
         print(f"{Colors.RED}[!] Error saving JSON file: {e}{Colors.RESET}")
         return None
 
+def write_sarif_output(vulnerabilities, output_path):
+    """Write vulnerability findings to SARIF 2.1.0 format for GitHub/GitLab security tab integration."""
+
+    SEVERITY_MAP = {
+        "CRITICAL": "error",
+        "HIGH":     "error",
+        "MEDIUM":   "warning",
+        "LOW":      "note",
+        "INFO":     "none",
+    }
+
+    # Build unique rules from finding titles
+    rules_seen = {}
+    for vuln in vulnerabilities:
+        title = vuln.get('vulnerability', 'Unknown Finding')
+        if title not in rules_seen:
+            rule_id = f"VAKTSCAN-{len(rules_seen) + 1:03d}"
+            severity = vuln.get('severity', 'INFO').upper()
+            rules_seen[title] = {
+                "id": rule_id,
+                "name": title.replace(' ', ''),
+                "shortDescription": {"text": title},
+                "defaultConfiguration": {
+                    "level": SEVERITY_MAP.get(severity, "none")
+                },
+            }
+
+    rules = list(rules_seen.values())
+    rule_index = {r["shortDescription"]["text"]: i for i, r in enumerate(rules)}
+
+    results = []
+    for vuln in vulnerabilities:
+        title = vuln.get('vulnerability', 'Unknown Finding')
+        severity = vuln.get('severity', 'INFO').upper()
+        description = vuln.get('details', vuln.get('description', title))
+        target = vuln.get('target', 'unknown')
+        port = vuln.get('port', '')
+        uri = f"{target}:{port}" if port and str(port) not in ('N/A', '') else target
+
+        rule = rules_seen.get(title, {})
+        result_entry = {
+            "ruleId": rule.get("id", "VAKTSCAN-000"),
+            "ruleIndex": rule_index.get(title, 0),
+            "level": SEVERITY_MAP.get(severity, "none"),
+            "message": {"text": description},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": uri}
+                }
+            }],
+        }
+        results.append(result_entry)
+
+    sarif_doc = {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "VaktScan",
+                    "version": "1.0.0",
+                    "informationUri": "https://github.com/bhanunamikaze/VaktScan",
+                    "rules": rules,
+                }
+            },
+            "results": results,
+        }]
+    }
+
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(sarif_doc, f, indent=2)
+        print(f"{Colors.GREEN}[+] SARIF report saved to {output_path}{Colors.RESET}")
+        return output_path
+    except Exception as e:
+        print(f"{Colors.RED}[!] Error saving SARIF file: {e}{Colors.RESET}")
+        return None
+
+
 async def run_recon_followups(
     subdomains,
     recon_domain,
@@ -590,6 +669,7 @@ async def main(
     port_retries=DEFAULT_PORT_RETRIES,
     js_url=None,
     js_timeout=10,
+    sarif_output=None,
 ):
     """
     Main orchestrator for the scanning tool.
@@ -1303,12 +1383,16 @@ async def main(
     delta = inventory.save_findings(run_id, final_vulnerabilities)
     inventory.complete_scan_run(run_id, len(final_vulnerabilities))
     inventory.print_delta_report(delta)
+    inventory.print_executive_summary(run_id, len(final_vulnerabilities))
 
     if final_vulnerabilities:
         csv_file = save_results_to_csv(final_vulnerabilities)
         if csv_file:
             print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
         save_results_to_json(final_vulnerabilities)
+
+    if sarif_output and final_vulnerabilities:
+        write_sarif_output(final_vulnerabilities, sarif_output)
 
     state_manager.mark_completed()
     print(f"\n{state_manager.get_scan_summary()}")
@@ -1500,6 +1584,12 @@ if __name__ == "__main__":
         help="Save consolidated vulnerability results to CSV."
     )
     parser.add_argument(
+        "--sarif",
+        metavar="FILE",
+        default=None,
+        help="Write findings to a SARIF 2.1.0 file (for GitHub/GitLab security tab integration)."
+    )
+    parser.add_argument(
         "-m", "--module",
         choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs",
                  "domain-scan", "recon", "js-paths", "aem", "cpanel", "dns"],
@@ -1602,6 +1692,7 @@ if __name__ == "__main__":
             args.port_retries,
             args.url,
             args.js_timeout,
+            args.sarif,
         ))
     except KeyboardInterrupt:
         print("\n[*] Scanner terminated by user.")

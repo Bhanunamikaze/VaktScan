@@ -294,3 +294,113 @@ def print_delta_report(delta: dict):
             print(f"    [-] {vuln} | {tgt}")
 
     print(f"{'='*50}\n")
+
+
+# ---------------------------------------------------------------------------
+# Risk scoring
+# ---------------------------------------------------------------------------
+
+_SEVERITY_POINTS = {
+    'CRITICAL': 10,
+    'HIGH':     5,
+    'MEDIUM':   2,
+    'LOW':      1,
+    'INFO':     0,
+}
+
+
+def get_risk_scores(run_id: int) -> list:
+    """
+    Return a list of per-asset risk score dicts for the given run_id.
+
+    Each dict:
+        {asset, ip, hostname, total_score, critical, high, medium, low, info}
+
+    Sorted by total_score descending.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                COALESCE(target, resolved_ip, 'unknown') AS asset,
+                COALESCE(resolved_ip, '')                AS ip,
+                severity
+            FROM findings
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchall()
+
+    # Aggregate per asset
+    scores: dict[str, dict] = {}
+    for row in rows:
+        asset = row['asset']
+        sev   = (row['severity'] or 'INFO').upper()
+        if asset not in scores:
+            scores[asset] = {
+                'asset':       asset,
+                'ip':          row['ip'],
+                'total_score': 0,
+                'critical':    0,
+                'high':        0,
+                'medium':      0,
+                'low':         0,
+                'info':        0,
+            }
+        bucket = sev.lower() if sev in _SEVERITY_POINTS else 'info'
+        scores[asset][bucket] = scores[asset].get(bucket, 0) + 1
+        scores[asset]['total_score'] += _SEVERITY_POINTS.get(sev, 0)
+
+    return sorted(scores.values(), key=lambda x: x['total_score'], reverse=True)
+
+
+def print_executive_summary(run_id: int, total_findings: int):
+    """Print an executive summary: severity counts + top-5 riskiest assets."""
+    with _connect() as conn:
+        sev_rows = conn.execute(
+            """
+            SELECT severity, COUNT(*) AS cnt
+            FROM findings
+            WHERE run_id = ?
+            GROUP BY severity
+            """,
+            (run_id,),
+        ).fetchall()
+
+    counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0, 'INFO': 0}
+    for row in sev_rows:
+        sev = (row['severity'] or 'INFO').upper()
+        counts[sev] = counts.get(sev, 0) + row['cnt']
+
+    risk_scores = get_risk_scores(run_id)
+    top5 = risk_scores[:5]
+
+    print(f"\n{'='*50}")
+    print(f"  Executive Summary")
+    print(f"{'='*50}")
+    print(f"  Total findings: {total_findings}")
+    print(f"")
+    print(f"  Findings by Severity:")
+    print(f"    CRITICAL : {counts['CRITICAL']}")
+    print(f"    HIGH     : {counts['HIGH']}")
+    print(f"    MEDIUM   : {counts['MEDIUM']}")
+    print(f"    LOW      : {counts['LOW']}")
+    print(f"    INFO     : {counts['INFO']}")
+
+    if top5:
+        print(f"")
+        print(f"  Top {len(top5)} Assets by Risk Score:")
+        hdr = f"    {'Asset':<35} {'Score':>5}  C  H  M  L  I"
+        print(hdr)
+        print(f"    {'-'*35} {'-----':>5}  -  -  -  -  -")
+        for entry in top5:
+            asset = entry['asset'][:35].ljust(35)
+            score = str(entry['total_score']).rjust(5)
+            c = str(entry['critical']).rjust(2)
+            h = str(entry['high']).rjust(2)
+            m = str(entry['medium']).rjust(2)
+            l = str(entry['low']).rjust(2)
+            i = str(entry['info']).rjust(2)
+            print(f"    {asset} {score} {c} {h} {m} {l} {i}")
+
+    print(f"{'='*50}\n")
