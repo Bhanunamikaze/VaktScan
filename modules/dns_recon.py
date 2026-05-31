@@ -19,19 +19,31 @@ Exhaustive DNS attack-surface scan over a list of domains:
   - version.bind CHAOS TXT        (BIND/PowerDNS banner)
   - Recursion-desired query test  (open-resolver = HIGH)
 
+  Email security extensions:
+  - MX banner grabbing             (mail-server version via SMTP banner)
+  - SMTP open relay test           (RCPT TO external domain accepted = HIGH)
+  - BIMI record check              (brand indicator presence)
+
+  Certificate transparency:
+  - crt.sh subdomain enumeration   (unique subdomains from CT logs)
+
 Findings use the canonical reporting schema (matches main.save_results_to_csv).
 
 Implementation: pure-stdlib asyncio + a small DNS wire-format encoder/decoder.
 No third-party dependency (so it works without dnspython vendored).
+httpx used only for crt.sh CT log queries.
 """
 
 import asyncio
 import os
 import random
+import re
 import socket
 import struct
 import time
 from typing import Any
+
+import httpx
 
 MODULE_NAME = 'DNS'
 
@@ -520,6 +532,228 @@ def _wildcard_findings(domain: str, txt_records: list[str], a_records: list[str]
     return out
 
 
+# ─── Email security: MX banner grabbing ──────────────────────────────────────
+
+async def check_mx_banners(domain: str, resolver: str = DEFAULT_RESOLVERS[0]) -> list[dict]:
+    """Grab SMTP banners from each MX host on port 25.
+
+    Resolves MX records, TCP-connects to port 25, reads the first line of the
+    SMTP greeting (the banner), and reports it as an INFO finding.  Known mail
+    software versions in the banner are extracted for fingerprinting.
+    """
+    findings: list[dict] = []
+
+    # Resolve MX records using our own wire-format query helper.
+    resp = await _query(resolver, domain, RR_MX)
+    mx_hosts: list[str] = []
+    for ans in resp.get('answers', []):
+        data = ans.get('data', '')
+        # Data format: "<preference> <exchange>"
+        parts = data.split(' ', 1)
+        if len(parts) == 2:
+            host = parts[1].rstrip('.')
+            if host:
+                mx_hosts.append(host)
+
+    if not mx_hosts:
+        return findings
+
+    async def _grab_banner(mx_host: str) -> None:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(mx_host, 25), timeout=5.0
+            )
+            try:
+                # Read just the first line of the multi-line greeting.
+                raw = await asyncio.wait_for(reader.readline(), timeout=5.0)
+                banner = raw.decode('utf-8', errors='replace').strip()
+            finally:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+
+            if not banner:
+                return
+
+            # Extract a version token if one is visible, e.g.
+            # "220 mail.example.com ESMTP Postfix (2.11.0)"
+            version_match = re.search(
+                r'(Postfix|Sendmail|Exim|Exchange|MailEnable|hMailServer|qmail|OpenSMTPD|Haraka)[^\s]*(?:\s+[\w.\-]+)?',
+                banner, re.IGNORECASE
+            )
+            server_version = version_match.group(0).strip() if version_match else 'Unknown'
+
+            findings.append(_finding(
+                domain, 'INFO', 'INFO',
+                f'Mail Server Banner ({mx_host})',
+                f'SMTP banner on {mx_host}:25 — {banner!r}. Detected server: {server_version}.',
+                evidence=f'smtp://{mx_host}:25',
+            ))
+        except Exception:
+            pass
+
+    await asyncio.gather(*(_grab_banner(h) for h in mx_hosts))
+    return findings
+
+
+# ─── Email security: SMTP open relay test ─────────────────────────────────────
+
+async def check_smtp_relay(host: str, port: int = 25) -> list[dict]:
+    """Test whether the given SMTP host accepts relay of external mail.
+
+    Connects to the host, issues EHLO / MAIL FROM / RCPT TO with a clearly
+    external destination domain.  A 250 response to RCPT TO indicates the
+    server will relay mail to arbitrary external recipients (open relay).
+    """
+    findings: list[dict] = []
+
+    async def _read_response(reader: asyncio.StreamReader) -> str:
+        """Read a potentially multi-line SMTP response and return the last line."""
+        response = ''
+        while True:
+            try:
+                line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+                decoded = line.decode('utf-8', errors='replace').strip()
+                response = decoded
+                # Multi-line responses have a dash after the status code (e.g. "250-ENHANCEDSTATUSCODES")
+                if len(decoded) < 4 or decoded[3] != '-':
+                    break
+            except Exception:
+                break
+        return response
+
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=5.0
+        )
+        try:
+            # Read the server greeting.
+            await _read_response(reader)
+
+            # EHLO
+            writer.write(b'EHLO vaktscan.test\r\n')
+            await asyncio.wait_for(writer.drain(), timeout=5.0)
+            await _read_response(reader)
+
+            # MAIL FROM
+            writer.write(b'MAIL FROM:<test@vaktscan.test>\r\n')
+            await asyncio.wait_for(writer.drain(), timeout=5.0)
+            await _read_response(reader)
+
+            # RCPT TO — use an unambiguously external domain.
+            writer.write(b'RCPT TO:<test@external-domain.test>\r\n')
+            await asyncio.wait_for(writer.drain(), timeout=5.0)
+            rcpt_response = await _read_response(reader)
+
+            # QUIT
+            try:
+                writer.write(b'QUIT\r\n')
+                await asyncio.wait_for(writer.drain(), timeout=5.0)
+            except Exception:
+                pass
+
+            if rcpt_response.startswith('250'):
+                findings.append(_finding(
+                    host, 'VULNERABLE', 'HIGH',
+                    f'SMTP Open Relay Detected on {host}:{port}',
+                    f'Server accepted RCPT TO:<test@external-domain.test> with response: {rcpt_response!r}. '
+                    f'This mail server will relay messages to arbitrary external recipients, enabling spam abuse.',
+                    evidence=f'smtp://{host}:{port}',
+                ))
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return findings
+
+
+# ─── Email security: BIMI check ───────────────────────────────────────────────
+
+async def check_bimi(domain: str, resolver: str = DEFAULT_RESOLVERS[0]) -> list[dict]:
+    """Check for a BIMI (Brand Indicators for Message Identification) TXT record.
+
+    Queries default._bimi.<domain>.  Absence is a minor advisory; presence is
+    informational.  BIMI improves brand trust by linking a verified logo to
+    authenticated mail.
+    """
+    bimi_host = f'default._bimi.{domain}'
+    resp = await _query(resolver, bimi_host, RR_TXT)
+    records = [
+        ans.get('data', '')
+        for ans in resp.get('answers', [])
+        if ans.get('data', '').lower().startswith('v=bimi1')
+    ]
+
+    if not records:
+        return [_finding(
+            domain, 'INFO', 'INFO',
+            f'BIMI Record Missing for {domain}',
+            'No "v=BIMI1" TXT record found at default._bimi.<domain>. '
+            'BIMI allows mail clients to display a verified brand logo alongside authenticated email, '
+            'improving recipient trust. Requires valid DMARC enforcement (p=quarantine or p=reject).',
+        )]
+
+    return [_finding(
+        domain, 'INFO', 'INFO',
+        f'BIMI Record Found for {domain}',
+        f'BIMI record at {bimi_host}: {records[0]}',
+    )]
+
+
+# ─── Certificate transparency: crt.sh subdomain enumeration ──────────────────
+
+async def fetch_ct_subdomains(domain: str) -> list[dict]:
+    """Query crt.sh for subdomains of *domain* observed in Certificate Transparency logs.
+
+    Returns a single INFO finding listing discovered unique subdomains.
+    Wildcards (*.foo.example.com) are filtered out; the raw name_value entries
+    may contain newline-separated names which are split and deduplicated.
+    """
+    findings: list[dict] = []
+    url = f'https://crt.sh/?q=%.{domain}&output=json'
+    try:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return findings
+            data = resp.json()
+    except Exception:
+        return findings
+
+    subdomains: set[str] = set()
+    for entry in data:
+        name_value = entry.get('name_value', '')
+        for name in name_value.splitlines():
+            name = name.strip().lower()
+            if not name or name.startswith('*.'):
+                continue
+            # Keep only names that are actually subdomains of the target domain.
+            if name.endswith(f'.{domain}') or name == domain:
+                subdomains.add(name)
+
+    if not subdomains:
+        return findings
+
+    sorted_subs = sorted(subdomains)
+    display_list = sorted_subs[:20]
+    truncated_note = f' (showing first 20 of {len(sorted_subs)})' if len(sorted_subs) > 20 else ''
+
+    findings.append(_finding(
+        domain, 'INFO', 'INFO',
+        f'Certificate Transparency Subdomains Found for {domain}',
+        f'crt.sh returned {len(sorted_subs)} unique subdomain(s){truncated_note}: {", ".join(display_list)}',
+        evidence=url,
+    ))
+    return findings
+
+
 # ─── Orchestrator ─────────────────────────────────────────────────────────────
 
 async def scan_domain(domain: str, resolver: str = DEFAULT_RESOLVERS[0]) -> list[dict]:
@@ -540,6 +774,29 @@ async def scan_domain(domain: str, resolver: str = DEFAULT_RESOLVERS[0]) -> list
             'Nameservers: ' + ', '.join(nameservers),
         ))
         findings.extend(await check_nameservers(domain, nameservers))
+
+    # ── Email security extensions ─────────────────────────────────────────────
+    # MX banner grabbing — reveals SMTP server software and version.
+    findings.extend(await check_mx_banners(domain, resolver))
+
+    # SMTP open relay test — run against every MX host discovered.
+    mx_hosts: list[str] = []
+    for data in recovered.get('MX', []):
+        parts = data.split(' ', 1)
+        if len(parts) == 2:
+            host = parts[1].rstrip('.')
+            if host:
+                mx_hosts.append(host)
+    relay_results = await asyncio.gather(*(check_smtp_relay(h) for h in mx_hosts))
+    for r in relay_results:
+        findings.extend(r)
+
+    # BIMI record check — brand indicator presence.
+    findings.extend(await check_bimi(domain, resolver))
+
+    # ── Certificate transparency ──────────────────────────────────────────────
+    findings.extend(await fetch_ct_subdomains(domain))
+
     return findings
 
 

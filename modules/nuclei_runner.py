@@ -231,3 +231,26 @@ class NucleiRunner:
         except:
             pass
         return ''
+
+
+def sync_nuclei_templates():
+    """Update Nuclei templates before a scan."""
+    print("\033[96m[*] Syncing Nuclei templates...\033[0m")
+    try:
+        result = subprocess.run(
+            ['nuclei', '-update-templates'],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            print("\033[92m[+] Nuclei templates updated successfully.\033[0m")
+        else:
+            stderr_snippet = (result.stderr or "").strip()[:200]
+            print(f"\033[93m[!] Nuclei template sync failed: {stderr_snippet}\033[0m")
+    except FileNotFoundError:
+        print("\033[93m[!] nuclei binary not found — cannot sync templates.\033[0m")
+    except subprocess.TimeoutExpired:
+        print("\033[93m[!] Nuclei template sync timed out after 60 seconds.\033[0m")
+    except Exception as e:
+        print(f"\033[93m[!] Nuclei template sync error: {e}\033[0m")

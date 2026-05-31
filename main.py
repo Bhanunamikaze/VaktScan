@@ -50,6 +50,7 @@ from modules import (
     jenkins,
     passive_intel,
     inventory,
+    cloud_enum,
 )
 
 # Map service names to their corresponding modules
@@ -741,6 +742,76 @@ async def main(
             print(f"{Colors.GREEN}[*] DNS recon completed; no findings.{Colors.RESET}")
         return
 
+    # --- CLOUD ENUM MODE (-m cloud) ---
+    if module_mode == 'cloud':
+        cloud_targets = []
+        if domain_scan_file:
+            cloud_targets.extend(load_subdomains_file(domain_scan_file))
+        if recon_domains:
+            cloud_targets.extend(expand_recon_inputs(recon_domains))
+        if targets_file and os.path.isfile(targets_file):
+            try:
+                with open(targets_file, 'r', encoding='utf-8') as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            cloud_targets.append(line)
+            except Exception:
+                pass
+        # Deduplicate, preserving order; skip raw IPs
+        seen_cloud: set[str] = set()
+        deduped_cloud: list[str] = []
+        for t in cloud_targets:
+            if t in seen_cloud:
+                continue
+            seen_cloud.add(t)
+            try:
+                import ipaddress as _ipa
+                _ipa.ip_network(t, strict=False)
+                # It's an IP/CIDR — skip for cloud enum
+                continue
+            except ValueError:
+                pass
+            deduped_cloud.append(t)
+        if not deduped_cloud:
+            print(
+                f"{Colors.RED}[!] -m cloud requires at least one domain target.\n"
+                f"    Provide via --recon-domain <DOMAIN ...>, --ds-file <file>, "
+                f"or a targets file with one domain per line.{Colors.RESET}"
+            )
+            sys.exit(1)
+        print(
+            f"{Colors.CYAN}[*] Starting cloud asset enumeration on "
+            f"{len(deduped_cloud)} domain(s) "
+            f"(AWS S3, Azure Blob, GCP GCS)...{Colors.RESET}"
+        )
+        all_cloud_findings: list = []
+        for domain_target in deduped_cloud:
+            print(f"{Colors.GRAY}[*]   Enumerating cloud assets for: {domain_target}{Colors.RESET}")
+            domain_findings = await cloud_enum.enumerate_cloud_assets(
+                domain_target, concurrency=concurrency
+            )
+            all_cloud_findings.extend(domain_findings)
+        if all_cloud_findings:
+            for f in all_cloud_findings:
+                sev_color = {
+                    'CRITICAL':   Colors.RED + Colors.BOLD,
+                    'HIGH':       Colors.BRIGHT_RED,
+                    'INFO':       Colors.BLUE,
+                }.get(f.get('severity', 'INFO'), Colors.WHITE)
+                print(
+                    f"{sev_color}[{f['severity']}]{Colors.RESET} "
+                    f"{f['vulnerability']} — {Colors.UNDERLINE}{f['url']}{Colors.RESET}"
+                )
+                print(f"    {Colors.GRAY}{f['details']}{Colors.RESET}")
+            csv_file = save_results_to_csv(all_cloud_findings)
+            if csv_file:
+                print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
+            save_results_to_json(all_cloud_findings)
+        else:
+            print(f"{Colors.GREEN}[*] Cloud enumeration completed; no exposed assets found.{Colors.RESET}")
+        return
+
     # --- JS PATHS MODE (-m js-paths) ---
     if module_mode == 'js-paths':
         js_targets = []
@@ -1344,9 +1415,38 @@ async def main(
                     await asyncio.gather(*scan_tasks, return_exceptions=True)
             
         state_manager.update_phase("vulnerability_scanning_complete")
-        
+
     else:
         print(f"\n[*] Using previously found vulnerabilities...")
+
+    # 3b. Cloud asset enumeration for domain targets
+    # Run after service scanning; only for non-IP targets (domains).
+    if not module_filter or module_filter == 'cloud':
+        domain_targets_for_cloud = []
+        for t in targets:
+            host = t.get('display_target') or t.get('scan_address', '')
+            if not host:
+                continue
+            try:
+                import ipaddress as _ipa
+                _ipa.ip_network(host, strict=False)
+                continue  # skip raw IPs
+            except ValueError:
+                pass
+            domain_targets_for_cloud.append(host)
+        domain_targets_for_cloud = list(dict.fromkeys(domain_targets_for_cloud))
+        if domain_targets_for_cloud:
+            print(
+                f"{Colors.CYAN}[*] Running cloud asset enumeration on "
+                f"{len(domain_targets_for_cloud)} domain target(s)...{Colors.RESET}"
+            )
+            for _cloud_domain in domain_targets_for_cloud:
+                _cloud_findings = await cloud_enum.enumerate_cloud_assets(
+                    _cloud_domain, concurrency=concurrency
+                )
+                for _cf in _cloud_findings:
+                    state_manager.add_vulnerability(_cf)
+            print(f"{Colors.GREEN}[+] Cloud asset enumeration complete.{Colors.RESET}")
 
     # 4. Print Results
     print(f"{Colors.BRIGHT_CYAN}\n" + "="*50 + f"{Colors.RESET}")
@@ -1593,12 +1693,13 @@ if __name__ == "__main__":
         "-m", "--module",
         choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs",
                  "domain-scan", "recon", "js-paths", "aem", "cpanel", "dns",
-                 "jenkins", "service_recon"],
+                 "jenkins", "service_recon", "cloud"],
         help=(
             "Scan/run the specified module. "
             "Use 'recon' for subdomain enumeration, "
             "'domain-scan' for HTTP validation & checks, "
-            "'js-paths' for JS file analysis and endpoint probing."
+            "'js-paths' for JS file analysis and endpoint probing, "
+            "'cloud' for AWS S3 / Azure Blob / GCP GCS bucket enumeration."
         )
     )
     parser.add_argument(
@@ -1668,8 +1769,32 @@ if __name__ == "__main__":
         action="store_true",
         help="After -m recon, run full 1-65535 port scan and nmap -sCV -Pn on alive hosts."
     )
+    parser.add_argument(
+        "--proxy",
+        metavar="URL",
+        default=None,
+        help="Route all HTTP(S) requests through this proxy (e.g. http://127.0.0.1:8080)."
+    )
+    parser.add_argument(
+        "--update-templates",
+        action="store_true",
+        dest="update_templates",
+        help="Sync Nuclei templates before the scan starts."
+    )
 
     args = parser.parse_args()
+
+    # --- Proxy support ---
+    if args.proxy:
+        os.environ['HTTP_PROXY'] = args.proxy
+        os.environ['HTTPS_PROXY'] = args.proxy
+        print(f"[*] Proxy set: {args.proxy}")
+        print("[!] Note: SSL verification may fail through an intercepting proxy (e.g. Burp). "
+              "If so, set PYTHONHTTPSVERIFY=0 or pass verify=False explicitly.")
+
+    # --- Nuclei template sync ---
+    if args.update_templates:
+        nuclei_runner.sync_nuclei_templates()
 
     try:
         asyncio.run(main(
