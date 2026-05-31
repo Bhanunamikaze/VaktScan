@@ -79,6 +79,35 @@ These are the same class of bug as the cPanel false positive fix. Every item her
 - **Azure**: Blob storage enumeration, Azure AD tenant discovery
 - **GCP**: GCS bucket enumeration, GCP metadata endpoint SSRF
 
+### Google Dorking (domain/subdomain targets only — not applicable to raw IPs)
+
+Passive recon via Google Search Operators to surface exposed assets and leaked credentials indexed by Google. Requires a Google Custom Search API key + Search Engine ID (or a scraping fallback with rate limiting).
+
+**Dork categories and example queries** (parameterized with `{domain}`):
+
+| Category | Dork | Finding |
+|---|---|---|
+| Open S3 buckets | `site:s3.amazonaws.com "{domain}"` | Publicly indexed S3 content |
+| Azure Blob exposure | `site:blob.core.windows.net "{domain}"` | Publicly indexed Azure storage |
+| GCP storage exposure | `site:storage.googleapis.com "{domain}"` | Publicly indexed GCS content |
+| Exposed env/config files | `site:{domain} ext:env OR ext:cfg OR ext:conf OR ext:ini` | Config files with potential credentials |
+| Exposed log files | `site:{domain} ext:log` | Application/server logs |
+| Pastebin credential leaks | `site:pastebin.com "{domain}" password OR passwd OR secret OR token OR apikey` | Leaked credentials in pastes |
+| GitHub credential leaks | `site:github.com "{domain}" password OR secret OR token OR apikey` | Secrets in public repos |
+| Exposed backup files | `site:{domain} ext:bak OR ext:sql OR ext:dump OR ext:backup` | Database dumps and backups |
+| Directory listings | `site:{domain} intitle:"index of" "parent directory"` | Apache/Nginx open directory |
+| Login panel exposure | `site:{domain} inurl:admin OR inurl:login OR inurl:wp-admin` | Admin panels indexed by Google |
+| API key/secret in URLs | `site:{domain} inurl:api_key= OR inurl:secret= OR inurl:token=` | Secrets embedded in URLs |
+| Cloud metadata SSRF | `site:{domain} inurl:169.254.169.254` | SSRF to cloud metadata service |
+
+**Implementation notes:**
+- Only run on `domain` and `subdomain` targets — skip if target is a raw IP or CIDR
+- Use Google Custom Search JSON API (`https://customsearch.googleapis.com/customsearch/v1`) — requires `--google-api-key` and `--google-cx` args
+- Rate limit to 1 request/second (API quota: 100 queries/day free tier)
+- Deduplicate results across dork categories before reporting
+- Each result: severity INFO with dork used, matched URL, and snippet from Google
+- Expose as `-m google-dork` standalone mode and wire into full scan pipeline for domain targets
+
 ### Passive Intelligence
 
 - **Shodan** API integration — pull known open ports/banners for target IPs without active scanning
@@ -138,3 +167,4 @@ These are the same class of bug as the cPanel false positive fix. Every item her
 8. **Asset inventory persistence (SQLite)** — required for delta reports and change detection
 9. **EPSS scoring** — enriches CVE findings with exploitation probability
 10. **Delta reports** — new vs resolved findings across scan runs
+11. **Google Dorking** — domain/subdomain targets only; surfaces open S3/Azure/GCP buckets and leaked credentials indexed by Google via Custom Search API
