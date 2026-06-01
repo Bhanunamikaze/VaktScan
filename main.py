@@ -1481,6 +1481,26 @@ async def cmd_scan(args):
     target_type = target_classifier(args.target)
     print(f"{Colors.CYAN}[*] Target type: {target_type} — {args.target}{Colors.RESET}")
 
+    # For file targets: detect domain lines and route them through recon if needed
+    _file_domains = []
+    _file_ips = []
+    if target_type == 'file':
+        try:
+            with open(args.target) as _fh:
+                _lines = [l.strip() for l in _fh if l.strip() and not l.startswith('#')]
+            for _line in _lines:
+                if target_classifier(_line) == 'domain':
+                    _file_domains.append(_line)
+                else:
+                    _file_ips.append(_line)
+            if _file_domains:
+                if args.no_subdomain_enum:
+                    print(f"{Colors.CYAN}[*] Mixed file: {len(_file_domains)} domain(s), {len(_file_ips)} IP/CIDR(s) — subdomain enum skipped (--no-subdomain-enum){Colors.RESET}")
+                else:
+                    print(f"{Colors.CYAN}[*] Mixed file: {len(_file_domains)} domain(s), {len(_file_ips)} IP/CIDR(s) — subdomain enum will run for domains{Colors.RESET}")
+        except Exception:
+            pass
+
     # Guard against IPv6 CIDR ranges that are too large to scan
     if target_type == 'cidr' and ':' in args.target:
         try:
@@ -1516,7 +1536,7 @@ async def cmd_scan(args):
             module_filter=args.module,
             custom_ports=args.ports,
             chunk_size=args.chunk_size,
-            recon_domains=None,
+            recon_domains=_file_domains if _file_domains and not args.no_subdomain_enum else None,
             wordlist=args.wordlist,
             scan_found=args.scan_found,
             nmap_enabled=args.nmap,

@@ -238,3 +238,20 @@ This section tracks the full CLI redesign approved in the June 2026 brainstorm.
 #### 7.7 enum Subcommand
 - [ ] Implement enum subcommand: subdomain discovery only (amass, subfinder, etc.), writes subs to reports/{domain}_subdomains_{timestamp}.txt
 - [ ] Add --probe flag to enum that auto-chains into probe subcommand when done
+
+---
+
+## 8. Mixed Target File Handling ✅ DONE
+
+- [x] Detect domain vs IP lines in a mixed targets file
+- [x] Print info message showing domain count vs IP count when mixed file detected
+- [x] Pass domain lines to recon pipeline (subdomain enum) when --no-subdomain-enum is not set
+- [x] --no-subdomain-enum skips enum for domain lines but they still get port-scanned
+- [ ] Full integration test: mixed file with 1 domain + 1 IP completes both pipelines
+
+## 9. Documentation ✅ DONE
+
+- [x] README.md rewritten with ASCII architecture diagram, CLI reference, quick start, module table
+- [x] docs/adding-a-module.md — step-by-step guide for adding a new scanner module (all 7 touch points)
+- [ ] Add screenshot/GIF of a real scan run to README
+- [ ] docs/adding-a-module.md — add example for adding a check to an existing module (not just new module)
