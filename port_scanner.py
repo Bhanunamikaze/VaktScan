@@ -126,12 +126,14 @@ async def check_port_with_progress(
     """
     scan_address = target_obj['scan_address']
     resolved_ip = target_obj['resolved_ip']
-    
+
     # Use resolved_ip for the actual TCP connection to avoid issues if scan_address is a URL
     connect_host = resolved_ip if resolved_ip else scan_address
     if connect_host.startswith(('http://', 'https://')):
         import urllib.parse
         connect_host = urllib.parse.urlparse(connect_host).hostname or connect_host
+    # Strip brackets from IPv6 addresses — asyncio.open_connection handles bare IPv6 without brackets
+    connect_host = connect_host.strip('[]')
 
     async with semaphore:
         result = None

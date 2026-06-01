@@ -89,16 +89,18 @@ def target_classifier(target: str):
     # File: existing path on disk
     if os.path.isfile(target):
         return 'file'
+    # Strip brackets from IPv6 addresses (e.g., [::1] -> ::1)
+    stripped_target = target.strip('[]')
     # CIDR: contains slash and is a valid network
-    if '/' in target:
+    if '/' in stripped_target:
         try:
-            ipaddress.ip_network(target, strict=False)
+            ipaddress.ip_network(stripped_target, strict=False)
             return 'cidr'
         except ValueError:
             pass
     # IP: valid IP address
     try:
-        ipaddress.ip_address(target)
+        ipaddress.ip_address(stripped_target)
         return 'ip'
     except ValueError:
         pass
@@ -1462,8 +1464,21 @@ async def process_chunk_services(open_ports_results, service_ports, module_filte
 async def cmd_scan(args):
     """Handler for `vaktscan scan` — calls the existing main() orchestrator."""
     global _partial_findings
+    import ipaddress
     target_type = target_classifier(args.target)
     print(f"{Colors.CYAN}[*] Target type: {target_type} — {args.target}{Colors.RESET}")
+
+    # Guard against IPv6 CIDR ranges that are too large to scan
+    if target_type == 'cidr' and ':' in args.target:
+        try:
+            stripped_target = args.target.strip('[]')
+            net = ipaddress.ip_network(stripped_target, strict=False)
+            if isinstance(net, ipaddress.IPv6Network) and net.prefixlen < 112:
+                print(f"{Colors.RED}[!] IPv6 CIDR /{net.prefixlen} would scan {net.num_addresses:,} addresses — too large. Use /{112}+ (max 65536 hosts).{Colors.RESET}")
+                sys.exit(1)
+        except ValueError:
+            pass
+
     try:
         await main(
             targets_file=args.target,

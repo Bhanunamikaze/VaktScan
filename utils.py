@@ -280,16 +280,21 @@ def get_service_ports():
     }
 
 async def resolve_hostname(hostname):
-    """Asynchronously resolves a hostname to an IP address."""
+    """Asynchronously resolves a hostname to an IP address (IPv4 or IPv6)."""
     try:
         # Use asyncio's event loop to perform DNS resolution without blocking
         loop = asyncio.get_running_loop()
         addr_info = await loop.getaddrinfo(hostname, None)
-        # Return the first IPv4 address found
+        # Return the first IPv4 address found, falling back to IPv6
+        ipv4_addr = None
+        ipv6_addr = None
         for family, socktype, proto, canonname, sockaddr in addr_info:
-            if family == socket.AF_INET:
-                return sockaddr[0]
-        return None
+            if family == socket.AF_INET and not ipv4_addr:
+                ipv4_addr = sockaddr[0]
+            elif family == socket.AF_INET6 and not ipv6_addr:
+                ipv6_addr = sockaddr[0]
+        # Prefer IPv4 for backward compatibility, but fall back to IPv6 if available
+        return ipv4_addr if ipv4_addr else ipv6_addr
     except socket.gaierror:
         return None
 
