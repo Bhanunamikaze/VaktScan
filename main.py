@@ -33,6 +33,7 @@ from utils import (
     build_scan_targets_from_mappings,
     collect_domain_hosts,
     get_service_ports,
+    parse_targets_file,
     process_targets,
     process_targets_streaming,
     resolve_hostnames,
@@ -397,23 +398,10 @@ async def run_recon_followups(
     return all_findings
 
 def load_subdomains_file(file_path):
-    """
-    Load subdomains from a user-provided file, stripping blanks/comments.
-    """
-    entries = []
-    try:
-        with open(file_path, "r", encoding="utf-8") as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                entries.append(line.lower())
-    except OSError as exc:
-        print(f"{Colors.RED}[!] Unable to read subdomain file '{file_path}': {exc}{Colors.RESET}")
-        sys.exit(1)
-
+    """Load targets from a file using the robust parse_targets_file parser."""
+    entries = parse_targets_file(file_path)
     if not entries:
-        print(f"{Colors.YELLOW}[!] Subdomain file '{file_path}' did not contain any usable entries.{Colors.RESET}")
+        print(f"{Colors.YELLOW}[!] File '{file_path}' contained no usable targets after normalization.{Colors.RESET}")
     return entries
 
 
@@ -433,15 +421,7 @@ def expand_recon_inputs(recon_args):
             continue
 
         if os.path.isfile(candidate):
-            try:
-                with open(candidate, "r", encoding="utf-8") as handle:
-                    for line in handle:
-                        line = line.strip()
-                        if not line or line.startswith("#"):
-                            continue
-                        expanded.append(line.lower())
-            except OSError as exc:
-                print(f"{Colors.RED}[!] Unable to read recon domain file '{candidate}': {exc}{Colors.RESET}")
+            expanded.extend(parse_targets_file(candidate))
         else:
             expanded.append(candidate.lower())
 
@@ -518,14 +498,7 @@ async def main(
             dns_targets.extend(expand_recon_inputs(recon_domains))
         # Also accept a plain targets file with one domain per line.
         if targets_file and os.path.isfile(targets_file):
-            try:
-                with open(targets_file, 'r', encoding='utf-8') as fh:
-                    for line in fh:
-                        line = line.strip()
-                        if line and not line.startswith('#'):
-                            dns_targets.append(line)
-            except Exception:
-                pass
+            dns_targets.extend(parse_targets_file(targets_file))
         dns_targets = list(dict.fromkeys(dns_targets))
         if not dns_targets:
             print(
@@ -563,11 +536,7 @@ async def main(
             cloud_targets.extend(expand_recon_inputs(recon_domains))
         if targets_file and os.path.isfile(targets_file):
             try:
-                with open(targets_file, 'r', encoding='utf-8') as fh:
-                    for line in fh:
-                        line = line.strip()
-                        if line and not line.startswith('#'):
-                            cloud_targets.append(line)
+                cloud_targets.extend(parse_targets_file(targets_file))
             except Exception:
                 pass
         # Deduplicate, preserving order; skip raw IPs
@@ -1026,9 +995,10 @@ async def main(
         else:
             print(f"{Colors.CYAN}[*] Starting VaktScan - Nordic Security Scanner...{Colors.RESET}")
 
-        # 1. Process targets
-        raw_targets = [line.strip() for line in open(targets_file, 'r')]
-        
+        # 1. Process targets — use robust parser (handles schemas, comments,
+        #    inline comments, commas, tabs, BOM, encoding issues, etc.)
+        raw_targets = parse_targets_file(targets_file)
+
         should_stream = len(raw_targets) > 1000
 
         if should_stream:
@@ -1546,25 +1516,21 @@ async def cmd_scan(args):
     target_type = target_classifier(args.target)
     print(f"{Colors.CYAN}[*] Target type: {target_type} — {args.target}{Colors.RESET}")
 
-    # For file targets: detect domain lines and route them through recon if needed
+    # For file targets: use robust parser then classify each entry
     _file_domains = []
     _file_ips = []
     if target_type == 'file':
-        try:
-            with open(args.target) as _fh:
-                _lines = [l.strip() for l in _fh if l.strip() and not l.startswith('#')]
-            for _line in _lines:
-                if target_classifier(_line) == 'domain':
-                    _file_domains.append(_line)
-                else:
-                    _file_ips.append(_line)
-            if _file_domains:
-                if args.no_subdomain_enum:
-                    print(f"{Colors.CYAN}[*] Mixed file: {len(_file_domains)} domain(s), {len(_file_ips)} IP/CIDR(s) — subdomain enum skipped (--no-subdomain-enum){Colors.RESET}")
-                else:
-                    print(f"{Colors.CYAN}[*] Mixed file: {len(_file_domains)} domain(s), {len(_file_ips)} IP/CIDR(s) — subdomain enum will run for domains{Colors.RESET}")
-        except Exception:
-            pass
+        _lines = parse_targets_file(args.target)
+        for _line in _lines:
+            if target_classifier(_line) == 'domain':
+                _file_domains.append(_line)
+            else:
+                _file_ips.append(_line)
+        if _file_domains:
+            if args.no_subdomain_enum:
+                print(f"{Colors.CYAN}[*] Mixed file: {len(_file_domains)} domain(s), {len(_file_ips)} IP/CIDR(s) — subdomain enum skipped (--no-subdomain-enum){Colors.RESET}")
+            else:
+                print(f"{Colors.CYAN}[*] Mixed file: {len(_file_domains)} domain(s), {len(_file_ips)} IP/CIDR(s) — subdomain enum will run for domains{Colors.RESET}")
 
     # Guard against IPv6 CIDR ranges that are too large to scan
     if target_type == 'cidr' and ':' in args.target:

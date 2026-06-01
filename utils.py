@@ -1,6 +1,126 @@
 import asyncio
 import socket
 import ipaddress
+import re
+import urllib.parse
+
+
+def _normalize_target_token(raw: str) -> str:
+    """
+    Normalize a single target token to a clean hostname/IP/CIDR string.
+
+    Handles:
+    - URL schemas (http://, https://, ftp://) → strip schema
+    - URL paths (/path/to/resource) → strip path
+    - URL ports in URLs (https://host:8443/path) → returns 'host' (port discovered by scanner)
+    - IPv6 brackets [::1] → ::1
+    - Trailing dots on domains (example.com.) → example.com
+    - Whitespace, null bytes
+    """
+    t = raw.strip().strip('\x00')
+    if not t:
+        return ''
+    # Strip schema
+    if '://' in t:
+        parsed = urllib.parse.urlparse(t)
+        t = parsed.hostname or ''
+        if not t:
+            return ''
+    # Strip path (anything after first /)
+    if '/' in t and not t.startswith('['):
+        # But preserve IPv6 CIDRs like 2001:db8::/32
+        if ':' not in t.split('/')[0]:
+            t = t.split('/')[0]
+    # Strip port suffix from non-CIDR entries: host:port
+    # IPv6: [::1]:8080 or ::1 (no colon-port strip)
+    if t.startswith('['):
+        # Bracketed IPv6: [::1] or [::1]:8080
+        t = t.lstrip('[').split(']')[0]
+    elif ':' in t:
+        # Could be IPv6 (multiple colons) or host:port (single colon)
+        parts = t.split(':')
+        if len(parts) == 2:
+            # host:port — strip the port
+            t = parts[0]
+        # else IPv6 address — keep as-is
+    # Strip trailing dot (FQDN notation)
+    t = t.rstrip('.')
+    return t.lower().strip()
+
+
+def parse_targets_file(filepath: str) -> list:
+    """
+    Robustly parse a targets file into a deduplicated list of clean target strings.
+
+    Handles:
+    - UTF-8 BOM, latin-1 fallback, null bytes, binary garbage
+    - Windows (\\r\\n), old Mac (\\r), Unix (\\n) line endings
+    - Full-line comments (# ...) and inline comments (target # comment)
+    - Empty and whitespace-only lines
+    - URL schemas (http://, https://) → extract hostname
+    - URL paths and ports → extract hostname only
+    - Comma-separated targets on one line: 192.168.1.1,192.168.1.2
+    - Tab-separated targets on one line
+    - Multiple spaces between targets on one line
+    - IPv4, IPv4 CIDR, IPv6, IPv6 CIDR, domains, subdomains
+    - IPv6 bracket notation [::1]
+    - Trailing dots on FQDNs (example.com.)
+    - Duplicate entries (preserved order, first occurrence wins)
+    """
+    try:
+        try:
+            with open(filepath, 'r', encoding='utf-8-sig', errors='replace') as fh:
+                content = fh.read()
+        except OSError:
+            return []
+    except Exception:
+        return []
+
+    seen = set()
+    results = []
+
+    for raw_line in re.split(r'\r\n|\r|\n', content):
+        # Strip whitespace
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Strip full-line comments
+        if line.startswith('#'):
+            continue
+        # Strip inline comments: keep everything before the first ' #' or '\t#'
+        for sep in (' #', '\t#'):
+            idx = line.find(sep)
+            if idx != -1:
+                line = line[:idx].strip()
+        if not line:
+            continue
+        # Split on commas or tabs to handle multiple targets per line
+        # Also split on whitespace runs IF neither token looks like it needs spaces
+        tokens = re.split(r'[,\t]+', line)
+        if len(tokens) == 1:
+            # No comma/tab — try splitting on whitespace only if it produces
+            # valid-looking tokens (avoids splitting "sub domain.com" incorrectly)
+            ws_tokens = line.split()
+            if len(ws_tokens) > 1:
+                # Validate each ws_token looks like a target before using them
+                all_look_like_targets = all(
+                    re.match(r'^[\w\.\-\:\[\]/]+$', t) for t in ws_tokens
+                )
+                if all_look_like_targets:
+                    tokens = ws_tokens
+
+        for raw_token in tokens:
+            t = _normalize_target_token(raw_token)
+            if not t:
+                continue
+            # Skip obviously invalid tokens (single chars, pure punctuation)
+            if len(t) < 2:
+                continue
+            if t not in seen:
+                seen.add(t)
+                results.append(t)
+
+    return results
 
 
 def normalize_host_value(host_value):
