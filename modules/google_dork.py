@@ -17,20 +17,55 @@ except ImportError:
 
 MODULE_NAME = "google_dork"
 
-# Built-in dork templates (12 categories)
+# Built-in dork templates (28 categories targeting critical exposures and vulnerabilities)
 BUILTIN_DORKS = [
-    ("open_s3_bucket",      'site:s3.amazonaws.com "{domain}"'),
-    ("azure_blob_exposure", 'site:blob.core.windows.net "{domain}"'),
-    ("gcp_storage",         'site:storage.googleapis.com "{domain}"'),
-    ("exposed_configs",     'site:{domain} ext:env OR ext:cfg OR ext:conf OR ext:ini'),
-    ("exposed_logs",        'site:{domain} ext:log'),
-    ("pastebin_leaks",      'site:pastebin.com "{domain}" password OR passwd OR secret OR token OR apikey'),
-    ("github_leaks",        'site:github.com "{domain}" password OR secret OR token OR apikey'),
-    ("backup_files",        'site:{domain} ext:bak OR ext:sql OR ext:dump OR ext:backup'),
-    ("directory_listing",   'site:{domain} intitle:"index of" "parent directory"'),
-    ("admin_panels",        'site:{domain} inurl:admin OR inurl:login OR inurl:wp-admin'),
-    ("api_key_in_url",      'site:{domain} inurl:api_key= OR inurl:secret= OR inurl:token='),
-    ("cloud_metadata_ssrf", 'site:{domain} inurl:169.254.169.254'),
+    # 1. Cloud Storage Exposure
+    ("open_s3_bucket",          'site:s3.amazonaws.com "{domain}"'),
+    ("azure_blob_exposure",     'site:blob.core.windows.net "{domain}"'),
+    ("gcp_storage",             'site:storage.googleapis.com "{domain}"'),
+    ("digitalocean_spaces",     'site:digitaloceanspaces.com "{domain}"'),
+    
+    # 2. Configuration & Environment Exposure
+    ("exposed_configs",         'site:{domain} ext:env OR ext:cfg OR ext:conf OR ext:ini OR ext:yml OR ext:yaml OR ext:toml'),
+    ("exposed_logs",            'site:{domain} ext:log OR ext:txt "error" OR "warning" OR "exception" OR "debug"'),
+    ("docker_compose_exposure", 'site:{domain} filename:docker-compose.yml OR filename:Dockerfile OR filename:docker-compose.yaml'),
+    
+    # 3. Third-Party Code & Text Leaks
+    ("github_leaks",            'site:github.com "{domain}" password OR secret OR token OR apikey OR "db_password"'),
+    ("gitlab_leaks",            'site:gitlab.com "{domain}" password OR secret OR token OR apikey'),
+    ("pastebin_leaks",          'site:pastebin.com "{domain}" password OR secret OR token OR apikey'),
+    ("trello_leaks",            'site:trello.com "{domain}"'),
+    
+    # 4. Backup & Archive Artifacts
+    ("backup_files",            'site:{domain} ext:bak OR ext:old OR ext:backup OR ext:temp OR ext:tmp OR ext:swp'),
+    ("database_dumps",          'site:{domain} ext:sql OR ext:db OR ext:dump OR ext:sqlite OR ext:sqlite3 OR ext:mdb'),
+    ("compressed_archives",     'site:{domain} ext:zip OR ext:tar.gz OR ext:tgz OR ext:rar OR ext:7z OR ext:war OR ext:tar'),
+    
+    # 5. Directory & Version Control Disclosures
+    ("directory_listing",       'site:{domain} intitle:"index of" "parent directory"'),
+    ("version_control_leak",    'site:{domain} inurl:/.git OR inurl:/.svn OR inurl:/.hg OR inurl:/.bzr'),
+    
+    # 6. Administrative & Control Panels
+    ("admin_panels",            'site:{domain} inurl:admin OR inurl:login OR inurl:wp-admin OR inurl:dashboard OR inurl:cpanel OR inurl:controlpanel'),
+    ("phpmyadmin_exposure",     'site:{domain} inurl:phpmyadmin OR inurl:pma OR intitle:phpmyadmin'),
+    ("kibana_dashboard",        'site:{domain} inurl:5601 OR inurl:app/kibana OR intitle:Kibana'),
+    
+    # 7. Debugging & Testing Diagnostics
+    ("phpinfo_exposure",        'site:{domain} inurl:phpinfo.php OR inurl:info.php OR inurl:test.php OR intitle:"phpinfo()"'),
+    ("django_debug_mode",       'site:{domain} "DisallowedHost" OR "TemplateDoesNotExist" OR "Django Version" OR "Traceback (most recent call last)"'),
+    ("prometheus_metrics",      'site:{domain} inurl:metrics OR inurl:prometheus OR intitle:Prometheus'),
+    
+    # 8. Exposed Credentials & API Keys
+    ("api_key_in_url",          'site:{domain} inurl:api_key= OR inurl:secret= OR inurl:token= OR inurl:auth_key= OR inurl:apikey='),
+    ("cloud_metadata_ssrf",     'site:{domain} inurl:169.254.169.254 OR inurl:latest/meta-data/'),
+    
+    # 9. Vulnerability-Prone URL Parameters
+    ("open_redirect_params",    'site:{domain} inurl:redir= OR inurl:redirect= OR inurl:url= OR inurl:return= OR inurl:next= OR inurl:dest='),
+    ("sql_injection_params",    'site:{domain} inurl:id= OR inurl:cat= OR inurl:prod= OR inurl:select= OR inurl:query='),
+    
+    # 10. Document Exposure (Spreadsheets & PDFs)
+    ("sensitive_pdfs",          'site:{domain} ext:pdf "confidential" OR "internal use only" OR "proprietary" OR "not for public redistribution"'),
+    ("exposed_spreadsheets",    'site:{domain} ext:xls OR ext:xlsx OR ext:csv OR ext:tsv "password" OR "email" OR "credential" OR "salary"'),
 ]
 
 

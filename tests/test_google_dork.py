@@ -10,7 +10,7 @@ from modules.schema import CANONICAL_KEYS
 
 class TestGoogleDork(unittest.TestCase):
     def test_builtin_dorks_count(self):
-        self.assertEqual(len(BUILTIN_DORKS), 12)
+        self.assertEqual(len(BUILTIN_DORKS), 28)
 
     def test_module_name(self):
         self.assertEqual(MODULE_NAME, 'google_dork')
