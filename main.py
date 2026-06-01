@@ -67,6 +67,7 @@ from modules import (
     inventory,
     cloud_enum,
     nvd,
+    google_dork,
 )
 
 # Map service names to their corresponding modules
@@ -870,7 +871,28 @@ async def main(
             async def handle_domain(domain):
                 print(f"{Colors.CYAN}[*] Enumerating subdomains for {domain}...{Colors.RESET}")
                 scanner = recon.ReconScanner(domain, wordlist=wordlist)
-                results_file, subdomains = await scanner.run_all()
+
+                # Run subdomain enum and Google Dork in parallel
+                _gapi_key = os.environ.get('GOOGLE_API_KEY', '')
+                _gcx     = os.environ.get('GOOGLE_CX', '')
+
+                async def _maybe_dork():
+                    if not (_gapi_key and _gcx):
+                        return []
+                    print(f"{Colors.CYAN}[*] Google Dork recon running in parallel for {domain}...{Colors.RESET}")
+                    return await google_dork.run(domain, api_key=_gapi_key, cx=_gcx)
+
+                (enum_result, dork_findings) = await asyncio.gather(
+                    scanner.run_all(), _maybe_dork(), return_exceptions=False
+                )
+                results_file, subdomains = enum_result
+
+                if isinstance(dork_findings, list) and dork_findings:
+                    print(f"{Colors.GREEN}[+] Google Dork: {len(dork_findings)} finding(s) for {domain}{Colors.RESET}")
+                    for _df in dork_findings:
+                        state_manager.add_vulnerability(_df)
+                elif isinstance(dork_findings, Exception):
+                    print(f"{Colors.YELLOW}[!] Google Dork error for {domain}: {dork_findings}{Colors.RESET}")
                 if not subdomains:
                     print(f"{Colors.YELLOW}[!] Recon completed for {domain} but no subdomains were discovered.{Colors.RESET}")
                     return None
@@ -1536,7 +1558,10 @@ async def cmd_scan(args):
             module_filter=args.module,
             custom_ports=args.ports,
             chunk_size=args.chunk_size,
-            recon_domains=_file_domains if _file_domains and not args.no_subdomain_enum else None,
+            recon_domains=(
+                [args.target] if target_type == 'domain' and not args.no_subdomain_enum
+                else (_file_domains if _file_domains and not args.no_subdomain_enum else None)
+            ),
             wordlist=args.wordlist,
             scan_found=args.scan_found,
             nmap_enabled=args.nmap,
@@ -1673,7 +1698,6 @@ async def cmd_google_dork(args):
         print(f"{Colors.RED}[!] --google-api-key and --google-cx are required (or set GOOGLE_API_KEY / GOOGLE_CX env vars){Colors.RESET}")
         sys.exit(1)
     os.makedirs(args.output_dir, exist_ok=True)
-    from modules import google_dork
     findings = await google_dork.run(
         domain=args.domain,
         api_key=args.google_api_key,
