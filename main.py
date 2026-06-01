@@ -173,15 +173,17 @@ async def run_recon_followups(
     port_retries=DEFAULT_PORT_RETRIES,
 ):
     """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
+    all_findings = []
+
     if not subdomains:
         print(f"{Colors.YELLOW}[!] No subdomains discovered to probe further.{Colors.RESET}")
-        return
+        return all_findings
 
     http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
     unique_targets = sorted({target.strip().lower() for target in subdomains if target and target.strip()})
     if not unique_targets:
         print(f"{Colors.YELLOW}[!] No normalized subdomains remained after filtering.{Colors.RESET}")
-        return
+        return all_findings
 
     host_to_ip, ip_to_hosts, unresolved_hosts = await resolve_hostnames(unique_targets)
     recon_targets = build_scan_targets_from_mappings(unique_targets, host_to_ip)
@@ -282,7 +284,7 @@ async def run_recon_followups(
     if not probe_urls:
         print(f"{Colors.YELLOW}[!] No hostname or port-scan HTTP targets were generated; skipping httpx probe.{Colors.RESET}")
         await _await_nmap_task()
-        return
+        return all_findings
 
     print(
         f"{Colors.CYAN}[*] Probing {len(probe_urls)} URLs with httpx "
@@ -292,7 +294,7 @@ async def run_recon_followups(
     if not httpx_data:
         print(f"{Colors.YELLOW}[!] No alive HTTP services detected by httpx.{Colors.RESET}")
         await _await_nmap_task()
-        return
+        return all_findings
 
     http_runner.save_csv(httpx_data, recon_domain.replace('.', '_'))
 
@@ -344,11 +346,9 @@ async def run_recon_followups(
             for finding in domain_scan_findings:
                 # Same formatting as nuclei
                 print(f"    - {finding['status']} | {finding['vulnerability']} | {finding['url']}")
-            # Let the final results aggregation handle these
-            # Ideally this needs a way to propagate all the way up, but we're in the recon branch.
-            # We'll save them directly here since run_recon_followups doesn't return anything.
-            if domain_scan_findings:
-                save_results_to_csv(domain_scan_findings, filename=os.path.join(output_dir, f"domain_scan_vulns_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
+            all_findings.extend(domain_scan_findings)
+            # Keep the separate CSV too (it's useful as a per-run artifact)
+            save_results_to_csv(domain_scan_findings, filename=os.path.join(output_dir, f"domain_scan_vulns_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
 
     if alive_urls:
         #print("Commented Out DIR ENUM - Continue to Nuclei")
@@ -361,8 +361,27 @@ async def run_recon_followups(
             print(f"{Colors.GREEN}[+] Nuclei identified {len(nuclei_results)} findings.{Colors.RESET}")
             for vuln in nuclei_results:
                 print(f"    - {vuln['status']} | {vuln['vulnerability']} | {vuln['url']}")
+            all_findings.extend(nuclei_results)
         else:
             print(f"{Colors.GREEN}[+] Nuclei scan complete with no findings.{Colors.RESET}")
+
+    if alive_urls:
+        print(f"{Colors.CYAN}[*] Running web checks on {len(alive_urls)} alive URL(s)...{Colors.RESET}")
+        wc_results = await web_checks.run_checks(alive_urls, concurrency)
+        if wc_results:
+            print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
+            all_findings.extend(wc_results)
+        else:
+            print(f"{Colors.GREEN}[+] Web checks complete. No findings.{Colors.RESET}")
+
+    if alive_urls:
+        print(f"{Colors.CYAN}[*] Running JS path extraction on {len(alive_urls)} alive URL(s)...{Colors.RESET}")
+        js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=output_dir)
+        js_result = await js_scanner.run()
+        js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
+        if js_findings:
+            print(f"{Colors.GREEN}[+] JS paths: {len(js_findings)} finding(s).{Colors.RESET}")
+            all_findings.extend(js_findings)
 
     domain_hosts = collect_domain_hosts(alive_urls)
     if domain_hosts:
@@ -375,6 +394,7 @@ async def run_recon_followups(
         print(f"{Colors.YELLOW}[!] No hostname targets available for gau/waybackurls.{Colors.RESET}")
 
     await _await_nmap_task()
+    return all_findings
 
 def load_subdomains_file(file_path):
     """
@@ -793,7 +813,7 @@ async def main(
             print(f"{Colors.RED}[!] Failed to write normalized subdomain file: {exc}{Colors.RESET}")
             return
         print(f"{Colors.GRAY}[*] {len(unique_subdomains)} subdomains loaded. Starting HTTP probing...{Colors.RESET}")
-        await run_recon_followups(
+        recon_findings = await run_recon_followups(
             unique_subdomains,
             safe_label,         # used as the output label
             domain_output_dir,
@@ -803,6 +823,10 @@ async def main(
             connect_timeout,
             port_retries,
         )
+        if recon_findings:
+            print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {safe_label}{Colors.RESET}")
+            for _f in recon_findings:
+                state_manager.add_vulnerability(_f)
         return
 
     # --- RECONNAISSANCE MODE (-m recon or --sub-domains WITH a recon domain) ---
@@ -847,7 +871,7 @@ async def main(
                 print(f"{Colors.RED}[!] Failed to write normalized subdomain file: {exc}{Colors.RESET}")
                 return
             print(f"{Colors.GRAY}[*] Using provided subdomain list '{subdomains_file}'. Skipping passive recon and starting with HTTP probing.{Colors.RESET}")
-            await run_recon_followups(
+            recon_findings = await run_recon_followups(
                 unique_subdomains,
                 recon_domain,
                 domain_output_dir,
@@ -857,6 +881,10 @@ async def main(
                 connect_timeout,
                 port_retries,
             )
+            if recon_findings:
+                print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {recon_domain}{Colors.RESET}")
+                for _f in recon_findings:
+                    state_manager.add_vulnerability(_f)
             recon_targets_file = dedup_file
             recon_targets_count = len(unique_subdomains)
             recon_targets_label = dedup_file
@@ -898,7 +926,7 @@ async def main(
                     return None
                 domain_output_dir = os.path.dirname(results_file)
                 if scan_found:
-                    await run_recon_followups(
+                    recon_findings = await run_recon_followups(
                         subdomains,
                         domain,
                         domain_output_dir,
@@ -908,6 +936,10 @@ async def main(
                         connect_timeout,
                         port_retries,
                     )
+                    if recon_findings:
+                        print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {domain}{Colors.RESET}")
+                        for _f in recon_findings:
+                            state_manager.add_vulnerability(_f)
                 else:
                     print(f"{Colors.GRAY}[*] Recon ({domain}) complete. Use --scan-found to automatically probe recon targets (httpx → dirsearch → nuclei).{Colors.RESET}")
                 return {
@@ -1131,6 +1163,17 @@ async def main(
                             print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
                             for v in wc_results:
                                 state_manager.add_vulnerability(v)
+
+                        # dirsearch
+                        dir_enumerator = dir_enum.DirEnumerator(domain_label, output_dir=web_output_dir)
+                        await dir_enumerator.run_dirsearch(alive_urls)
+
+                        # JS path extraction
+                        js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=web_output_dir)
+                        js_result = await js_scanner.run()
+                        js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
+                        for _jf in js_findings:
+                            state_manager.add_vulnerability(_jf)
                 else:
                     print(f"{Colors.YELLOW}[!] No alive web services found on open web ports.{Colors.RESET}")
         else:
@@ -1563,7 +1606,7 @@ async def cmd_scan(args):
                 else (_file_domains if _file_domains and not args.no_subdomain_enum else None)
             ),
             wordlist=args.wordlist,
-            scan_found=args.scan_found,
+            scan_found=True,  # scan subcommand always probes discovered subdomains
             nmap_enabled=args.nmap,
             subdomains_file=args.sub_domains_file,
             module_mode=None,
@@ -1746,7 +1789,7 @@ if __name__ == "__main__":
     sp_scan.add_argument("--ports", type=str)
     sp_scan.add_argument("--chunk-size", type=int, default=30000)
     sp_scan.add_argument("--wordlist")
-    sp_scan.add_argument("--scan-found", action="store_true")
+    # --scan-found removed: the scan subcommand always probes discovered subdomains
     sp_scan.add_argument("--nmap", action="store_true")
     sp_scan.add_argument("--sub-domains", metavar="FILE", dest="sub_domains_file")
     sp_scan.add_argument("--recon-concurrency", type=int, default=2)
