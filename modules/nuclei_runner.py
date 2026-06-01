@@ -238,8 +238,32 @@ class NucleiRunner:
         return ''
 
 
-def sync_nuclei_templates():
-    """Update Nuclei templates before a scan."""
+def sync_nuclei_templates(force=False):
+    """
+    Update Nuclei templates before a scan.
+    If force=False, only update if last sync was > 7 days ago.
+    """
+    import time
+    sync_file = os.path.expanduser('~/.nuclei_last_sync')
+    should_sync = force
+    
+    if not should_sync:
+        if not os.path.exists(sync_file):
+            should_sync = True
+        else:
+            try:
+                mtime = os.path.getmtime(sync_file)
+                days_since_sync = (time.time() - mtime) / (24 * 3600)
+                if days_since_sync > 7:
+                    should_sync = True
+                else:
+                    print(f"\033[94m[*] Nuclei templates synced {days_since_sync:.1f} days ago (within 7 days). Skipping auto-sync.\033[0m")
+            except Exception:
+                should_sync = True
+
+    if not should_sync:
+        return
+
     print("\033[96m[*] Syncing Nuclei templates...\033[0m")
     try:
         result = subprocess.run(
@@ -250,6 +274,11 @@ def sync_nuclei_templates():
         )
         if result.returncode == 0:
             print("\033[92m[+] Nuclei templates updated successfully.\033[0m")
+            try:
+                with open(sync_file, 'w') as f:
+                    f.write(str(time.time()))
+            except Exception:
+                pass
         else:
             stderr_snippet = (result.stderr or "").strip()[:200]
             print(f"\033[93m[!] Nuclei template sync failed: {stderr_snippet}\033[0m")
@@ -259,3 +288,4 @@ def sync_nuclei_templates():
         print("\033[93m[!] Nuclei template sync timed out after 60 seconds.\033[0m")
     except Exception as e:
         print(f"\033[93m[!] Nuclei template sync error: {e}\033[0m")
+
