@@ -3,6 +3,7 @@ import re
 import os
 import json
 import time
+from datetime import datetime
 
 MODULE_NAME = 'CISA-KEV'
 _KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'
@@ -90,6 +91,7 @@ async def enrich_findings_with_kev(findings: list) -> list:
                 'http_status': f.get('http_status', 'N/A'),
                 'page_title': 'N/A',
                 'content_length': 'N/A',
+                'timestamp': datetime.utcnow().isoformat() + 'Z',
             })
 
     return findings + kev_findings

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import os
 import re
 
@@ -48,6 +49,7 @@ def _make_finding(ip: str, vulnerability: str, status: str, details: str,
         'http_status': 'N/A',
         'page_title': 'N/A',
         'content_length': 'N/A',
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
     }
 
 

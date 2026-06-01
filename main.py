@@ -2,14 +2,22 @@ import asyncio
 import argparse
 import sys
 import os
+import re
 import signal
-import csv
-import json
 import time
-import ipaddress
 
 # Add vendor directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
+
+from reporter import (
+    Colors,
+    deduplicate_vulnerabilities,
+    save_port_scan_csv,
+    save_results_to_csv,
+    save_results_to_json,
+    write_sarif_output,
+    print_final_results,
+)
 
 from utils import (
     build_default_http_probe_urls,
@@ -67,40 +75,48 @@ SERVICE_TO_MODULE = {
 }
 
 
-# Color codes for terminal output
-class Colors:
-    # Basic colors
-    RED = '\033[91m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    MAGENTA = '\033[95m'
-    CYAN = '\033[96m'
-    WHITE = '\033[97m'
-    GRAY = '\033[90m'
-    
-    # Bright colors
-    BRIGHT_RED = '\033[1;91m'
-    BRIGHT_GREEN = '\033[1;92m'
-    BRIGHT_YELLOW = '\033[1;93m'
-    BRIGHT_BLUE = '\033[1;94m'
-    BRIGHT_MAGENTA = '\033[1;95m'
-    BRIGHT_CYAN = '\033[1;96m'
-    
-    # Styles
-    BOLD = '\033[1m'
-    DIM = '\033[2m'
-    UNDERLINE = '\033[4m'
-    RESET = '\033[0m'
-    
-    @staticmethod
-    def disable():
-        """Disable colors for non-terminal environments."""
-        Colors.RED = Colors.GREEN = Colors.YELLOW = Colors.BLUE = ''
-        Colors.MAGENTA = Colors.CYAN = Colors.WHITE = Colors.GRAY = ''
-        Colors.BRIGHT_RED = Colors.BRIGHT_GREEN = Colors.BRIGHT_YELLOW = ''
-        Colors.BRIGHT_BLUE = Colors.BRIGHT_MAGENTA = Colors.BRIGHT_CYAN = ''
-        Colors.BOLD = Colors.DIM = Colors.UNDERLINE = Colors.RESET = ''
+def target_classifier(target: str):
+    """Classify a target string as 'domain', 'ip', 'cidr', or 'file'."""
+    import ipaddress
+    # File: existing path on disk
+    if os.path.isfile(target):
+        return 'file'
+    # CIDR: contains slash and is a valid network
+    if '/' in target:
+        try:
+            ipaddress.ip_network(target, strict=False)
+            return 'cidr'
+        except ValueError:
+            pass
+    # IP: valid IP address
+    try:
+        ipaddress.ip_address(target)
+        return 'ip'
+    except ValueError:
+        pass
+    # Domain: anything else with at least one dot
+    return 'domain'
+
+
+def make_output_dir(target: str, subcommand: str = 'scan', base: str = 'reports') -> str:
+    """
+    Create and return an output directory path.
+    - scan: reports/<target>_<YYYYMMDD_HHMMSS>/
+    - others: reports/<target>/
+    """
+    # Sanitize target for use as directory name
+    safe_target = re.sub(r'[^\w\.\-]', '_', target)[:64]
+    if subcommand == 'scan':
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(base, f"{safe_target}_{ts}")
+    else:
+        path = os.path.join(base, safe_target)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+# Global to track partial findings for SIGINT handler
+_partial_findings: list = []
 
 LOGO_PRINTED = False
 
@@ -133,226 +149,6 @@ def print_logo():
 """
     print(logo)
     LOGO_PRINTED = True
-
-def save_port_scan_csv(scan_results, domain):
-    """
-    Save full port scan results to a CSV file.
-    scan_results structure: list of tuples (target_obj, {'open_ports': []})
-    """
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"portscan_results_{domain}_{timestamp}.csv"
-    
-    headers = ['Timestamp', 'Hostname', 'IP Address', 'Open Ports', 'Count']
-    
-    try:
-        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(headers)
-            
-            scan_time = time.strftime("%Y-%m-%d %H:%M:%S")
-            
-            count = 0
-            for target_obj, result in scan_results:
-                open_ports = result.get('open_ports', [])
-                if not open_ports:
-                    continue
-                
-                hostname = target_obj.get('display_target', 'N/A')
-                ip = target_obj.get('resolved_ip', 'N/A')
-                ports_str = ", ".join(map(str, sorted(open_ports)))
-                
-                writer.writerow([
-                    scan_time,
-                    hostname,
-                    ip,
-                    ports_str,
-                    len(open_ports)
-                ])
-                count += 1
-                
-        print(f"{Colors.GREEN}[+] Full port scan results saved to: {Colors.BOLD}{filename}{Colors.RESET}")
-        return filename
-    except Exception as e:
-        print(f"{Colors.RED}[!] Error saving port scan CSV: {e}{Colors.RESET}")
-        return None
-
-def save_results_to_csv(vulnerabilities, filename=None):
-    """Save vulnerability results to CSV format."""
-    if not filename:
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"scan_results_{timestamp}.csv"
-    
-    csv_headers = ['Timestamp', 'Status', 'Vulnerability', 'Hostname', 'IP Address', 'Port', 'URL', 'Payload_URL', 'Module', 'Service_Version', 'Severity', 'Details', 'HTTP_Status', 'Page_Title', 'Content_Length']
-    
-    try:
-        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(csv_headers)
-            
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            
-            for vuln in vulnerabilities:
-                hostname = vuln.get('target', 'N/A')
-                try:
-                    # If the target is a valid IP, it's not a hostname
-                    ipaddress.ip_address(hostname)
-                    hostname = ''
-                except ValueError:
-                    pass
-
-                writer.writerow([
-                    timestamp,
-                    vuln.get('status', 'UNKNOWN'),
-                    vuln.get('vulnerability', 'N/A'),
-                    hostname,
-                    vuln.get('resolved_ip', 'N/A'),
-                    vuln.get('port', 'N/A'),
-                    vuln.get('url', 'N/A'),
-                    vuln.get('payload_url', 'N/A'),
-                    vuln.get('module', 'N/A'),
-                    vuln.get('service_version', 'N/A'),
-                    vuln.get('severity', 'N/A'),
-                    vuln.get('details', 'N/A'),
-                    str(vuln.get('http_status', 'N/A')),
-                    vuln.get('page_title', 'N/A'),
-                    str(vuln.get('content_length', 'N/A'))
-                ])
-        
-        print(f"{Colors.GREEN}[+] Results saved to {filename}{Colors.RESET}")
-        return filename
-
-    except Exception as e:
-        print(f"{Colors.RED}[!] Error saving CSV file: {e}{Colors.RESET}")
-        return None
-
-def save_results_to_json(vulnerabilities, filename=None):
-    """Save vulnerability results to JSON format."""
-    if not filename:
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        filename = f"scan_results_{timestamp}.json"
-
-    fields = [
-        'Timestamp', 'Status', 'Vulnerability', 'Hostname', 'IP Address',
-        'Port', 'URL', 'Payload_URL', 'Module', 'Service_Version',
-        'Severity', 'Details', 'HTTP_Status', 'Page_Title', 'Content_Length',
-    ]
-
-    try:
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        records = []
-        for vuln in vulnerabilities:
-            hostname = vuln.get('target', 'N/A')
-            try:
-                ipaddress.ip_address(hostname)
-                hostname = ''
-            except ValueError:
-                pass
-
-            records.append({
-                'Timestamp':       timestamp,
-                'Status':          vuln.get('status', 'UNKNOWN'),
-                'Vulnerability':   vuln.get('vulnerability', 'N/A'),
-                'Hostname':        hostname,
-                'IP Address':      vuln.get('resolved_ip', 'N/A'),
-                'Port':            vuln.get('port', 'N/A'),
-                'URL':             vuln.get('url', 'N/A'),
-                'Payload_URL':     vuln.get('payload_url', 'N/A'),
-                'Module':          vuln.get('module', 'N/A'),
-                'Service_Version': vuln.get('service_version', 'N/A'),
-                'Severity':        vuln.get('severity', 'N/A'),
-                'Details':         vuln.get('details', 'N/A'),
-                'HTTP_Status':     str(vuln.get('http_status', 'N/A')),
-                'Page_Title':      vuln.get('page_title', 'N/A'),
-                'Content_Length':  str(vuln.get('content_length', 'N/A')),
-            })
-
-        with open(filename, 'w', encoding='utf-8') as jf:
-            json.dump(records, jf, indent=2)
-
-        print(f"{Colors.GREEN}[+] Results saved to {filename}{Colors.RESET}")
-        return filename
-
-    except Exception as e:
-        print(f"{Colors.RED}[!] Error saving JSON file: {e}{Colors.RESET}")
-        return None
-
-def write_sarif_output(vulnerabilities, output_path):
-    """Write vulnerability findings to SARIF 2.1.0 format for GitHub/GitLab security tab integration."""
-
-    SEVERITY_MAP = {
-        "CRITICAL": "error",
-        "HIGH":     "error",
-        "MEDIUM":   "warning",
-        "LOW":      "note",
-        "INFO":     "none",
-    }
-
-    # Build unique rules from finding titles
-    rules_seen = {}
-    for vuln in vulnerabilities:
-        title = vuln.get('vulnerability', 'Unknown Finding')
-        if title not in rules_seen:
-            rule_id = f"VAKTSCAN-{len(rules_seen) + 1:03d}"
-            severity = vuln.get('severity', 'INFO').upper()
-            rules_seen[title] = {
-                "id": rule_id,
-                "name": title.replace(' ', ''),
-                "shortDescription": {"text": title},
-                "defaultConfiguration": {
-                    "level": SEVERITY_MAP.get(severity, "none")
-                },
-            }
-
-    rules = list(rules_seen.values())
-    rule_index = {r["shortDescription"]["text"]: i for i, r in enumerate(rules)}
-
-    results = []
-    for vuln in vulnerabilities:
-        title = vuln.get('vulnerability', 'Unknown Finding')
-        severity = vuln.get('severity', 'INFO').upper()
-        description = vuln.get('details', vuln.get('description', title))
-        target = vuln.get('target', 'unknown')
-        port = vuln.get('port', '')
-        uri = f"{target}:{port}" if port and str(port) not in ('N/A', '') else target
-
-        rule = rules_seen.get(title, {})
-        result_entry = {
-            "ruleId": rule.get("id", "VAKTSCAN-000"),
-            "ruleIndex": rule_index.get(title, 0),
-            "level": SEVERITY_MAP.get(severity, "none"),
-            "message": {"text": description},
-            "locations": [{
-                "physicalLocation": {
-                    "artifactLocation": {"uri": uri}
-                }
-            }],
-        }
-        results.append(result_entry)
-
-    sarif_doc = {
-        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-        "version": "2.1.0",
-        "runs": [{
-            "tool": {
-                "driver": {
-                    "name": "VaktScan",
-                    "version": "1.0.0",
-                    "informationUri": "https://github.com/bhanunamikaze/VaktScan",
-                    "rules": rules,
-                }
-            },
-            "results": results,
-        }]
-    }
-
-    try:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(sarif_doc, f, indent=2)
-        print(f"{Colors.GREEN}[+] SARIF report saved to {output_path}{Colors.RESET}")
-        return output_path
-    except Exception as e:
-        print(f"{Colors.RED}[!] Error saving SARIF file: {e}{Colors.RESET}")
-        return None
 
 
 async def run_recon_followups(
@@ -620,34 +416,19 @@ def expand_recon_inputs(recon_args):
 
     return expanded
 
-def deduplicate_vulnerabilities(vulnerabilities):
-    """
-    Deduplicates a list of vulnerabilities.
-    """
-    unique_vulns = {}
-    
-    for vuln in vulnerabilities:
-        vuln_key = (
-            vuln.get('resolved_ip', vuln.get('target')), 
-            vuln.get('port'),
-            vuln.get('vulnerability')
-        )
-        
-        if vuln_key not in unique_vulns:
-            unique_vulns[vuln_key] = vuln
-        else:
-            existing_vuln = unique_vulns[vuln_key]
-            try:
-                import ipaddress
-                ipaddress.ip_address(existing_vuln['target'])
-                try:
-                    ipaddress.ip_address(vuln['target'])
-                except ValueError:
-                    unique_vulns[vuln_key] = vuln
-            except ValueError:
-                pass
+async def _run_parallel_passive(domain: str, concurrency: int = 20) -> tuple:
+    """Run DNS recon and cloud enum in parallel for a domain. Returns (dns_findings, cloud_findings)."""
+    dns_task = dns_recon.run_dns_recon([domain], concurrency=concurrency)
+    cloud_task = cloud_enum.enumerate_cloud_assets(domain)
+    dns_f, cloud_f = await asyncio.gather(dns_task, cloud_task, return_exceptions=True)
+    if isinstance(dns_f, Exception):
+        print(f"[!] DNS recon error: {dns_f}")
+        dns_f = []
+    if isinstance(cloud_f, Exception):
+        print(f"[!] Cloud enum error: {cloud_f}")
+        cloud_f = []
+    return dns_f, cloud_f
 
-    return list(unique_vulns.values())
 
 async def main(
     targets_file,
@@ -1627,203 +1408,300 @@ async def process_chunk_services(open_ports_results, service_ports, module_filte
             
     return chunk_vulnerabilities
 
-async def print_final_results(all_vulnerabilities, output_csv):
-    final_vulnerabilities = deduplicate_vulnerabilities(all_vulnerabilities)
-    final_vulnerabilities = await cisa_kev.enrich_findings_with_kev(final_vulnerabilities)
-    print(f"[*] CISA KEV cross-reference complete.")
-    final_vulnerabilities = await epss.enrich_findings_with_epss(final_vulnerabilities)
-    final_vulnerabilities = await passive_intel.enrich_findings_with_passive_intel(final_vulnerabilities)
-    print(f"\n{Colors.BRIGHT_CYAN}=== Final Vulnerability Results ==={Colors.RESET}")
-    if final_vulnerabilities:
-        for result in final_vulnerabilities:
-            print(f"[!] {result['status']}: {result['vulnerability']} on {result['target']}")
+
+# ---------------------------------------------------------------------------
+# Subcommand handler functions
+# ---------------------------------------------------------------------------
+
+async def cmd_scan(args):
+    """Handler for `vaktscan scan` — calls the existing main() orchestrator."""
+    global _partial_findings
+    target_type = target_classifier(args.target)
+    print(f"{Colors.CYAN}[*] Target type: {target_type} — {args.target}{Colors.RESET}")
+    try:
+        await main(
+            targets_file=args.target,
+            concurrency=args.concurrency,
+            resume=args.resume,
+            output_csv=args.csv,
+            module_filter=args.module,
+            custom_ports=args.ports,
+            chunk_size=args.chunk_size,
+            recon_domains=None,
+            wordlist=args.wordlist,
+            scan_found=args.scan_found,
+            nmap_enabled=args.nmap,
+            subdomains_file=args.sub_domains_file,
+            module_mode=None,
+            domain_scan_file=None,
+            domain_scan_concurrency=50,
+            recon_concurrency=args.recon_concurrency,
+            connect_timeout=args.connect_timeout,
+            port_retries=args.port_retries,
+            js_url=None,
+            js_timeout=10,
+            sarif_output=args.sarif,
+        )
+    except KeyboardInterrupt:
+        if _partial_findings:
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            partial_path = f"scan_results_{ts}_PARTIAL.csv"
+            save_results_to_csv(_partial_findings, partial_path)
+            print(f"\n{Colors.YELLOW}[!] Partial results ({len(_partial_findings)} findings) saved to: {partial_path}{Colors.RESET}")
+        raise  # re-raise so the outer try/except in __main__ handles sys.exit
+
+
+async def cmd_enum(args):
+    """Handler for `vaktscan enum` — subdomain enumeration only."""
+    os.makedirs(args.output_dir, exist_ok=True)
+    scanner = recon.ReconScanner(args.domain, output_dir=args.output_dir, wordlist=args.wordlist)
+    subdomains = await scanner.run_all()
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    out_file = os.path.join(args.output_dir, f"{args.domain}_subdomains_{ts}.txt")
+    with open(out_file, 'w') as f:
+        for sub in sorted(subdomains):
+            f.write(sub + '\n')
+    print(f"{Colors.GREEN}[+] {len(subdomains)} subdomains found. Written to: {out_file}{Colors.RESET}")
+    if args.probe:
+        probe_args = argparse.Namespace(
+            target=out_file,
+            ports=None,
+            concurrency=args.concurrency,
+            timeout=10.0,
+            output_dir=args.output_dir,
+        )
+        await cmd_probe(probe_args)
+
+
+async def cmd_probe(args):
+    """Handler for `vaktscan probe` — port scan + httpx only."""
+    print(f"{Colors.CYAN}[*] Probe mode: {args.target}{Colors.RESET}")
+    await main(
+        targets_file=args.target,
+        concurrency=args.concurrency,
+        resume=False,
+        output_csv=True,
+        module_filter=None,
+        custom_ports=args.ports,
+        chunk_size=30000,
+        module_mode=None,
+        sarif_output=None,
+    )
+
+
+async def cmd_dns(args):
+    """Handler for `vaktscan dns` — DNS recon only."""
+    os.makedirs(args.output_dir, exist_ok=True)
+    domains = args.domain  # list of domains
+    print(f"{Colors.CYAN}[*] DNS recon on {len(domains)} domain(s)...{Colors.RESET}")
+    findings = await dns_recon.run_dns_recon(domains, concurrency=args.concurrency)
+    if findings:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_path = os.path.join(args.output_dir, f"dns_{ts}.csv")
+        save_results_to_csv(findings, out_path)
+        print(f"{Colors.GREEN}[+] DNS findings: {len(findings)}. CSV: {out_path}{Colors.RESET}")
     else:
-        print("[*] No vulnerabilities found.")
-    if final_vulnerabilities:
-        save_results_to_csv(final_vulnerabilities)
-        save_results_to_json(final_vulnerabilities)
+        print(f"{Colors.GREEN}[*] DNS recon complete. No findings.{Colors.RESET}")
+
+
+async def cmd_cloud(args):
+    """Handler for `vaktscan cloud` — cloud asset enum only."""
+    os.makedirs(args.output_dir, exist_ok=True)
+    print(f"{Colors.CYAN}[*] Cloud enum for: {args.domain}{Colors.RESET}")
+    findings = await cloud_enum.enumerate_cloud_assets(args.domain)
+    if findings:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_path = os.path.join(args.output_dir, f"cloud_{ts}.csv")
+        save_results_to_csv(findings, out_path)
+        print(f"{Colors.GREEN}[+] Cloud findings: {len(findings)}. CSV: {out_path}{Colors.RESET}")
+    else:
+        print(f"{Colors.GREEN}[*] Cloud enum complete. No findings.{Colors.RESET}")
+
+
+async def cmd_js_paths(args):
+    """Handler for `vaktscan js-paths` — JS path extraction only."""
+    os.makedirs(args.output_dir, exist_ok=True)
+    # Build URL list from target (file or single URL)
+    if os.path.isfile(args.target):
+        with open(args.target) as f:
+            urls = [l.strip() for l in f if l.strip()]
+    else:
+        urls = [args.target]
+    scanner_js = js_paths.JSPathsScanner(urls, threads=args.threads, timeout=args.timeout)
+    result = await scanner_js.run()
+    findings = result.get('findings', []) if isinstance(result, dict) else result
+    if findings:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_path = os.path.join(args.output_dir, f"js_paths_{ts}.csv")
+        save_results_to_csv(findings, out_path)
+        print(f"{Colors.GREEN}[+] JS path findings: {len(findings)}. CSV: {out_path}{Colors.RESET}")
+    else:
+        print(f"{Colors.GREEN}[*] JS paths complete. No findings.{Colors.RESET}")
+
+
+async def cmd_domain_scan(args):
+    """Handler for `vaktscan domain-scan` — domain HTTP analysis only."""
+    os.makedirs(args.output_dir, exist_ok=True)
+    await main(
+        targets_file=None,
+        concurrency=args.concurrency,
+        resume=False,
+        output_csv=True,
+        module_filter=None,
+        module_mode='domain-scan',
+        domain_scan_file=args.domain,
+        domain_scan_concurrency=args.concurrency,
+        sarif_output=None,
+    )
+
+
+async def cmd_google_dork(args):
+    """Handler for `vaktscan google-dork` — Google Dorking passive recon."""
+    if not args.google_api_key or not args.google_cx:
+        print(f"{Colors.RED}[!] --google-api-key and --google-cx are required (or set GOOGLE_API_KEY / GOOGLE_CX env vars){Colors.RESET}")
+        sys.exit(1)
+    os.makedirs(args.output_dir, exist_ok=True)
+    from modules import google_dork
+    findings = await google_dork.run(
+        domain=args.domain,
+        api_key=args.google_api_key,
+        cx=args.google_cx,
+        dorks=args.dorks,
+        delay=args.delay,
+        max_results=args.max_results,
+    )
+    if findings:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_path = os.path.join(args.output_dir, f"google_dork_{ts}.csv")
+        save_results_to_csv(findings, out_path)
+        print(f"{Colors.GREEN}[+] Google Dork findings: {len(findings)}. CSV: {out_path}{Colors.RESET}")
+    else:
+        print(f"{Colors.GREEN}[*] Google Dork complete. No findings.{Colors.RESET}")
+
 
 if __name__ == "__main__":
-    if len(sys.argv) == 1 or '-h' in sys.argv or '--help' in sys.argv:
-        print_logo()
-    
+    print_logo()
+
+    # --- Root parser ---
     parser = argparse.ArgumentParser(
-        description="VaktScan - Attack Surface Scanner for ELK, Grafana, Prometheus, Next.js stacks."
+        prog="vaktscan",
+        description="VaktScan — Attack Surface Scanner",
     )
-    parser.add_argument(
-        "targets_file",
-        nargs='?',
-        help="Targets file (IPs/hostnames/CIDRs). Optional when using --recon."
-    )
-    parser.add_argument(
-        "-c", "--concurrency",
-        type=int,
-        default=100,
-        help="Concurrency level for network operations (default: 100)."
-    )
-    parser.add_argument(
-        "--connect-timeout",
-        type=float,
-        default=DEFAULT_CONNECT_TIMEOUT,
-        help=f"TCP connect timeout per port attempt in seconds (default: {DEFAULT_CONNECT_TIMEOUT:.1f})."
-    )
-    parser.add_argument(
-        "--port-retries",
-        type=int,
-        default=DEFAULT_PORT_RETRIES,
-        help=f"Retry timed out or transient port probes this many times (default: {DEFAULT_PORT_RETRIES})."
-    )
-    parser.add_argument(
-        "-r", "--resume",
-        action="store_true",
-        help="Resume an interrupted infrastructure scan."
-    )
-    parser.add_argument(
-        "--csv",
-        action="store_true",
-        help="Save consolidated vulnerability results to CSV."
-    )
-    parser.add_argument(
-        "--sarif",
-        metavar="FILE",
+    subparsers = parser.add_subparsers(dest="subcommand", metavar="COMMAND")
+    subparsers.required = True
+
+    # ---- scan subcommand ----
+    sp_scan = subparsers.add_parser("scan", help="Full attack surface scan")
+    sp_scan.add_argument("target", help="Domain, IP, CIDR, or targets file")
+    sp_scan.add_argument("-c", "--concurrency", type=int, default=100)
+    sp_scan.add_argument("--connect-timeout", type=float, default=DEFAULT_CONNECT_TIMEOUT)
+    sp_scan.add_argument("--port-retries", type=int, default=DEFAULT_PORT_RETRIES)
+    sp_scan.add_argument("-r", "--resume", action="store_true")
+    sp_scan.add_argument("--csv", action="store_true", help="Save results to CSV (always written; flag kept for compat)")
+    sp_scan.add_argument("--format",
+        choices=["csv", "json", "sarif", "all"],
         default=None,
-        help="Write findings to a SARIF 2.1.0 file (for GitHub/GitLab security tab integration)."
-    )
-    parser.add_argument(
-        "-m", "--module",
+        help="Additional output format (csv always written; use json/sarif/all for extras)")
+    sp_scan.add_argument("--sarif", metavar="FILE", default=None)
+    sp_scan.add_argument("-m", "--module",
         choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs",
-                 "domain-scan", "recon", "js-paths", "aem", "cpanel", "dns",
-                 "jenkins", "service_recon", "cloud"],
-        help=(
-            "Scan/run the specified module. "
-            "Use 'recon' for subdomain enumeration, "
-            "'domain-scan' for HTTP validation & checks, "
-            "'js-paths' for JS file analysis and endpoint probing, "
-            "'cloud' for AWS S3 / Azure Blob / GCP GCS bucket enumeration."
-        )
-    )
-    parser.add_argument(
-        "--url",
-        metavar="URL",
-        help="Single target URL for use with -m js-paths (e.g. https://example.com)."
-    )
-    parser.add_argument(
-        "--js-timeout",
-        type=int,
-        default=10,
-        metavar="SECONDS",
-        help="HTTP request timeout (seconds) for the js-paths module (default: 10)."
-    )
-    parser.add_argument(
-        "--ds-file",
-        metavar="FILE",
-        help="Domains file needed when using -m domain-scan."
-    )
-    parser.add_argument(
-        "--ds-concurrency",
-        type=int,
-        default=50,
-        help="Concurrency for domain-scan web checks (default: 50)."
-    )
-    parser.add_argument(
-        "-p", "--ports",
-        type=str,
-        help="Additional comma-separated ports to scan (e.g., 8080,8443,9999)."
-    )
-    parser.add_argument(
-        "--chunk-size",
-        type=int,
-        default=30000,
-        help="Chunk size for streaming mode (default: 30000)."
-    )
-    parser.add_argument(
-        "--recon-domain",
-        metavar="DOMAIN",
-        nargs="+",
-        dest="recon_domain",
-        help="Domain(s) to enumerate subdomains for when using -m recon."
-    )
-    parser.add_argument(
-        "--recon-concurrency",
-        type=int,
-        default=2,
-        help="Number of recon domains to run at once when multiple are provided."
-    )
-    parser.add_argument(
-        "--wordlist",
-        help="Wordlist for ffuf-based VHost fuzzing during -m recon."
-    )
-    parser.add_argument(
-        "--sub-domains",
-        metavar="FILE",
-        dest="sub_domains_file",
-        help="File of newline-separated subdomains to probe directly. Works standalone or paired with -m recon."
-    )
-    parser.add_argument(
-        "--scan-found",
-        action="store_true",
-        help="After -m recon, automatically probe subdomains via httpx → dirsearch → nuclei."
-    )
-    parser.add_argument(
-        "--nmap",
-        action="store_true",
-        help="After -m recon, run full 1-65535 port scan and nmap -sCV -Pn on alive hosts."
-    )
-    parser.add_argument(
-        "--proxy",
-        metavar="URL",
-        default=None,
-        help="Route all HTTP(S) requests through this proxy (e.g. http://127.0.0.1:8080)."
-    )
-    parser.add_argument(
-        "--update-templates",
-        action="store_true",
-        dest="update_templates",
-        help="Sync Nuclei templates before the scan starts."
-    )
+                 "aem", "cpanel", "jenkins", "service_recon"],
+        help="Run only this service module (all modules by default)")
+    sp_scan.add_argument("--ports", type=str)
+    sp_scan.add_argument("--chunk-size", type=int, default=30000)
+    sp_scan.add_argument("--wordlist")
+    sp_scan.add_argument("--scan-found", action="store_true")
+    sp_scan.add_argument("--nmap", action="store_true")
+    sp_scan.add_argument("--sub-domains", metavar="FILE", dest="sub_domains_file")
+    sp_scan.add_argument("--recon-concurrency", type=int, default=2)
+    sp_scan.add_argument("--no-subdomain-enum", action="store_true", dest="no_subdomain_enum",
+        help="Skip subdomain enumeration for domain targets")
+    sp_scan.add_argument("--proxy", metavar="URL", default=None)
+    sp_scan.add_argument("--update-templates", action="store_true", dest="update_templates")
+
+    # ---- enum subcommand ----
+    sp_enum = subparsers.add_parser("enum", help="Subdomain enumeration only")
+    sp_enum.add_argument("domain", help="Apex domain to enumerate")
+    sp_enum.add_argument("-c", "--concurrency", type=int, default=20)
+    sp_enum.add_argument("--wordlist")
+    sp_enum.add_argument("--output-dir", default="reports/")
+    sp_enum.add_argument("--probe", action="store_true", help="Chain into probe after enum")
+
+    # ---- probe subcommand ----
+    sp_probe = subparsers.add_parser("probe", help="Port scan + httpx probe")
+    sp_probe.add_argument("target", help="Domain, IP, CIDR, or file")
+    sp_probe.add_argument("--ports", type=str)
+    sp_probe.add_argument("-c", "--concurrency", type=int, default=50)
+    sp_probe.add_argument("--timeout", type=float, default=10.0)
+    sp_probe.add_argument("--output-dir", default="reports/")
+
+    # ---- dns subcommand ----
+    sp_dns = subparsers.add_parser("dns", help="DNS recon only")
+    sp_dns.add_argument("domain", nargs="+", help="Domain(s) to recon")
+    sp_dns.add_argument("-c", "--concurrency", type=int, default=20)
+    sp_dns.add_argument("--output-dir", default="reports/")
+
+    # ---- cloud subcommand ----
+    sp_cloud = subparsers.add_parser("cloud", help="Cloud asset enumeration")
+    sp_cloud.add_argument("domain", help="Apex domain")
+    sp_cloud.add_argument("-c", "--concurrency", type=int, default=50)
+    sp_cloud.add_argument("--output-dir", default="reports/")
+
+    # ---- js-paths subcommand ----
+    sp_js = subparsers.add_parser("js-paths", help="JS path extraction")
+    sp_js.add_argument("target", help="Single URL or file of URLs")
+    sp_js.add_argument("--threads", type=int, default=20)
+    sp_js.add_argument("--timeout", type=int, default=10)
+    sp_js.add_argument("--output-dir", default="reports/")
+
+    # ---- domain-scan subcommand ----
+    sp_ds = subparsers.add_parser("domain-scan", help="Domain-level HTTP analysis")
+    sp_ds.add_argument("domain", help="Apex domain")
+    sp_ds.add_argument("--httpx-data", metavar="FILE", help="Existing httpx JSON output")
+    sp_ds.add_argument("-c", "--concurrency", type=int, default=50)
+    sp_ds.add_argument("--output-dir", default="reports/")
+
+    # ---- google-dork subcommand ----
+    sp_dork = subparsers.add_parser("google-dork", help="Google Dorking passive recon")
+    sp_dork.add_argument("domain", help="Target domain")
+    sp_dork.add_argument("--google-api-key", default=os.environ.get("GOOGLE_API_KEY", ""))
+    sp_dork.add_argument("--google-cx", default=os.environ.get("GOOGLE_CX", ""))
+    sp_dork.add_argument("--dorks", metavar="FILE", default=None)
+    sp_dork.add_argument("--output-dir", default="reports/")
+    sp_dork.add_argument("--delay", type=float, default=1.0)
+    sp_dork.add_argument("--max-results", type=int, default=10)
 
     args = parser.parse_args()
 
-    # --- Proxy support ---
-    if args.proxy:
+    # --- Shared setup ---
+    if hasattr(args, 'proxy') and args.proxy:
         os.environ['HTTP_PROXY'] = args.proxy
         os.environ['HTTPS_PROXY'] = args.proxy
         print(f"[*] Proxy set: {args.proxy}")
-        print("[!] Note: SSL verification may fail through an intercepting proxy (e.g. Burp). "
-              "If so, set PYTHONHTTPSVERIFY=0 or pass verify=False explicitly.")
 
-    # --- Nuclei template sync ---
-    if args.update_templates:
+    if hasattr(args, 'update_templates') and args.update_templates:
         nuclei_runner.sync_nuclei_templates()
 
     try:
-        asyncio.run(main(
-            args.targets_file,
-            args.concurrency,
-            args.resume,
-            args.csv,
-            args.module,
-            args.ports,
-            args.chunk_size,
-            args.recon_domain,
-            args.wordlist,
-            args.scan_found,
-            args.nmap,
-            args.sub_domains_file,
-            args.module,
-            args.ds_file,
-            args.ds_concurrency,
-            args.recon_concurrency,
-            args.connect_timeout,
-            args.port_retries,
-            args.url,
-            args.js_timeout,
-            args.sarif,
-        ))
+        if args.subcommand == "scan":
+            asyncio.run(cmd_scan(args))
+        elif args.subcommand == "enum":
+            asyncio.run(cmd_enum(args))
+        elif args.subcommand == "probe":
+            asyncio.run(cmd_probe(args))
+        elif args.subcommand == "dns":
+            asyncio.run(cmd_dns(args))
+        elif args.subcommand == "cloud":
+            asyncio.run(cmd_cloud(args))
+        elif args.subcommand == "js-paths":
+            asyncio.run(cmd_js_paths(args))
+        elif args.subcommand == "domain-scan":
+            asyncio.run(cmd_domain_scan(args))
+        elif args.subcommand == "google-dork":
+            asyncio.run(cmd_google_dork(args))
     except KeyboardInterrupt:
         print("\n[*] Scanner terminated by user.")
         sys.exit(0)
     except Exception as e:
         print(f"\n[!] Fatal error: {e}")
-        # traceback.print_exc()
         sys.exit(1)

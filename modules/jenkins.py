@@ -9,6 +9,8 @@ CSRF protection, job/queue visibility, log/audit access.
 """
 
 import asyncio
+from datetime import datetime
+
 import httpx
 
 MODULE_NAME = 'Jenkins'
@@ -60,6 +62,7 @@ def _finding(status, severity, vulnerability, details, target, resolved_ip, port
         'http_status': str(http_status),
         'page_title': page_title,
         'content_length': str(content_length),
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
     }
 
 

@@ -21,6 +21,7 @@ emits is a dict with the AEM-compatible keys (`status`, `vulnerability`,
 """
 
 import asyncio
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -394,7 +395,7 @@ async def identify_cpanel_target(client, origin_url, version_info, port=80):
 def _finding(status, severity, vulnerability, details, payload_url, evidence_hash=None, surface=None, cve_id=None):
     """
     Build a finding dict that satisfies the §9c reporting contract. The
-    universal fields (`module`, `target`, `server`, `port`, `resolved_ip`,
+    universal fields (`module`, `target`, `port`, `resolved_ip`,
     `url`, `service_version`) are stamped by run_scans before the row is
     enriched.
     """
@@ -2332,9 +2333,9 @@ async def run_scans(target_obj, port, adjacent_open_ports=None):
             f['module'] = MODULE_NAME
             f['service_version'] = service_version
             f['target'] = display_target
-            f['server'] = scan_address
             f['port'] = port
             f['resolved_ip'] = resolved_ip
+            f['timestamp'] = datetime.utcnow().isoformat() + 'Z'
             actual_url = f.get('payload_url') or display_target
             if isinstance(actual_url, str) and actual_url.startswith(('http://', 'https://')):
                 f['url'] = actual_url.split(' | ')[0]

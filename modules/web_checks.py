@@ -13,7 +13,7 @@ All findings use the canonical VaktScan finding schema:
 from __future__ import annotations
 
 import asyncio
-import datetime
+import datetime  # NOTE: Uses module-level import (not "from datetime import datetime") because timezone.utc is referenced
 import re
 import socket
 import ssl
@@ -57,7 +57,7 @@ def _make_finding(
         "status":          status,
         "vulnerability":   vulnerability,
         "target":          host,
-        "resolved_ip":     "",           # filled in lazily; callers may patch
+        "resolved_ip":     "N/A",         # filled in lazily; callers may patch
         "port":            port,
         "url":             url,
         "payload_url":     payload_url,
@@ -68,6 +68,7 @@ def _make_finding(
         "http_status":     http_status,
         "page_title":      page_title,
         "content_length":  content_length,
+        "timestamp":       datetime.datetime.utcnow().isoformat() + "Z",
     }
 
 

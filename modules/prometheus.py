@@ -1,5 +1,6 @@
 import httpx
 import asyncio
+from datetime import datetime
 import json
 import re
 
@@ -594,22 +595,24 @@ async def run_scans(target_obj, port):
                         'module': 'Prometheus',
                         'service_version': service_version,
                         'target': display_target,
-                        'server': scan_address,
                         'port': port,
                         'resolved_ip': resolved_ip,
-                        'url': res.get('target')
+                        'url': res.get('target'),
+                        'timestamp': datetime.utcnow().isoformat() + 'Z',
                     })
+                    res.setdefault('severity', 'INFO')
                     all_results.append(res)
         elif isinstance(result_group, dict):
             result_group.update({
                 'module': 'Prometheus',
                 'service_version': service_version,
                 'target': display_target,
-                'server': scan_address,
                 'port': port,
                 'resolved_ip': resolved_ip,
-                'url': result_group.get('target')
+                'url': result_group.get('target'),
+                'timestamp': datetime.utcnow().isoformat() + 'Z',
             })
+            result_group.setdefault('severity', 'INFO')
             all_results.append(result_group)
 
     if port == 9100:
@@ -619,11 +622,12 @@ async def run_scans(target_obj, port):
                 'module': 'Prometheus Node Exporter',
                 'service_version': service_version if service_version != 'Unknown' else 'Node Exporter',
                 'target': display_target,
-                'server': scan_address,
                 'port': port,
                 'resolved_ip': resolved_ip,
-                'url': ne_result.get('target')
+                'url': ne_result.get('target'),
+                'timestamp': datetime.utcnow().isoformat() + 'Z',
             })
+            ne_result.setdefault('severity', 'INFO')
             all_results.append(ne_result)
             
     return all_results

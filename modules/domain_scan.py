@@ -184,10 +184,12 @@ class DomainScanner:
             "module":          "domain_scan",
             "service_version": httpx_entry.get('webserver', 'N/A'),
             "url":             url,
+            "payload_url":     url,
             "details":         details,
             "http_status":     str(httpx_entry.get('status_code', 'N/A')),
             "page_title":      httpx_entry.get('title', 'N/A'),
-            "content_length":  str(httpx_entry.get('content_length', 'N/A'))
+            "content_length":  str(httpx_entry.get('content_length', 'N/A')),
+            "timestamp":       datetime.utcnow().isoformat() + "Z",
         }
 
     def detect_takeover_from_response(self, httpx_entry: dict, status_code: int, body_excerpt: str) -> dict | None:

@@ -1,5 +1,6 @@
 import httpx
 import asyncio
+from datetime import datetime
 import random
 import string
 import re
@@ -217,9 +218,13 @@ async def run_scans(target_obj, port):
             'module': 'Next.js',
             'service_version': 'Unknown',
             'target': display_target,
-            'server': scan_address,
             'port': port,
-            'resolved_ip': resolved_ip
+            'resolved_ip': resolved_ip,
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
         })
+        res.setdefault('payload_url', res.get('url', 'N/A'))
+        res.setdefault('http_status', 'N/A')
+        res.setdefault('page_title', 'N/A')
+        res.setdefault('content_length', 'N/A')
 
     return all_results

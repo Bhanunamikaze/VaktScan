@@ -10,6 +10,7 @@ No API keys required — pure public HTTP probes.
 """
 
 import asyncio
+from datetime import datetime
 import ipaddress
 import json
 import re
@@ -40,7 +41,7 @@ def _finding(
         'vulnerability': vulnerability,
         'details': details,
         'target': host,
-        'resolved_ip': resolved_ip or '',
+        'resolved_ip': resolved_ip or 'N/A',
         'port': 443,
         'url': url,
         'payload_url': payload_url or url,
@@ -49,6 +50,7 @@ def _finding(
         'http_status': 'N/A',
         'page_title': 'N/A',
         'content_length': 'N/A',
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
     }
 
 

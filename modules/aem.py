@@ -1,5 +1,6 @@
 import httpx
 import asyncio
+from datetime import datetime
 import json
 import re
 from urllib.parse import urlparse
@@ -2130,10 +2131,10 @@ async def run_scans(target_obj, port):
                     'module': 'AEM',
                     'service_version': service_version,
                     'target': display_target,
-                    'server': scan_address,
                     'port': port,
                     'resolved_ip': resolved_ip,
                     'url': actual_url,
+                    'timestamp': datetime.utcnow().isoformat() + 'Z',
                 })
                 all_results.append(res)
 
@@ -2142,13 +2143,13 @@ async def run_scans(target_obj, port):
             'module': 'AEM',
             'service_version': service_version,
             'target': display_target,
-            'server': scan_address,
             'port': port,
             'resolved_ip': resolved_ip,
             'url': display_target,
             'status': 'INFO',
             'vulnerability': 'AEM Service Identified',
             'details': f"AEM identification evidence: {', '.join(identity['evidence'])}.",
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
         })
 
     async def enrich_vuln(vuln):

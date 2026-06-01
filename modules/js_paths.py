@@ -11,6 +11,7 @@ Usage:
 """
 
 import asyncio
+from datetime import datetime
 import os
 import re
 import signal
@@ -58,6 +59,7 @@ def _make_finding(url: str, vulnerability: str, status: str,
         "http_status":     str(http_status),
         "page_title":      "N/A",
         "content_length":  "N/A",
+        "timestamp":       datetime.utcnow().isoformat() + "Z",
     }
 
 

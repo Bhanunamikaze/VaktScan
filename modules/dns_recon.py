@@ -35,6 +35,7 @@ httpx used only for crt.sh CT log queries.
 """
 
 import asyncio
+from datetime import datetime
 import os
 import random
 import re
@@ -308,7 +309,7 @@ def _finding(domain: str, status: str, severity: str, vulnerability: str, detail
         'http_status': 'N/A',
         'page_title': 'N/A',
         'content_length': 'N/A',
-        'server': domain,
+        'timestamp': datetime.utcnow().isoformat() + 'Z',
     }
 
 

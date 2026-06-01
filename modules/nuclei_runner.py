@@ -185,7 +185,12 @@ class NucleiRunner:
                     'module': 'nuclei',
                     'service_version': 'N/A',
                     'url': data.get('matched-at', ''),
-                    'details': data.get('info', {}).get('description', '') or data.get('matcher-name', '')
+                    'payload_url': data.get('matched-at', ''),
+                    'http_status': 'N/A',
+                    'page_title': 'N/A',
+                    'content_length': 'N/A',
+                    'details': data.get('info', {}).get('description', '') or data.get('matcher-name', ''),
+                    'timestamp': datetime.utcnow().isoformat() + 'Z',
                 }
                 vulnerabilities.append(vuln)
 

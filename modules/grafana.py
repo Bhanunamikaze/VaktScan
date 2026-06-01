@@ -1,5 +1,6 @@
 import httpx
 import asyncio
+from datetime import datetime
 import json
 import re
 
@@ -868,22 +869,24 @@ async def run_scans(target_obj, port):
                         'module': 'Grafana',
                         'service_version': service_version,
                         'target': display_target,
-                        'server': scan_address,
                         'port': port,
                         'resolved_ip': resolved_ip,
-                        'url': res.get('target')
+                        'url': res.get('target'),
+                        'timestamp': datetime.utcnow().isoformat() + 'Z',
                     })
+                    res.setdefault('severity', 'INFO')
                     all_results.append(res)
         elif isinstance(result_group, dict):
             result_group.update({
                 'module': 'Grafana',
                 'service_version': service_version,
                 'target': display_target,
-                'server': scan_address,
                 'port': port,
                 'resolved_ip': resolved_ip,
-                'url': result_group.get('target')
+                'url': result_group.get('target'),
+                'timestamp': datetime.utcnow().isoformat() + 'Z',
             })
+            result_group.setdefault('severity', 'INFO')
             all_results.append(result_group)
             
     return all_results
