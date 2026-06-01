@@ -1465,6 +1465,7 @@ async def cmd_scan(args):
     """Handler for `vaktscan scan` — calls the existing main() orchestrator."""
     global _partial_findings
     import ipaddress
+    import tempfile
     target_type = target_classifier(args.target)
     print(f"{Colors.CYAN}[*] Target type: {target_type} — {args.target}{Colors.RESET}")
 
@@ -1479,9 +1480,19 @@ async def cmd_scan(args):
         except ValueError:
             pass
 
+    # main() expects a targets file path — write single targets to a temp file
+    _tmp_file = None
+    targets_file = args.target
+    if target_type in ('ip', 'cidr', 'domain'):
+        _tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+        _tmp.write(args.target + '\n')
+        _tmp.close()
+        targets_file = _tmp.name
+        _tmp_file = _tmp.name
+
     try:
         await main(
-            targets_file=args.target,
+            targets_file=targets_file,
             concurrency=args.concurrency,
             resume=args.resume,
             output_csv=args.csv,
@@ -1510,6 +1521,9 @@ async def cmd_scan(args):
             save_results_to_csv(_partial_findings, partial_path)
             print(f"\n{Colors.YELLOW}[!] Partial results ({len(_partial_findings)} findings) saved to: {partial_path}{Colors.RESET}")
         raise  # re-raise so the outer try/except in __main__ handles sys.exit
+    finally:
+        if _tmp_file and os.path.exists(_tmp_file):
+            os.unlink(_tmp_file)
 
 
 async def cmd_enum(args):
