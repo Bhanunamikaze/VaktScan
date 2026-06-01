@@ -878,10 +878,14 @@ async def main(
                 _gcx     = os.environ.get('GOOGLE_CX', '')
 
                 async def _maybe_dork():
-                    if not (_gapi_key and _gcx):
+                    if getattr(args, 'no_dork', False):
                         return []
                     print(f"{Colors.CYAN}[*] Google Dork recon running in parallel for {domain}...{Colors.RESET}")
-                    return await google_dork.run(domain, api_key=_gapi_key, cx=_gcx)
+                    dork_method = getattr(args, 'dork_method', 'auto')
+                    return await google_dork.run(
+                        domain, api_key=_gapi_key, cx=_gcx,
+                        method=dork_method
+                    )
 
                 (enum_result, dork_findings) = await asyncio.gather(
                     scanner.run_all(), _maybe_dork(), return_exceptions=False
@@ -1781,8 +1785,8 @@ async def cmd_domain_scan(args):
 
 async def cmd_google_dork(args):
     """Handler for `vaktscan google-dork` — Google Dorking passive recon."""
-    if not args.google_api_key or not args.google_cx:
-        print(f"{Colors.RED}[!] --google-api-key and --google-cx are required (or set GOOGLE_API_KEY / GOOGLE_CX env vars){Colors.RESET}")
+    if args.method == "api" and (not args.google_api_key or not args.google_cx):
+        print(f"{Colors.RED}[!] --google-api-key and --google-cx are required for 'api' method (or set GOOGLE_API_KEY / GOOGLE_CX env vars){Colors.RESET}")
         sys.exit(1)
     os.makedirs(args.output_dir, exist_ok=True)
     findings = await google_dork.run(
@@ -1792,6 +1796,7 @@ async def cmd_google_dork(args):
         dorks=args.dorks,
         delay=args.delay,
         max_results=args.max_results,
+        method=args.method,
     )
     if findings:
         ts = time.strftime("%Y%m%d_%H%M%S")
@@ -1841,6 +1846,9 @@ if __name__ == "__main__":
         help="Skip subdomain enumeration for domain targets")
     sp_scan.add_argument("--proxy", metavar="URL", default=None)
     sp_scan.add_argument("--update-templates", action="store_true", dest="update_templates")
+    sp_scan.add_argument("--no-dork", action="store_true", help="Skip Google Dorking passive recon")
+    sp_scan.add_argument("--dork-method", choices=["api", "playwright", "html", "auto"], default="auto",
+                         help="Search method for Google Dorking (default: auto)")
 
     # ---- enum subcommand ----
     sp_enum = subparsers.add_parser("enum", help="Subdomain enumeration only")
@@ -1893,6 +1901,8 @@ if __name__ == "__main__":
     sp_dork.add_argument("--output-dir", default="reports/")
     sp_dork.add_argument("--delay", type=float, default=1.0)
     sp_dork.add_argument("--max-results", type=int, default=10)
+    sp_dork.add_argument("--method", choices=["api", "playwright", "html", "auto"], default="auto",
+                         help="Search method: api, playwright, html, or auto (default: auto)")
 
     args = parser.parse_args()
 
