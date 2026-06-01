@@ -1037,6 +1037,9 @@ async def main(
             except ValueError as e:
                 print(f"{Colors.RED}[!] Error parsing custom ports: {e}. Ignoring custom ports.{Colors.RESET}")
         
+        # Output dir shared by all artifacts from this scan (port CSV, httpx, nuclei, results CSV)
+        web_output_dir = None
+
         # --- STANDARD PORT SCAN LOGIC ---
         if state_manager.state["phase"] in ["initializing", "target_processing_complete", "port_scanning"]:
             state_manager.set_totals(len(targets), len(targets) * len(all_ports_to_scan))
@@ -1055,7 +1058,13 @@ async def main(
             print(f"{Colors.GREEN}[+] Port scanning complete.{Colors.RESET}")
             state_manager.update_phase("port_scanning_complete")
             domain_label = os.path.splitext(os.path.basename(targets_file))[0]
-            save_port_scan_csv(open_ports_results, domain_label)
+
+            # Create a single output directory for all artifacts from this scan
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            web_output_dir = os.path.join("recon_results", f"web_probe_{domain_label}_{timestamp}")
+            os.makedirs(web_output_dir, exist_ok=True)
+
+            save_port_scan_csv(open_ports_results, domain_label, output_dir=web_output_dir)
 
             # Persist discovered assets into inventory
             for _target_obj, _data in open_ports_results:
@@ -1082,9 +1091,6 @@ async def main(
 
             if web_probe_urls:
                 print(f"{Colors.CYAN}[*] Probing {len(web_probe_urls)} open web port URL(s) with httpx...{Colors.RESET}")
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                web_output_dir = os.path.join("recon_results", f"web_probe_{domain_label}_{timestamp}")
-                os.makedirs(web_output_dir, exist_ok=True)
                 http_runner = httpx_runner.HTTPXRunner(output_dir=web_output_dir)
                 httpx_data = await http_runner.run_httpx(web_probe_urls, concurrency)
                 if httpx_data:
@@ -1314,13 +1320,19 @@ async def main(
     inventory.print_delta_report(delta)
     inventory.print_executive_summary(run_id, len(final_vulnerabilities))
 
-    if final_vulnerabilities:
-        csv_file = save_results_to_csv(final_vulnerabilities)
-        if csv_file:
-            print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
-        save_results_to_json(final_vulnerabilities)
+    # Always write CSV — even when 0 findings (gives a clean empty report)
+    csv_file = save_results_to_csv(
+        final_vulnerabilities,
+        filename=os.path.join(web_output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.csv") if web_output_dir else None,
+    )
+    if csv_file:
+        print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
 
-    if sarif_output and final_vulnerabilities:
+    if final_vulnerabilities:
+        json_path = os.path.join(web_output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.json") if web_output_dir else None
+        save_results_to_json(final_vulnerabilities, filename=json_path)
+
+    if sarif_output:
         write_sarif_output(final_vulnerabilities, sarif_output)
 
     state_manager.mark_completed()
@@ -1481,10 +1493,15 @@ async def cmd_scan(args):
             pass
 
     # main() expects a targets file path — write single targets to a temp file
+    # Name it after the target so domain_label / output dirs are readable
     _tmp_file = None
     targets_file = args.target
     if target_type in ('ip', 'cidr', 'domain'):
-        _tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+        safe_name = re.sub(r'[^\w\.\-]', '_', args.target)[:48]
+        _tmp = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.txt', delete=False,
+            prefix=f'{safe_name}_', dir=tempfile.gettempdir(),
+        )
         _tmp.write(args.target + '\n')
         _tmp.close()
         targets_file = _tmp.name

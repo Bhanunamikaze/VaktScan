@@ -97,13 +97,16 @@ def deduplicate_vulnerabilities(vulnerabilities):
 # File output helpers
 # ---------------------------------------------------------------------------
 
-def save_port_scan_csv(scan_results, domain):
+def save_port_scan_csv(scan_results, domain, output_dir=None):
     """
     Save full port scan results to a CSV file.
     scan_results structure: list of tuples (target_obj, {'open_ports': []})
+    If output_dir is provided the file is written there; otherwise cwd.
     """
+    import os as _os
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"portscan_results_{domain}_{timestamp}.csv"
+    filename_only = f"portscan_results_{domain}_{timestamp}.csv"
+    filename = _os.path.join(output_dir, filename_only) if output_dir else filename_only
 
     headers = ['Timestamp', 'Hostname', 'IP Address', 'Open Ports', 'Count']
 
