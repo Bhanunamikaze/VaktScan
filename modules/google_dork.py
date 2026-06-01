@@ -10,6 +10,11 @@ try:
 except ImportError:
     async_playwright = None
 
+try:
+    from playwright_stealth import stealth_async
+except ImportError:
+    stealth_async = None
+
 MODULE_NAME = "google_dork"
 
 # Built-in dork templates (12 categories)
@@ -234,6 +239,8 @@ async def run(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 )
                 page = await context.new_page()
+                if stealth_async is not None:
+                    await stealth_async(page)
 
                 captcha_detected = False
                 for category_name, dork_template in dork_list:
