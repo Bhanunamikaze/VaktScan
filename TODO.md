@@ -4,7 +4,7 @@ Current state: port scan → service identification → CVE/vuln checks → web 
 
 ---
 
-## 1. False Positive Validation (NEW — HIGHEST PRIORITY)
+## 1. False Positive Validation ✅ DONE
 
 These are the same class of bug as the cPanel false positive fix. Every item here produces noisy, incorrect findings today.
 
@@ -42,7 +42,7 @@ These are the same class of bug as the cPanel false positive fix. Every item her
 
 ---
 
-## 2. Missing Service Checks
+## 2. Missing Service Checks ✅ DONE
 
 ### CI/CD & DevTools
 
@@ -126,7 +126,7 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 
 ---
 
-## 4. Vulnerability Correlation
+## 4. Vulnerability Correlation (partial — see Remaining Backlog)
 
 - **Version → CVE mapping**: detected service version → NVD API lookup → filter by CVSS ≥ 7
 - **CPE generation** from banner strings for accurate CVE matching
@@ -136,7 +136,7 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 
 ---
 
-## 5. Output / Reporting
+## 5. Output / Reporting ✅ DONE
 
 - **JSON output** — machine-readable per-finding export
 - **SARIF output format** — for GitHub/GitLab security tab integration
@@ -146,7 +146,7 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 
 ---
 
-## 6. Operational / Platform
+## 6. Operational / Platform (partial)
 
 - **Asset inventory persistence** — SQLite store of discovered assets across runs
 - **Proxy support** — route scans through Burp / upstream proxy
@@ -156,18 +156,26 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 
 ## Priority Order
 
-1. **False positive validation — service_recon.py + web_checks.py** (URGENT — prevents noise, same class of bug as cPanel FP fix)
-   - Start with `service_fingerprint()` dispatch guard, then per-check body validation
-2. **Shodan/Censys passive enrichment** — zero-noise context, no active scanning required
-3. **Jira CVE-2022-0540 + Confluence CVE-2023-22518/CVE-2022-26134** — actively exploited in the wild
-4. **JSON output** — unblocks downstream integrations and delta reports
-5. **CISA KEV cross-reference** — immediate severity context for existing findings
-6. **Java RMI checks** — deserialization via BaRMIe/rmg.jar/beanshooter
-7. **GitLab public project exposure + user enumeration**
-8. **Asset inventory persistence (SQLite)** — required for delta reports and change detection
-9. **EPSS scoring** — enriches CVE findings with exploitation probability
-10. **Delta reports** — new vs resolved findings across scan runs
-11. **Google Dorking** — domain/subdomain targets only; surfaces open S3/Azure/GCP buckets and leaked credentials indexed by Google via Custom Search API
+> Items marked ✅ are shipped. Remaining items are the actual backlog.
+
+1. ✅ **False positive validation — service_recon.py + web_checks.py** — `_fingerprint()` dispatch guard + per-check body validation all done
+2. ✅ **Shodan/Censys passive enrichment** — `modules/passive_intel.py`, reads `SHODAN_API_KEY` / `CENSYS_API_ID` / `CENSYS_API_SECRET` from env
+3. ✅ **Jira CVE-2022-0540 + Confluence CVE-2023-22518/CVE-2022-26134** — `check_jira()` and `check_confluence()` in `service_recon.py`
+4. ✅ **JSON output** — `save_results_to_json()` in `reporter.py`; `--format json` flag on `scan` subcommand
+5. ✅ **CISA KEV cross-reference** — `modules/cisa_kev.py`
+6. ✅ **Java RMI checks** — `check_java_rmi()` in `service_recon.py`, ports 1099/1098
+7. ✅ **GitLab public project exposure + user enumeration** — `check_gitlab()` in `service_recon.py`
+8. ✅ **Asset inventory persistence (SQLite)** — `modules/inventory.py`
+9. ✅ **EPSS scoring** — `modules/epss.py`
+10. ✅ **Delta reports** — `inventory.print_delta_report()` called in main scan pipeline
+11. ✅ **Google Dorking** — `modules/google_dork.py`; `vaktscan google-dork` subcommand; `GOOGLE_API_KEY` / `GOOGLE_CX` env vars
+
+### Remaining backlog
+
+1. **NVD API generic version→CVE mapping** — per-module version checks exist (grafana, kibana, prometheus) but no generic `detected_version → NVD API → CVSS ≥ 7` pipeline; CPE generation from banner strings also missing
+2. **IPv6 scanning** — `port_scanner.py` is IPv4 only; `socket.AF_INET6` support needed throughout scan pipeline
+3. **Certificate Transparency alerting** — crt.sh polling for *new* certificates (change detection) is not yet wired; current CT log lookup is one-shot per scan only
+4. **Nuclei template auto-sync on schedule** — `sync_nuclei_templates()` exists but is only called via `--update-templates`; could run automatically if templates are > N days old
 
 ---
 

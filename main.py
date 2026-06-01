@@ -66,6 +66,7 @@ from modules import (
     passive_intel,
     inventory,
     cloud_enum,
+    nvd,
 )
 
 # Map service names to their corresponding modules
@@ -1262,10 +1263,48 @@ async def main(
     else:
         print(f"{Colors.GREEN}[*] No vulnerabilities found.{Colors.RESET}")
     
-    final_vulnerabilities = await cisa_kev.enrich_findings_with_kev(final_vulnerabilities)
+    # Collect NVD CVE findings for unique (product, version) pairs from existing findings
+    _nvd_seen_versions: set[tuple[str, str]] = set()
+    _nvd_tasks = []
+    for _f in final_vulnerabilities:
+        _mod = _f.get("module", "")
+        _ver = _f.get("service_version", "")
+        if _ver and _ver not in ("N/A", "Unknown", "unknown") and (_mod, _ver) not in _nvd_seen_versions:
+            _nvd_seen_versions.add((_mod, _ver))
+            _nvd_tasks.append(nvd.lookup_cves(
+                product=_mod,
+                version=_ver,
+                target=_f.get("target", "N/A"),
+                resolved_ip=_f.get("resolved_ip", "N/A"),
+                port=_f.get("port", "N/A"),
+            ))
+
+    kev_result, epss_result, passive_result, *nvd_results_list = await asyncio.gather(
+        cisa_kev.enrich_findings_with_kev(final_vulnerabilities),
+        epss.enrich_findings_with_epss(final_vulnerabilities),
+        passive_intel.enrich_findings_with_passive_intel(final_vulnerabilities),
+        *_nvd_tasks,
+    )
+    # kev and epss operate in-place on the same list; use kev_result as the base
+    final_vulnerabilities = kev_result
+    # Merge EPSS enrichment (in-place updates) — epss_result shares the same finding objects
+    # Merge passive intel additions
+    _existing_urls = {f.get("url") for f in final_vulnerabilities}
+    for _f in passive_result:
+        if _f.get("url") not in _existing_urls:
+            final_vulnerabilities.append(_f)
+            _existing_urls.add(_f.get("url"))
+    # Merge NVD CVE findings, deduplicate by CVE ID
+    _seen_cve_ids: set[str] = set()
+    for _batch in nvd_results_list:
+        for _f in _batch:
+            _cve_id = _f.get("vulnerability", "").split(" — ")[0].strip()
+            if _cve_id and _cve_id not in _seen_cve_ids:
+                _seen_cve_ids.add(_cve_id)
+                final_vulnerabilities.append(_f)
     print(f"{Colors.CYAN}[*] CISA KEV cross-reference complete.{Colors.RESET}")
-    final_vulnerabilities = await epss.enrich_findings_with_epss(final_vulnerabilities)
-    final_vulnerabilities = await passive_intel.enrich_findings_with_passive_intel(final_vulnerabilities)
+    if _seen_cve_ids:
+        print(f"{Colors.CYAN}[*] NVD enrichment added {len(_seen_cve_ids)} CVE finding(s).{Colors.RESET}")
 
     # Inventory delta report
     delta = inventory.save_findings(run_id, final_vulnerabilities)
