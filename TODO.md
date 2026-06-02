@@ -202,8 +202,8 @@ This section tracks the full CLI redesign approved in the June 2026 brainstorm.
 #### 7.2 Full Scan Pipeline (Domain)
 - [x] Wire full domain pipeline in scan subcommand: enum → DNS recon → cloud enum → port scan → httpx → web checks → nuclei → service vuln checks → dirsearch → gau → waybackurls → JS paths → enrichments → CSV
 - [x] Run DNS recon and cloud enum in parallel — `_run_parallel_passive()` uses `asyncio.gather`
-- [ ] Run web checks and nuclei in parallel on alive URLs (currently sequential)
-- [ ] Run GAU and waybackurls in parallel (currently sequential — `await gau`, then `await wayback`)
+- [x] Run domain scanner, dirsearch, nuclei, web checks, and JS paths in parallel via `asyncio.gather` in `run_recon_followups()`
+- [x] Run GAU and waybackurls in parallel via `asyncio.gather`
 - [x] Run per-host service vuln checks in parallel — `asyncio.gather(*tasks)` at scan level
 - [x] After enum, feed discovered subs + primary domain together into port scan
 

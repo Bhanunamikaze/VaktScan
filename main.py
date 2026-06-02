@@ -337,30 +337,46 @@ async def run_recon_followups(
 
     alive_urls = sorted(set(alive_urls))
     
-    # Run the web checks on alive urls right after httpx completes
+    # Run domain scanner, dirsearch, nuclei, web checks, and JS paths concurrently —
+    # all are read-only against alive_urls and write to their own files in output_dir.
     if alive_urls:
-        domain_scan_findings = await scanner.run(
-            domains=unique_targets,
-            httpx_data=httpx_data,
-            alive_urls=alive_urls,
-            concurrency=concurrency
+        print(f"{Colors.CYAN}[*] Running domain scanner, dirsearch, nuclei, web checks, and JS paths in parallel on {len(alive_urls)} URL(s)...{Colors.RESET}")
+        nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
+        js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=output_dir)
+
+        (
+            domain_scan_findings,
+            _dirsearch,
+            nuclei_results,
+            wc_results,
+            js_result,
+        ) = await asyncio.gather(
+            scanner.run(
+                domains=unique_targets,
+                httpx_data=httpx_data,
+                alive_urls=alive_urls,
+                concurrency=concurrency,
+            ),
+            dir_enumerator.run_dirsearch(alive_urls),
+            nuclei_inst.run_nuclei(alive_urls),
+            web_checks.run_checks(alive_urls, concurrency),
+            js_scanner.run(),
+            return_exceptions=True,
         )
+
+        if isinstance(domain_scan_findings, Exception):
+            print(f"{Colors.YELLOW}[!] Domain scanner error: {domain_scan_findings}{Colors.RESET}")
+            domain_scan_findings = []
         if domain_scan_findings:
             print(f"{Colors.GREEN}[+] Domain scanner identified {len(domain_scan_findings)} web issues.{Colors.RESET}")
             for finding in domain_scan_findings:
-                # Same formatting as nuclei
                 print(f"    - {finding['status']} | {finding['vulnerability']} | {finding['url']}")
             all_findings.extend(domain_scan_findings)
-            # Keep the separate CSV too (it's useful as a per-run artifact)
             save_results_to_csv(domain_scan_findings, filename=os.path.join(output_dir, f"domain_scan_vulns_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
 
-    if alive_urls:
-        #print("Commented Out DIR ENUM - Continue to Nuclei")
-        await dir_enumerator.run_dirsearch(alive_urls)
-
-    if alive_urls:
-        nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
-        nuclei_results = await nuclei_inst.run_nuclei(alive_urls)
+        if isinstance(nuclei_results, Exception):
+            print(f"{Colors.YELLOW}[!] Nuclei error: {nuclei_results}{Colors.RESET}")
+            nuclei_results = []
         if nuclei_results:
             print(f"{Colors.GREEN}[+] Nuclei identified {len(nuclei_results)} findings.{Colors.RESET}")
             for vuln in nuclei_results:
@@ -369,31 +385,34 @@ async def run_recon_followups(
         else:
             print(f"{Colors.GREEN}[+] Nuclei scan complete with no findings.{Colors.RESET}")
 
-    if alive_urls:
-        print(f"{Colors.CYAN}[*] Running web checks on {len(alive_urls)} alive URL(s)...{Colors.RESET}")
-        wc_results = await web_checks.run_checks(alive_urls, concurrency)
+        if isinstance(wc_results, Exception):
+            print(f"{Colors.YELLOW}[!] Web checks error: {wc_results}{Colors.RESET}")
+            wc_results = []
         if wc_results:
             print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
             all_findings.extend(wc_results)
         else:
             print(f"{Colors.GREEN}[+] Web checks complete. No findings.{Colors.RESET}")
 
-    if alive_urls:
-        print(f"{Colors.CYAN}[*] Running JS path extraction on {len(alive_urls)} alive URL(s)...{Colors.RESET}")
-        js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=output_dir)
-        js_result = await js_scanner.run()
+        if isinstance(js_result, Exception):
+            print(f"{Colors.YELLOW}[!] JS paths error: {js_result}{Colors.RESET}")
+            js_result = []
         js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
         if js_findings:
             print(f"{Colors.GREEN}[+] JS paths: {len(js_findings)} finding(s).{Colors.RESET}")
             all_findings.extend(js_findings)
 
+    # GAU + waybackurls in parallel
     domain_hosts = collect_domain_hosts(alive_urls)
     if domain_hosts:
-        print(f"{Colors.CYAN}[*] Harvesting archived URLs for {len(domain_hosts)} host(s) (gau → waybackurls)...{Colors.RESET}")
+        print(f"{Colors.CYAN}[*] Harvesting archived URLs for {len(domain_hosts)} host(s) (gau + waybackurls in parallel)...{Colors.RESET}")
         gau_inst = gau_runner.GAURunner(output_dir=output_dir)
-        await gau_inst.run(domain_hosts)
         wayback_inst = waybackurls_runner.WaybackURLsRunner(output_dir=output_dir)
-        await wayback_inst.run(domain_hosts)
+        await asyncio.gather(
+            gau_inst.run(domain_hosts),
+            wayback_inst.run(domain_hosts),
+            return_exceptions=True,
+        )
     else:
         print(f"{Colors.YELLOW}[!] No hostname targets available for gau/waybackurls.{Colors.RESET}")
 
