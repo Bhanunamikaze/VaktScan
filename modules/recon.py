@@ -100,7 +100,10 @@ class ReconScanner:
 
     async def _run_command(self, cmd, tool_name):
         """Helper to run async subprocess commands."""
-        print(f"{Colors.CYAN}[*] [{self.domain}] Running {tool_name}...{Colors.RESET}")
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+        if not dashboard.active:
+            print(f"{Colors.CYAN}[*] [{self.domain}] Running {tool_name}...{Colors.RESET}")
         try:
             process = await asyncio.create_subprocess_shell(
                 cmd,
@@ -110,7 +113,8 @@ class ReconScanner:
             stdout, stderr = await process.communicate()
             
             if process.returncode == 0:
-                print(f"{Colors.GREEN}[+] [{self.domain}] {tool_name} completed successfully.{Colors.RESET}")
+                if not dashboard.active:
+                    print(f"{Colors.GREEN}[+] [{self.domain}] {tool_name} completed successfully.{Colors.RESET}")
                 return stdout.decode().strip().split('\n')
             else:
                 # Some tools exit with non-zero even on partial success, so we still return output
@@ -122,7 +126,8 @@ class ReconScanner:
                          pass # print(f"{Colors.YELLOW}[!] {tool_name} stderr: {error_msg}{Colors.RESET}")
                 return stdout.decode().strip().split('\n')
         except Exception as e:
-            print(f"{Colors.RED}[!] [{self.domain}] Error running {tool_name}: {e}{Colors.RESET}")
+            if not dashboard.active:
+                print(f"{Colors.RED}[!] [{self.domain}] Error running {tool_name}: {e}{Colors.RESET}")
             return []
 
     async def run_amass(self):
@@ -239,6 +244,8 @@ class ReconScanner:
 
     async def run_bbot(self):
         """Run bbot and harvest subdomain output."""
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         outdir = os.path.join(self.domain_dir, "bbot_results")
         os.makedirs(outdir, exist_ok=True)
@@ -251,7 +258,8 @@ class ReconScanner:
             "-y --force"
         )
 
-        print(f"{Colors.CYAN}[*] [{self.domain}] Running BBOT scan (this may take time)...{Colors.RESET}")
+        if not dashboard.active:
+            print(f"{Colors.CYAN}[*] [{self.domain}] Running BBOT scan (this may take time)...{Colors.RESET}")
         results = await self._run_command(cmd, "bbot")
 
         path_obj = Path(outdir)
@@ -267,10 +275,12 @@ class ReconScanner:
                     self._collect_results(dest_path)
                     #print(f"{Colors.GREEN}[+] BBOT results saved: {dest_path}{Colors.RESET}")
                 except Exception as exc:
-                    print(f"{Colors.YELLOW}[!] Failed to copy {fpath}: {exc}{Colors.RESET}")
+                    if not dashboard.active:
+                        print(f"{Colors.YELLOW}[!] Failed to copy {fpath}: {exc}{Colors.RESET}")
             return
 
-        print(f"{Colors.YELLOW}[!] No BBOT output files found, falling back to console output.{Colors.RESET}")
+        if not dashboard.active:
+            print(f"{Colors.YELLOW}[!] No BBOT output files found, falling back to console output.{Colors.RESET}")
         self._collect_from_lines(results if results else [])
 
     async def run_censys(self):
@@ -368,33 +378,79 @@ class ReconScanner:
         from modules.dashboard import LiveDashboard
         dashboard = LiveDashboard()
 
+        # Determine the set of tools that will actually run
+        active_tools = []
+        if "subfinder" not in missing: active_tools.append("Subfinder")
+        if "assetfinder" not in missing: active_tools.append("Assetfinder")
+        if "findomain" not in missing: active_tools.append("Findomain")
+        if "sublist3r" not in missing: active_tools.append("Sublist3r")
+        if "knockpy" not in missing: active_tools.append("Knockpy")
+        if "bbot" not in missing and "bbot" not in disabled: active_tools.append("BBOT")
+        if "censys" not in missing: active_tools.append("Censys")
+        if "crtsh" not in missing: active_tools.append("Crtsh")
+
+        self.pending_tools = set(active_tools)
+
         async def wrap_task(task_coro, name):
             task_id = name.lower()
             if dashboard.active:
                 if self.detailed_dashboard:
                     dashboard.add_task(task_id, f"{name} Enum")
                 else:
-                    dashboard.update_task(f"recon_{self.domain}", status=f"Running {name}...")
+                    # Multi-domain dashboard mode: update status with pending tools count and names
+                    dashboard.update_task(
+                        f"recon_{self.domain}",
+                        status=f"Running... ({len(self.pending_tools)} tools pending: {', '.join(sorted(self.pending_tools))}) (found {len(self.subdomains)} subdomains)"
+                    )
             try:
                 before_count = len(self.subdomains)
                 await task_coro
                 after_count = len(self.subdomains)
                 diff = after_count - before_count
+                
+                # Remove this tool from pending set
+                if name in self.pending_tools:
+                    self.pending_tools.remove(name)
+
                 if dashboard.active:
                     if self.detailed_dashboard:
                         dashboard.complete_task(task_id, f"Found {diff} subdomains")
                     else:
-                        dashboard.update_task(f"recon_{self.domain}", status=f"Running... (found {len(self.subdomains)} subdomains)")
+                        if self.pending_tools:
+                            dashboard.update_task(
+                                f"recon_{self.domain}",
+                                status=f"Running... ({len(self.pending_tools)} tools pending: {', '.join(sorted(self.pending_tools))}) (found {len(self.subdomains)} subdomains)"
+                            )
+                        else:
+                            dashboard.update_task(
+                                f"recon_{self.domain}",
+                                status=f"Running... (0 tools pending) (found {len(self.subdomains)} subdomains)"
+                            )
             except Exception as e:
+                if name in self.pending_tools:
+                    self.pending_tools.remove(name)
                 if dashboard.active:
                     if self.detailed_dashboard:
                         dashboard.complete_task(task_id, f"Failed: {str(e)}")
                     else:
-                        dashboard.update_task(f"recon_{self.domain}", status=f"Failed {name}: {str(e)}")
+                        if self.pending_tools:
+                            dashboard.update_task(
+                                f"recon_{self.domain}",
+                                status=f"Failed {name}: {str(e)} ({len(self.pending_tools)} tools pending: {', '.join(sorted(self.pending_tools))}) (found {len(self.subdomains)} subdomains)"
+                            )
+                        else:
+                            dashboard.update_task(
+                                f"recon_{self.domain}",
+                                status=f"Failed {name}: {str(e)} (0 tools pending) (found {len(self.subdomains)} subdomains)"
+                            )
                 raise e
 
         if dashboard.active and not self.detailed_dashboard:
             dashboard.add_task(f"recon_{self.domain}", f"{self.domain} Recon")
+            dashboard.update_task(
+                f"recon_{self.domain}",
+                status=f"Running... ({len(self.pending_tools)} tools pending: {', '.join(sorted(self.pending_tools))}) (found 0 subdomains)"
+            )
 
         tasks = []
         #if "amass" not in missing: tasks.append(wrap_task(self.run_amass(), "Amass"))
@@ -423,10 +479,11 @@ class ReconScanner:
         self._write_list(raw_file, self.raw_candidates)
         self._write_list(final_file, sorted(self.subdomains))
         
-        print(f"\n{Colors.GREEN}[+] [{self.domain}] Enumeration complete!{Colors.RESET}")
-        print(f"{Colors.GREEN}[+] [{self.domain}] Found {len(self.subdomains)} unique subdomains.{Colors.RESET}")
-        print(f"{Colors.GRAY}[*] [{self.domain}] Raw combined output: {raw_file}{Colors.RESET}")
-        print(f"{Colors.GREEN}[+] [{self.domain}] Results saved to: {Colors.BOLD}{final_file}{Colors.RESET}")
+        if not dashboard.active:
+            print(f"\n{Colors.GREEN}[+] [{self.domain}] Enumeration complete!{Colors.RESET}")
+            print(f"{Colors.GREEN}[+] [{self.domain}] Found {len(self.subdomains)} unique subdomains.{Colors.RESET}")
+            print(f"{Colors.GRAY}[*] [{self.domain}] Raw combined output: {raw_file}{Colors.RESET}")
+            print(f"{Colors.GREEN}[+] [{self.domain}] Results saved to: {Colors.BOLD}{final_file}{Colors.RESET}")
         
         return final_file, sorted(self.subdomains)
 

@@ -941,7 +941,8 @@ async def main(
                       f"(set VAKT_RECON_TOOL_LIMIT to adjust).{Colors.RESET}")
 
             async def handle_domain(domain):
-                print(f"{Colors.CYAN}[*] Enumerating subdomains for {domain}...{Colors.RESET}")
+                if not dashboard.active:
+                    print(f"{Colors.CYAN}[*] Enumerating subdomains for {domain}...{Colors.RESET}")
                 is_detailed = (len(normalized_domains) == 1)
                 scanner = recon.ReconScanner(domain, wordlist=wordlist, detailed_dashboard=is_detailed)
 
@@ -952,7 +953,8 @@ async def main(
                 async def _maybe_dork():
                     if getattr(args, 'no_dork', False):
                         return []
-                    print(f"{Colors.CYAN}[*] Google Dork recon running in parallel for {domain}...{Colors.RESET}")
+                    if not dashboard.active:
+                        print(f"{Colors.CYAN}[*] Google Dork recon running in parallel for {domain}...{Colors.RESET}")
                     dork_method = getattr(args, 'dork_method', 'auto')
                     return await google_dork.run(
                         domain, api_key=_gapi_key, cx=_gcx,

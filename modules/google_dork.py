@@ -157,7 +157,9 @@ async def run(
 
     # Early exit: check if domain is a raw IP
     if _is_raw_ip(domain):
-        print(f"Warning: Skipping raw IP address '{domain}' for Google Dorking")
+        from modules.dashboard import LiveDashboard
+        if not LiveDashboard().active:
+            print(f"Warning: Skipping raw IP address '{domain}' for Google Dorking")
         return []
 
     # Determine which dorks to use
@@ -187,7 +189,9 @@ async def run(
             else:
                 selected_method = "html"
 
-    print(f"[*] Running Google Dorking using method: {selected_method}")
+    from modules.dashboard import LiveDashboard
+    if not LiveDashboard().active:
+        print(f"[*] Running Google Dorking using method: {selected_method}")
 
     if selected_method == "api":
         if not api_key or not cx:
@@ -344,7 +348,9 @@ async def run(
                 if captcha_detected:
                     raise Exception("Google unusual traffic / CAPTCHA block detected")
         except Exception as e:
-            print(f"Warning: Playwright browser execution failed: {e}. Falling back to html method.")
+            from modules.dashboard import LiveDashboard
+            if not LiveDashboard().active:
+                print(f"Warning: Playwright browser execution failed: {e}. Falling back to html method.")
             selected_method = "html"
 
     # Handle html/httpx scraping fallback
@@ -371,7 +377,9 @@ async def run(
                 try:
                     response = await client.get(url, timeout=15)
                     if response.status_code == 429:
-                        print("Warning: Google HTML scraping returned status 429 (blocked). Stopping.")
+                        from modules.dashboard import LiveDashboard
+                        if not LiveDashboard().active:
+                            print("Warning: Google HTML scraping returned status 429 (blocked). Stopping.")
                         break
                     if response.status_code != 200:
                         print(f"Warning: Google HTML scraping returned status {response.status_code} for '{category_name}'")
@@ -379,7 +387,9 @@ async def run(
                         continue
 
                     if "detected unusual traffic" in response.text or "captcha" in response.text.lower():
-                        print("Warning: Google detected unusual traffic (CAPTCHA block) during HTML scraping. Stopping.")
+                        from modules.dashboard import LiveDashboard
+                        if not LiveDashboard().active:
+                            print("Warning: Google detected unusual traffic (CAPTCHA block) during HTML scraping. Stopping.")
                         break
 
                     soup = BeautifulSoup(response.text, "html.parser")
