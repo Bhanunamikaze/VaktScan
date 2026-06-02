@@ -139,10 +139,10 @@
   <!-- ── Row 2: Nmap CVE Scan (optional branch, clearly below) ── -->
 
   <!-- downward arrow from Port Scanner bottom to Nmap -->
-  <line x1="183" y1="558" x2="183" y2="580" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arr)"/>
+  <line x1="183" y1="558" x2="183" y2="580" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arr)"/>
 
   <!-- Nmap optional box — full row width so text fits -->
-  <rect x="38" y="580" width="804" height="52" rx="5" fill="#1a1040" stroke="#6b21a8" stroke-width="1" stroke-dasharray="4,2"/>
+  <rect x="38" y="580" width="804" height="52" rx="5" fill="#1a1040" stroke="#6b21a8" stroke-width="1"/>
   <text x="442" y="599" text-anchor="middle" class="opt">Nmap CVE Scan  (optional — enabled with --nmap flag)</text>
   <text x="442" y="616" text-anchor="middle" class="sd">-sCV --script vuln,vulners · XML output parsed · CVSS ≥ 7.0 filter · emits canonical CVE findings</text>
 
