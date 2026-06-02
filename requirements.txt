@@ -1,0 +1,14 @@
+# HTTP clients
+httpx>=0.28.1
+requests>=2.33.1
+urllib3>=2.6.0
+
+# HTML parsing (Google Dork html scraping)
+beautifulsoup4>=4.14.0
+
+# Browser automation (Google Dork playwright method)
+playwright>=1.60.0
+playwright-stealth>=2.0.0
+
+# Testing
+pytest>=9.0.0
