@@ -173,7 +173,7 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 
 ### Remaining backlog
 
-1. **Certificate Transparency alerting** — crt.sh polling for *new* certificates (change detection) not yet wired; current CT lookup is one-shot per scan only
+1. ✅ **Certificate Transparency alerting** — `modules/ct_monitor.py`; SQLite baseline in `reports/ct_baseline.sqlite`; diff detection per domain; INFO on first scan, HIGH on new certs; wired into `_run_parallel_passive()` alongside DNS recon + cloud enum
 
 ---
 

@@ -69,6 +69,7 @@ from modules import (
     cloud_enum,
     nvd,
     google_dork,
+    ct_monitor,
 )
 
 # Map service names to their corresponding modules
@@ -450,17 +451,26 @@ def expand_recon_inputs(recon_args):
     return expanded
 
 async def _run_parallel_passive(domain: str, concurrency: int = 20) -> tuple:
-    """Run DNS recon and cloud enum in parallel for a domain. Returns (dns_findings, cloud_findings)."""
-    dns_task = dns_recon.run_dns_recon([domain], concurrency=concurrency)
-    cloud_task = cloud_enum.enumerate_cloud_assets(domain)
-    dns_f, cloud_f = await asyncio.gather(dns_task, cloud_task, return_exceptions=True)
+    """Run DNS recon, cloud enum, and CT monitoring in parallel for a domain.
+
+    Returns (dns_findings, cloud_findings, ct_findings).
+    """
+    dns_f, cloud_f, ct_f = await asyncio.gather(
+        dns_recon.run_dns_recon([domain], concurrency=concurrency),
+        cloud_enum.enumerate_cloud_assets(domain),
+        ct_monitor.check_new_certificates(domain),
+        return_exceptions=True,
+    )
     if isinstance(dns_f, Exception):
         print(f"[!] DNS recon error: {dns_f}")
         dns_f = []
     if isinstance(cloud_f, Exception):
         print(f"[!] Cloud enum error: {cloud_f}")
         cloud_f = []
-    return dns_f, cloud_f
+    if isinstance(ct_f, Exception):
+        print(f"[!] CT monitor error: {ct_f}")
+        ct_f = []
+    return dns_f, cloud_f, ct_f
 
 
 async def main(
@@ -905,10 +915,14 @@ async def main(
                         method=dork_method
                     )
 
-                (enum_result, dork_findings) = await asyncio.gather(
-                    scanner.run_all(), _maybe_dork(), return_exceptions=False
+                (enum_result, dork_findings, passive_tuple) = await asyncio.gather(
+                    scanner.run_all(),
+                    _maybe_dork(),
+                    _run_parallel_passive(domain, concurrency),
+                    return_exceptions=False,
                 )
                 results_file, subdomains = enum_result
+                dns_findings, cloud_findings, ct_findings = passive_tuple
 
                 if isinstance(dork_findings, list) and dork_findings:
                     print(f"{Colors.GREEN}[+] Google Dork: {len(dork_findings)} finding(s) for {domain}{Colors.RESET}")
@@ -916,6 +930,19 @@ async def main(
                         state_manager.add_vulnerability(_df)
                 elif isinstance(dork_findings, Exception):
                     print(f"{Colors.YELLOW}[!] Google Dork error for {domain}: {dork_findings}{Colors.RESET}")
+
+                for _f in dns_findings + cloud_findings + ct_findings:
+                    state_manager.add_vulnerability(_f)
+                if dns_findings:
+                    print(f"{Colors.GREEN}[+] DNS recon: {len(dns_findings)} finding(s) for {domain}{Colors.RESET}")
+                if cloud_findings:
+                    print(f"{Colors.GREEN}[+] Cloud enum: {len(cloud_findings)} finding(s) for {domain}{Colors.RESET}")
+                if ct_findings:
+                    new_ct = [f for f in ct_findings if f.get("severity") == "HIGH"]
+                    if new_ct:
+                        print(f"{Colors.BRIGHT_RED}[!] CT monitor: {len(new_ct)} NEW certificate(s) detected for {domain}{Colors.RESET}")
+                    else:
+                        print(f"{Colors.GREEN}[+] CT monitor: baseline established for {domain}{Colors.RESET}")
                 if not subdomains:
                     print(f"{Colors.YELLOW}[!] Recon completed for {domain} but no subdomains were discovered.{Colors.RESET}")
                     return None
