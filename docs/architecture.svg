@@ -141,11 +141,10 @@
   <!-- downward arrow from Port Scanner bottom to Nmap -->
   <line x1="183" y1="558" x2="183" y2="580" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="4,2" marker-end="url(#arr)"/>
 
-  <!-- Nmap optional box -->
-  <rect x="38" y="580" width="290" height="50" rx="5" fill="#1a1040" stroke="#6b21a8" stroke-width="1" stroke-dasharray="4,2"/>
-  <text x="105" y="601" text-anchor="start" class="opt">Nmap CVE Scan</text>
-  <text x="105" y="617" text-anchor="start" class="sd">--nmap flag · -sCV --script vuln,vulners · XML parse · CVSS ≥ 7 filter</text>
-  <text x="330" y="601" text-anchor="middle" class="opt">(optional)</text>
+  <!-- Nmap optional box — full row width so text fits -->
+  <rect x="38" y="580" width="804" height="52" rx="5" fill="#1a1040" stroke="#6b21a8" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="442" y="599" text-anchor="middle" class="opt">Nmap CVE Scan  (optional — enabled with --nmap flag)</text>
+  <text x="442" y="616" text-anchor="middle" class="sd">-sCV --script vuln,vulners · XML output parsed · CVSS ≥ 7.0 filter · emits canonical CVE findings</text>
 
   <!-- IP dashed line joins Stage 2 here -->
   <line x1="680" y1="650" x2="680" y2="490" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-dim)"/>
