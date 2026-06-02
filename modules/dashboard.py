@@ -36,6 +36,9 @@ class LiveDashboard:
                 return
             self.active = True
             self.drawn_lines = 0
+            # Hide cursor
+            self.original_stdout_write("\033[?25l")
+            sys.stdout.flush()
             builtins.print = self._custom_print
             try:
                 self.loop = asyncio.get_running_loop()
@@ -54,8 +57,12 @@ class LiveDashboard:
             if self.render_task and self.loop:
                 if self.loop.is_running():
                     self.loop.call_soon_threadsafe(self.render_task.cancel)
+            
+            # Make sure we clear the last drawn dashboard lines
             self._clear_dashboard()
-            self.original_stdout_write(f"\r")
+            self.tasks.clear()
+            # Show cursor
+            self.original_stdout_write("\033[?25h\r")
             sys.stdout.flush()
 
     def add_task(self, task_id: str, name: str, total: int = None):
@@ -111,8 +118,8 @@ class LiveDashboard:
 
     def _clear_dashboard(self):
         if self.drawn_lines > 0:
-            # \033[u restores cursor to the saved position, \033[J clears screen below it
-            self.original_stdout_write("\033[u\033[J")
+            # Move cursor up self.drawn_lines lines and clear everything below it
+            self.original_stdout_write(f"\r\033[{self.drawn_lines}A\033[J")
             self.drawn_lines = 0
 
     def _draw_dashboard(self):
@@ -151,8 +158,8 @@ class LiveDashboard:
             
         lines.append("\033[90m" + "—"*70 + "\033[0m")
         
-        # Save cursor position (\033[s), write dashboard content with trailing newline, then restore cursor (\033[u)
-        dashboard_content = "\033[s" + "\n".join(lines) + "\n" + "\033[u"
+        # Write dashboard content with trailing newline, keeping the cursor at the end
+        dashboard_content = "\n".join(lines) + "\n"
         self.original_stdout_write(dashboard_content)
         sys.stdout.flush()
         self.drawn_lines = len(lines)
