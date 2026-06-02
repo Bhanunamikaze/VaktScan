@@ -813,7 +813,7 @@ async def run_dns_recon(domains: list[str], resolver: str = DEFAULT_RESOLVERS[0]
             except Exception:
                 pass
 
-    print(f"[*] DNS recon over {len(domains)} domain(s) using resolver {resolver}...")
+    print(f"[*] DNS recon over {len(domains)} domain(s) ({', '.join(domains)}) using resolver {resolver}...")
     await asyncio.gather(*(worker(d) for d in domains))
     return out
 

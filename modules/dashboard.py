@@ -146,7 +146,7 @@ class LiveDashboard:
             else:
                 indicator = f"[{spinner_char}] Running..."
 
-            line = f" \033[96m* {name:<20}\033[0m {indicator} | {status}"
+            line = f" \033[96m* {name:<35}\033[0m {indicator} | {status}"
             lines.append(line)
             
         lines.append("\033[90m" + "—"*70 + "\033[0m")

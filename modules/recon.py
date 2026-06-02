@@ -100,7 +100,7 @@ class ReconScanner:
 
     async def _run_command(self, cmd, tool_name):
         """Helper to run async subprocess commands."""
-        print(f"{Colors.CYAN}[*] Running {tool_name}...{Colors.RESET}")
+        print(f"{Colors.CYAN}[*] [{self.domain}] Running {tool_name}...{Colors.RESET}")
         try:
             process = await asyncio.create_subprocess_shell(
                 cmd,
@@ -110,7 +110,7 @@ class ReconScanner:
             stdout, stderr = await process.communicate()
             
             if process.returncode == 0:
-                print(f"{Colors.GREEN}[+] {tool_name} completed successfully.{Colors.RESET}")
+                print(f"{Colors.GREEN}[+] [{self.domain}] {tool_name} completed successfully.{Colors.RESET}")
                 return stdout.decode().strip().split('\n')
             else:
                 # Some tools exit with non-zero even on partial success, so we still return output
@@ -122,7 +122,7 @@ class ReconScanner:
                          pass # print(f"{Colors.YELLOW}[!] {tool_name} stderr: {error_msg}{Colors.RESET}")
                 return stdout.decode().strip().split('\n')
         except Exception as e:
-            print(f"{Colors.RED}[!] Error running {tool_name}: {e}{Colors.RESET}")
+            print(f"{Colors.RED}[!] [{self.domain}] Error running {tool_name}: {e}{Colors.RESET}")
             return []
 
     async def run_amass(self):
@@ -251,7 +251,7 @@ class ReconScanner:
             "-y --force"
         )
 
-        print(f"{Colors.CYAN}[*] Running BBOT scan (this may take time)...{Colors.RESET}")
+        print(f"{Colors.CYAN}[*] [{self.domain}] Running BBOT scan (this may take time)...{Colors.RESET}")
         results = await self._run_command(cmd, "bbot")
 
         path_obj = Path(outdir)
@@ -423,10 +423,10 @@ class ReconScanner:
         self._write_list(raw_file, self.raw_candidates)
         self._write_list(final_file, sorted(self.subdomains))
         
-        print(f"\n{Colors.GREEN}[+] Enumeration complete!{Colors.RESET}")
-        print(f"{Colors.GREEN}[+] Found {len(self.subdomains)} unique subdomains.{Colors.RESET}")
-        print(f"{Colors.GRAY}[*] Raw combined output: {raw_file}{Colors.RESET}")
-        print(f"{Colors.GREEN}[+] Results saved to: {Colors.BOLD}{final_file}{Colors.RESET}")
+        print(f"\n{Colors.GREEN}[+] [{self.domain}] Enumeration complete!{Colors.RESET}")
+        print(f"{Colors.GREEN}[+] [{self.domain}] Found {len(self.subdomains)} unique subdomains.{Colors.RESET}")
+        print(f"{Colors.GRAY}[*] [{self.domain}] Raw combined output: {raw_file}{Colors.RESET}")
+        print(f"{Colors.GREEN}[+] [{self.domain}] Results saved to: {Colors.BOLD}{final_file}{Colors.RESET}")
         
         return final_file, sorted(self.subdomains)
 
