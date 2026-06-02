@@ -1,6 +1,8 @@
 import asyncio
 import shutil
 import os
+import uuid
+import re
 from datetime import datetime
 
 class NmapRunner:
@@ -31,7 +33,8 @@ class NmapRunner:
         safe_ip = ip.replace('.', '_').replace(':', '_')
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        output_file = os.path.join(self.nmap_dir, f"{safe_name}_{safe_ip}_{timestamp}.nmap")
+        uid = uuid.uuid4().hex[:8]
+        output_file = os.path.join(self.nmap_dir, f"{safe_name}_{safe_ip}_{timestamp}_{uid}.nmap")
         
         ports_str = ",".join(map(str, ports))
         
@@ -73,6 +76,17 @@ class NmapRunner:
             print("\033[93m[*] No targets with open ports to scan with Nmap.\033[0m")
             return
 
+        # Deduplicate targets_data by (ip, tuple(sorted(ports))) to prevent redundant/overlapping scans
+        seen = set()
+        deduped_targets = []
+        for ip, ports, host in targets_data:
+            ports_key = tuple(sorted(ports))
+            key = (ip, ports_key)
+            if key not in seen:
+                seen.add(key)
+                deduped_targets.append((ip, ports, host))
+        targets_data = deduped_targets
+
         from modules.dashboard import LiveDashboard
         dashboard = LiveDashboard()
         if dashboard.active:
@@ -106,8 +120,9 @@ class NmapRunner:
         safe_ip = ip.replace('.', '_').replace(':', '_')
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        txt_output = os.path.join(self.nmap_dir, f"{safe_name}_{safe_ip}_cve_{timestamp}.nmap")
-        xml_output = os.path.join(self.nmap_dir, f"{safe_name}_{safe_ip}_cve_{timestamp}.xml")
+        uid = uuid.uuid4().hex[:8]
+        txt_output = os.path.join(self.nmap_dir, f"{safe_name}_{safe_ip}_cve_{timestamp}_{uid}.nmap")
+        xml_output = os.path.join(self.nmap_dir, f"{safe_name}_{safe_ip}_cve_{timestamp}_{uid}.xml")
         
         ports_str = ",".join(map(str, ports))
         cmd = f"{self.binary} -sV --script vuln,vulners -Pn -p {ports_str} {ip} -oX {xml_output} -oN {txt_output}"
@@ -132,13 +147,76 @@ class NmapRunner:
 
     def parse_nmap_xml(self, xml_file, target, resolved_ip):
         import xml.etree.ElementTree as ET
-        import re
         findings = []
         if not os.path.exists(xml_file):
             return findings
+
+        root = None
         try:
             tree = ET.parse(xml_file)
             root = tree.getroot()
+        except ET.ParseError as pe:
+            # Attempt to repair/truncate XML if parsing failed due to junk after document element
+            # or missing closing tags (e.g. process interrupted)
+            try:
+                with open(xml_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                
+                # Check for standard closing tag
+                end_tag = '</nmaprun>'
+                idx = content.find(end_tag)
+                if idx != -1:
+                    clean_content = content[:idx + len(end_tag)]
+                    root = ET.fromstring(clean_content)
+                else:
+                    # Remove comments, processing instructions, and DOCTYPE to find active tags
+                    temp_content = re.sub(r'<!--.*?-->', '', content, flags=re.DOTALL)
+                    temp_content = re.sub(r'<\?.*?\?>', '', temp_content, flags=re.DOTALL)
+                    temp_content = re.sub(r'<!DOCTYPE.*?>', '', temp_content, flags=re.DOTALL)
+                    
+                    # Find all tag transitions to build a stack of open tags
+                    tag_regex = re.compile(r'<(/?)([a-zA-Z0-9:-]+)(?:\s+[^>]*?)?(/?)>')
+                    stack = []
+                    for match in tag_regex.finditer(temp_content):
+                        is_closing = bool(match.group(1))
+                        tag_name = match.group(2)
+                        slash_end = match.group(3)
+                        
+                        is_self_closing = (slash_end == '/')
+                        if is_self_closing:
+                            continue
+                        
+                        if is_closing:
+                            if tag_name in stack:
+                                while stack:
+                                    popped = stack.pop()
+                                    if popped == tag_name:
+                                        break
+                        else:
+                            stack.append(tag_name)
+                    
+                    # Append all missing closing tags in reverse order
+                    repaired_content = content
+                    for tag in reversed(stack):
+                        repaired_content += f"\n</{tag}>"
+                    
+                    idx = repaired_content.find(end_tag)
+                    if idx != -1:
+                        clean_content = repaired_content[:idx + len(end_tag)]
+                        root = ET.fromstring(clean_content)
+                    else:
+                        raise pe
+            except Exception as repair_err:
+                print(f"\033[91m[!] Error parsing Nmap XML {xml_file}: {pe} (Repair failed: {repair_err})\033[0m")
+                return findings
+        except Exception as e:
+            print(f"\033[91m[!] Error parsing Nmap XML {xml_file}: {e}\033[0m")
+            return findings
+
+        if root is None:
+            return findings
+
+        try:
             for host in root.findall('host'):
                 ip_elem = host.find("address[@addrtype='ipv4']")
                 if ip_elem is None:
@@ -263,7 +341,7 @@ class NmapRunner:
                                             'timestamp': datetime.utcnow().isoformat() + 'Z',
                                         })
         except Exception as e:
-            print(f"\033[91m[!] Error parsing Nmap XML {xml_file}: {e}\033[0m")
+            print(f"\033[91m[!] Error parsing XML host/ports tree: {e}\033[0m")
         return findings
 
     async def run_cve_scan_batch(self, targets_data, concurrency=10):
@@ -274,6 +352,17 @@ class NmapRunner:
         if not targets_data:
             print("\033[93m[*] No targets with open ports to scan with Nmap CVE scripts.\033[0m")
             return []
+
+        # Deduplicate targets_data by (ip, tuple(sorted(ports))) to prevent redundant/overlapping scans
+        seen = set()
+        deduped_targets = []
+        for ip, ports, host in targets_data:
+            ports_key = tuple(sorted(ports))
+            key = (ip, ports_key)
+            if key not in seen:
+                seen.add(key)
+                deduped_targets.append((ip, ports, host))
+        targets_data = deduped_targets
 
         from modules.dashboard import LiveDashboard
         dashboard = LiveDashboard()
@@ -302,4 +391,3 @@ class NmapRunner:
             if dashboard.active:
                 dashboard.complete_task("nmap_cve")
         return all_findings
-

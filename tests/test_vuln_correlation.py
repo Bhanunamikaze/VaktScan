@@ -269,3 +269,59 @@ def test_extract_product_and_version_edge_cases():
     assert ver == "9.0"
 
 
+def test_parse_nmap_xml_corrupted_or_junk():
+    # Test case 1: XML file has trailing junk (junk after document element)
+    xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sV --script vuln,cve -Pn -p 80 127.0.0.1" start="1622568000" version="7.91" xmloutputversion="1.04">
+  <host>
+    <address addr="127.0.0.1" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80">
+        <state state="open" reason="syn-ack" reason_ttl="0"/>
+        <service name="http" product="Apache httpd" version="2.4.41" method="probed" conf="10"/>
+        <script id="http-vuln-cve2017-12617" output="&#xa;  Vulnerable:&#xa;  CVE: CVE-2017-12617&#xa;  CVSS Score: 8.5&#xa;"/>
+      </port>
+    </ports>
+  </host>
+</nmaprun>
+nstats>
+"""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
+        f.write(xml_content)
+        xml_path = f.name
+
+    try:
+        runner = NmapRunner()
+        findings = runner.parse_nmap_xml(xml_path, "127.0.0.1", "127.0.0.1")
+        assert len(findings) == 1
+        assert "CVE-2017-12617" in findings[0]["vulnerability"]
+    finally:
+        os.remove(xml_path)
+
+    # Test case 2: XML file is missing closing tags (interrupted run)
+    xml_content_truncated = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sV --script vuln,cve -Pn -p 80 127.0.0.1" start="1622568000" version="7.91" xmloutputversion="1.04">
+  <host>
+    <address addr="127.0.0.1" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="80">
+        <state state="open" reason="syn-ack" reason_ttl="0"/>
+        <service name="http" product="Apache httpd" version="2.4.41" method="probed" conf="10"/>
+        <script id="http-vuln-cve2017-12617" output="&#xa;  Vulnerable:&#xa;  CVE: CVE-2017-12617&#xa;  CVSS Score: 8.5&#xa;"/>
+"""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
+        f.write(xml_content_truncated)
+        xml_path = f.name
+
+    try:
+        runner = NmapRunner()
+        findings = runner.parse_nmap_xml(xml_path, "127.0.0.1", "127.0.0.1")
+        assert len(findings) == 1
+        assert "CVE-2017-12617" in findings[0]["vulnerability"]
+    finally:
+        os.remove(xml_path)
+
+
+

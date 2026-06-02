@@ -1304,22 +1304,23 @@ async def main(
                 continue
 
             scan_address = target_obj['scan_address']
-            
+            target_open_ports = data['open_ports']
+
             # This logic works perfectly with Full Scan results too.
             # It checks if the open ports found (e.g., 9200) match our service definitions.
-            for port in data['open_ports']:
+            for port in target_open_ports:
                 for service, service_ports_list in service_ports.items():
                     if port in service_ports_list:
                         scanner_func = SERVICE_TO_MODULE[service].run_scans
                         validation_tasks.append(validate_service(service, target_obj, port))
-                        service_mapping.append((service, target_obj, port, scanner_func))
+                        service_mapping.append((service, target_obj, port, scanner_func, target_open_ports))
 
                 if custom_ports and port not in [p for ports in service_ports.values() for p in ports]:
                     for service_name in SERVICE_TO_MODULE.keys():
                         if module_filter is None or service_name == module_filter:
                             scanner_func = SERVICE_TO_MODULE[service_name].run_scans
                             validation_tasks.append(validate_service(service_name, target_obj, port))
-                            service_mapping.append((service_name, target_obj, port, scanner_func))
+                            service_mapping.append((service_name, target_obj, port, scanner_func, target_open_ports))
         
         if not validation_tasks:
             print("\n[*] No specific VaktScan services (Elastic/Kibana/etc) found on open ports.")
@@ -1335,9 +1336,12 @@ async def main(
             validated_services = 0
             scan_tasks = []
 
-            async def scan_with_state_saving(scan_func, target_obj, port):
+            async def scan_with_state_saving(scan_func, target_obj, port, adjacent_open_ports=None):
                 try:
-                    results = await scan_func(target_obj, port)
+                    if adjacent_open_ports is not None:
+                        results = await scan_func(target_obj, port, adjacent_open_ports=adjacent_open_ports)
+                    else:
+                        results = await scan_func(target_obj, port)
                     for result in results:
                         state_manager.add_vulnerability(result)
                     return results
@@ -1345,14 +1349,15 @@ async def main(
                     # print(f"[!] Error scanning {target_obj['scan_address']}:{port} - {e}")
                     return []
 
-            for is_valid, (service, target_obj, port, scanner_func) in zip(validation_results, service_mapping):
+            for is_valid, (service, target_obj, port, scanner_func, target_open_ports) in zip(validation_results, service_mapping):
                 if isinstance(is_valid, bool) and is_valid:
                     display_url = target_obj['scan_address']
                     if not display_url.startswith(('http://', 'https://')):
                         display_url = f"http://{display_url}:{port}"
                     print(f"  -> Running {service.capitalize()} scans on {display_url} [Port: {port}]")
                     state_manager.add_validated_service(target_obj['resolved_ip'], port, service)
-                    scan_tasks.append(scan_with_state_saving(scanner_func, target_obj, port))
+                    adj = target_open_ports if service == 'cpanel' else None
+                    scan_tasks.append(scan_with_state_saving(scanner_func, target_obj, port, adjacent_open_ports=adj))
                     validated_services += 1
             
             if validated_services == 0 and not nuclei_vulns_found and not nmap_enabled:
@@ -1640,37 +1645,42 @@ async def process_chunk_services(open_ports_results, service_ports, module_filte
     for target_obj, data in open_ports_results:
         if not data['open_ports']: continue
         scan_address = target_obj['scan_address']
-        
-        for port in data['open_ports']:
+        target_open_ports = data['open_ports']
+
+        for port in target_open_ports:
             for service, service_ports_list in service_ports.items():
                 if port in service_ports_list:
                     scanner_func = SERVICE_TO_MODULE[service].run_scans
                     validation_tasks.append(validate_service(service, target_obj, port))
-                    service_mapping.append((service, target_obj, port, scanner_func))
+                    service_mapping.append((service, target_obj, port, scanner_func, target_open_ports))
             if custom_ports and port not in [p for ports in service_ports.values() for p in ports]:
                 for service_name in SERVICE_TO_MODULE.keys():
                     if module_filter is None or service_name == module_filter:
                         scanner_func = SERVICE_TO_MODULE[service_name].run_scans
                         validation_tasks.append(validate_service(service_name, target_obj, port))
-                        service_mapping.append((service_name, target_obj, port, scanner_func))
+                        service_mapping.append((service_name, target_obj, port, scanner_func, target_open_ports))
 
     chunk_vulnerabilities = []
     if not validation_tasks: return chunk_vulnerabilities
 
     validation_results = await asyncio.gather(*validation_tasks, return_exceptions=True)
     scan_tasks = []
-    
-    async def scan_with_state_saving(scan_func, target_obj, port):
+
+    async def scan_with_state_saving(scan_func, target_obj, port, adjacent_open_ports=None):
         try:
-            results = await scan_func(target_obj, port)
+            if adjacent_open_ports is not None:
+                results = await scan_func(target_obj, port, adjacent_open_ports=adjacent_open_ports)
+            else:
+                results = await scan_func(target_obj, port)
             for result in results: state_manager.add_vulnerability(result)
             return results
         except: return []
 
-    for is_valid, (service, target_obj, port, scanner_func) in zip(validation_results, service_mapping):
+    for is_valid, (service, target_obj, port, scanner_func, target_open_ports) in zip(validation_results, service_mapping):
         if isinstance(is_valid, bool) and is_valid:
             state_manager.add_validated_service(target_obj['resolved_ip'], port, service)
-            scan_tasks.append(scan_with_state_saving(scanner_func, target_obj, port))
+            adj = target_open_ports if service == 'cpanel' else None
+            scan_tasks.append(scan_with_state_saving(scanner_func, target_obj, port, adjacent_open_ports=adj))
 
     if scan_tasks:
         results = await asyncio.gather(*scan_tasks, return_exceptions=True)

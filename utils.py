@@ -431,9 +431,13 @@ def get_service_ports():
         "jenkins": [8080, 8090, 8443, 8888],
         "service_recon": [
             # FTP / SSH / SMTP / DNS / Kerberos / RPC / NTP
-            21, 22, 25, 53, 88, 111, 123, 135,
-            # SMB / SNMP / LDAP
-            139, 161, 389, 445, 465, 587, 593, 636,
+            21, 22, 25, 26, 53, 88, 111, 123, 135,
+            # POP3 / IMAP (plain + TLS) — also covers cPanel mail stack
+            110, 143, 993, 995,
+            # SMB / SNMP / LDAP / spamd / BIND control / PowerDNS web UI
+            139, 161, 389, 445, 465, 587, 593, 636, 783, 953,
+            # Mailman / tailwatchd / queueprocd / 8053 PowerDNS web UI
+            2768, 1097, 2812, 8053,
             # Rsync / VMware / Java RMI / MSSQL / Oracle / NFS / ZooKeeper / Docker
             623, 873, 902, 1098, 1099, 1433, 1521, 2049, 2181, 2375, 2376,
             # etcd / Loki / MySQL / RDP / OpenTelemetry gRPC+HTTP / GlassFish / PostgreSQL
