@@ -1754,7 +1754,8 @@ async def cmd_probe(args):
         return
     recon_domain = targets[0]
     ts = time.strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join(args.output_dir, f"probe_{re.sub(r'[^\\w.-]', '_', recon_domain)}_{ts}")
+    safe_name = re.sub(r'[^\w.-]', '_', recon_domain)
+    output_dir = os.path.join(args.output_dir, f"probe_{safe_name}_{ts}")
     os.makedirs(output_dir, exist_ok=True)
     print(f"{Colors.CYAN}[*] Probe: {len(targets)} target(s) → {output_dir}{Colors.RESET}")
     findings = await run_recon_followups(
