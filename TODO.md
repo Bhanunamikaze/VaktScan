@@ -209,7 +209,7 @@ This section tracks the full CLI redesign approved in the June 2026 brainstorm.
 
 #### 7.3 probe Subcommand
 - [x] Implement probe subcommand: `cmd_probe()` accepts target, runs port scan + httpx pipeline
-- [ ] Wire probe as the reusable web-pipeline step used internally by scan after enum (currently standalone only)
+- [x] `cmd_probe` now calls `run_recon_followups()` directly — same shared web pipeline used by `cmd_scan` via `main()`
 
 #### 7.4 Unified Finding Schema ✅ DONE
 - [x] Canonical finding schema defined in `modules/schema.py` with `normalize_finding()`

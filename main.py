@@ -1710,30 +1710,44 @@ async def cmd_enum(args):
             f.write(sub + '\n')
     print(f"{Colors.GREEN}[+] {len(subdomains)} subdomains found. Written to: {out_file}{Colors.RESET}")
     if args.probe:
-        probe_args = argparse.Namespace(
+        await cmd_probe(argparse.Namespace(
             target=out_file,
             ports=None,
             concurrency=args.concurrency,
             timeout=10.0,
             output_dir=args.output_dir,
-        )
-        await cmd_probe(probe_args)
+        ))
 
 
 async def cmd_probe(args):
-    """Handler for `vaktscan probe` — port scan + httpx only."""
-    print(f"{Colors.CYAN}[*] Probe mode: {args.target}{Colors.RESET}")
-    await main(
-        targets_file=args.target,
+    """Handler for `vaktscan probe` — httpx + parallel web analysis on a host list or file."""
+    os.makedirs(args.output_dir, exist_ok=True)
+    if os.path.isfile(args.target):
+        targets = parse_targets_file(args.target)
+    else:
+        targets = [args.target]
+    if not targets:
+        print(f"{Colors.RED}[!] No targets found: {args.target}{Colors.RESET}")
+        return
+    recon_domain = targets[0]
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    output_dir = os.path.join(args.output_dir, f"probe_{re.sub(r'[^\\w.-]', '_', recon_domain)}_{ts}")
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"{Colors.CYAN}[*] Probe: {len(targets)} target(s) → {output_dir}{Colors.RESET}")
+    findings = await run_recon_followups(
+        subdomains=targets,
+        recon_domain=recon_domain,
+        output_dir=output_dir,
         concurrency=args.concurrency,
-        resume=False,
-        output_csv=True,
-        module_filter=None,
-        custom_ports=args.ports,
-        chunk_size=30000,
-        module_mode=None,
-        sarif_output=None,
+        nmap_enabled=False,
+        connect_timeout=args.timeout,
     )
+    if findings:
+        out_csv = os.path.join(output_dir, f"probe_findings_{ts}.csv")
+        save_results_to_csv(findings, out_csv)
+        print(f"{Colors.GREEN}[+] Probe complete: {len(findings)} finding(s). CSV: {out_csv}{Colors.RESET}")
+    else:
+        print(f"{Colors.GREEN}[+] Probe complete. No findings.{Colors.RESET}")
 
 
 async def cmd_dns(args):
