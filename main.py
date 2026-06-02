@@ -933,6 +933,8 @@ async def main(
             recon_targets_count = len(unique_subdomains)
             recon_targets_label = dedup_file
         else:
+            from modules.dashboard import LiveDashboard
+            dashboard = LiveDashboard()
             print(f"{Colors.CYAN}[*] Running passive recon for {len(normalized_domains)} domain(s) concurrently...{Colors.RESET}")
             print(f"{Colors.GRAY}[*] Toolchain: Amass, Subfinder, Assetfinder, Findomain, Sublist3r, Knockpy, bbot, Censys, crtsh + DirEnumerator(ffuf){Colors.RESET}")
             tool_limit = getattr(recon, "TOOL_CONCURRENCY_LIMIT", None)
