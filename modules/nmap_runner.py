@@ -25,13 +25,13 @@ class NmapRunner:
         if not self.binary or not ports:
             return
 
-        # Sanitize filename: use hostname if available, else IP
+        # Sanitize filename: hostname (if available) + IP to guarantee uniqueness
         raw_name = hostname if hostname and hostname != 'N/A' else ip
-        # Basic sanitization to prevent filesystem issues
         safe_name = "".join([c for c in raw_name if c.isalnum() or c in ['.', '-', '_']]).strip()
-        
+        safe_ip = ip.replace('.', '_').replace(':', '_')
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        output_file = os.path.join(self.nmap_dir, f"{safe_name}_{timestamp}.nmap")
+        output_file = os.path.join(self.nmap_dir, f"{safe_name}_{safe_ip}_{timestamp}.nmap")
         
         ports_str = ",".join(map(str, ports))
         
@@ -89,10 +89,11 @@ class NmapRunner:
 
         raw_name = hostname if hostname and hostname != 'N/A' else ip
         safe_name = "".join([c for c in raw_name if c.isalnum() or c in ['.', '-', '_']]).strip()
-        
+        safe_ip = ip.replace('.', '_').replace(':', '_')
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        txt_output = os.path.join(self.nmap_dir, f"{safe_name}_cve_{timestamp}.nmap")
-        xml_output = os.path.join(self.nmap_dir, f"{safe_name}_cve_{timestamp}.xml")
+        txt_output = os.path.join(self.nmap_dir, f"{safe_name}_{safe_ip}_cve_{timestamp}.nmap")
+        xml_output = os.path.join(self.nmap_dir, f"{safe_name}_{safe_ip}_cve_{timestamp}.xml")
         
         ports_str = ",".join(map(str, ports))
         cmd = f"{self.binary} -sV --script vuln,vulners -Pn -p {ports_str} {ip} -oX {xml_output} -oN {txt_output}"
