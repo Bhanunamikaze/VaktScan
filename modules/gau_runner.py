@@ -10,7 +10,7 @@ class GAURunner:
     Thin wrapper around lc/gau to capture archived endpoints for discovered hosts.
     """
 
-    def __init__(self, output_dir="recon_results", concurrency=20):
+    def __init__(self, output_dir="reports", concurrency=20):
         self.output_dir = output_dir
         self.concurrency = max(1, concurrency)
         os.makedirs(self.output_dir, exist_ok=True)

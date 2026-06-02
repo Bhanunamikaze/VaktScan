@@ -216,11 +216,10 @@ This section tracks the full CLI redesign approved in the June 2026 brainstorm.
 - [x] All modules patched to emit canonical schema keys
 - [x] Schema validation helper normalises missing keys to N/A
 
-#### 7.5 Reporting — Output Directory
-- [ ] Consolidate all output to `reports/` — scan, probe, dns, cloud, js-paths, google-dork currently write to `recon_results/`
-- [ ] Rename `recon_results/` → `reports/` throughout `main.py` and subcommands
-- [ ] Ensure every subcommand writes CSV unconditionally (currently gated in some paths)
-- [ ] Remove --csv flag (CSV should always be generated)
+#### 7.5 Reporting — Output Directory ✅ DONE
+- [x] All output now writes to `reports/` — renamed from `recon_results/` in `main.py` and all modules
+- [x] `--csv` flag removed; CSV is always generated unconditionally
+- [x] Dead `output_csv` parameter removed from `main()`, `process_streaming_scan()`, and `print_final_results()`
 - [x] Reporting logic centralised in `reporter.py` — `save_results_to_csv()`, `save_results_to_json()`, `save_port_scan_csv()`
 
 #### 7.6 Google Dork Subcommand ✅ DONE

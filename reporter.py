@@ -328,7 +328,7 @@ def write_sarif_output(vulnerabilities, output_path):
 # Final results printer (async — orchestrates enrichment + file output)
 # ---------------------------------------------------------------------------
 
-async def print_final_results(all_vulnerabilities, output_csv):
+async def print_final_results(all_vulnerabilities):
     final_vulnerabilities = deduplicate_vulnerabilities(all_vulnerabilities)
     final_vulnerabilities = await cisa_kev.enrich_findings_with_kev(final_vulnerabilities)
     print(f"[*] CISA KEV cross-reference complete.")

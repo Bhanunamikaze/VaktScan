@@ -25,7 +25,7 @@ class DirEnumerator:
     from the ReconScanner. Currently focuses on virtual-host (subdomain) fuzzing.
     """
 
-    def __init__(self, domain, wordlist=None, output_dir="recon_results", protocol="https"):
+    def __init__(self, domain, wordlist=None, output_dir="reports", protocol="https"):
         self.domain = domain.strip().lower()
         self.wordlist = wordlist
         self.output_dir = output_dir

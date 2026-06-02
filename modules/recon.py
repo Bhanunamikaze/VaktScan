@@ -22,7 +22,7 @@ class Colors:
     RESET = '\033[0m'
 
 class ReconScanner:
-    def __init__(self, domain, output_dir="recon_results", wordlist=None):
+    def __init__(self, domain, output_dir="reports", wordlist=None):
         self.domain = domain.strip().lower()
         self.output_dir = output_dir
         self.wordlist = wordlist

@@ -4,9 +4,9 @@ import os
 from datetime import datetime
 
 class NmapRunner:
-    def __init__(self, output_base_dir="recon_results"):
+    def __init__(self, output_base_dir="reports"):
         self.output_base_dir = output_base_dir
-        # Create a specific nmap directory inside recon_results
+        # Create a specific nmap directory inside reports
         self.nmap_dir = os.path.join(self.output_base_dir, "nmap_scans")
         if not os.path.exists(self.nmap_dir):
             os.makedirs(self.nmap_dir)

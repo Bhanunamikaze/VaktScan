@@ -467,7 +467,6 @@ async def main(
     targets_file,
     concurrency,
     resume=False,
-    output_csv=False,
     module_filter=None,
     custom_ports=None,
     chunk_size=30000,
@@ -633,7 +632,7 @@ async def main(
 
         js_targets = list(dict.fromkeys(js_targets))  # deduplicate, preserve order
         timestamp  = time.strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join("recon_results", f"js_paths_{timestamp}")
+        output_dir = os.path.join("reports", f"js_paths_{timestamp}")
         os.makedirs(output_dir, exist_ok=True)
 
         print(
@@ -737,7 +736,7 @@ async def main(
 
         unique_domains = sorted(set(domains))
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join("recon_results", f"domain_scan_{timestamp}")
+        output_dir = os.path.join("reports", f"domain_scan_{timestamp}")
         os.makedirs(output_dir, exist_ok=True)
         
         # 1. Resolve and Port Scan
@@ -794,7 +793,7 @@ async def main(
             return
         safe_label = os.path.splitext(os.path.basename(subdomains_file))[0]
         safe_label = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in safe_label.lower())
-        domain_output_dir = os.path.join("recon_results", safe_label or "subdomains")
+        domain_output_dir = os.path.join("reports", safe_label or "subdomains")
         os.makedirs(domain_output_dir, exist_ok=True)
         dedup_file = os.path.join(domain_output_dir, f"manual_subdomains_{time.strftime('%Y%m%d_%H%M%S')}.txt")
         try:
@@ -851,7 +850,7 @@ async def main(
                 print(f"{Colors.RED}[!] No usable subdomains found in '{subdomains_file}'. Nothing to probe.{Colors.RESET}")
                 return
             safe_domain = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in recon_domain.lower())
-            domain_output_dir = os.path.join("recon_results", safe_domain or "domain")
+            domain_output_dir = os.path.join("reports", safe_domain or "domain")
             os.makedirs(domain_output_dir, exist_ok=True)
             dedup_file = os.path.join(domain_output_dir, f"manual_subdomains_{time.strftime('%Y%m%d_%H%M%S')}.txt")
             try:
@@ -953,9 +952,9 @@ async def main(
                     return await handle_domain(domain)
 
             tasks = [asyncio.create_task(limited_domain_run(domain)) for domain in normalized_domains]
-            recon_results = await asyncio.gather(*tasks, return_exceptions=True)
+            passive_results = await asyncio.gather(*tasks, return_exceptions=True)
             successes = []
-            for result in recon_results:
+            for result in passive_results:
                 if isinstance(result, dict):
                     successes.append(result)
                 elif isinstance(result, Exception):
@@ -973,7 +972,7 @@ async def main(
             else:
                 combined_targets = sorted({sub for meta in successes for sub in meta["subdomains"]})
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
-                combined_dir = os.path.join("recon_results", "combined")
+                combined_dir = os.path.join("reports", "combined")
                 os.makedirs(combined_dir, exist_ok=True)
                 combined_file = os.path.join(combined_dir, f"recon_targets_{timestamp}.txt")
                 try:
@@ -1033,7 +1032,6 @@ async def main(
             return await process_streaming_scan(
                 raw_targets,
                 concurrency,
-                output_csv=output_csv,
                 module_filter=module_filter,
                 custom_ports=custom_ports,
                 chunk_size=chunk_size,
@@ -1113,7 +1111,7 @@ async def main(
 
             # Create a single output directory for all artifacts from this scan
             timestamp = time.strftime("%Y%m%d_%H%M%S")
-            web_output_dir = os.path.join("recon_results", f"web_probe_{domain_label}_{timestamp}")
+            web_output_dir = os.path.join("reports", f"web_probe_{domain_label}_{timestamp}")
             os.makedirs(web_output_dir, exist_ok=True)
 
             save_port_scan_csv(open_ports_results, domain_label, output_dir=web_output_dir)
@@ -1138,7 +1136,7 @@ async def main(
                         host = target_obj.get('display_target') or ip
                         nmap_targets_data.append((ip, sorted(open_ports), host))
                 if nmap_targets_data:
-                    nmap_inst = nmap_runner.NmapRunner(output_base_dir=web_output_dir or "recon_results")
+                    nmap_inst = nmap_runner.NmapRunner(output_base_dir=web_output_dir or "reports")
                     nmap_cve_findings = await nmap_inst.run_cve_scan_batch(nmap_targets_data, concurrency=concurrency)
                     if nmap_cve_findings:
                         print(f"{Colors.GREEN}[+] Nmap CVE Scan: {len(nmap_cve_findings)} finding(s).{Colors.RESET}")
@@ -1429,7 +1427,6 @@ async def main(
 async def process_streaming_scan(
     raw_targets,
     concurrency,
-    output_csv=False,
     module_filter=None,
     custom_ports=None,
     chunk_size=30000,
@@ -1500,7 +1497,7 @@ async def process_streaming_scan(
                         host = target_obj.get('display_target') or ip
                         nmap_targets_data.append((ip, sorted(open_ports), host))
                 if nmap_targets_data:
-                    nmap_inst = nmap_runner.NmapRunner(output_base_dir="recon_results")
+                    nmap_inst = nmap_runner.NmapRunner(output_base_dir="reports")
                     nmap_cve_findings = await nmap_inst.run_cve_scan_batch(nmap_targets_data, concurrency=concurrency)
                     if nmap_cve_findings:
                         print(f"{Colors.GREEN}[+] Nmap CVE Scan: {len(nmap_cve_findings)} finding(s).{Colors.RESET}")
@@ -1554,7 +1551,7 @@ async def process_streaming_scan(
         if _added_cve_count:
             print(f"{Colors.CYAN}[*] NVD enrichment added {_added_cve_count} CVE finding(s).{Colors.RESET}")
 
-    await print_final_results(all_vulnerabilities, output_csv)
+    await print_final_results(all_vulnerabilities)
     return all_vulnerabilities
 
 # Helper functions for streaming (included to ensure self-contained file)
@@ -1664,7 +1661,6 @@ async def cmd_scan(args):
             targets_file=targets_file,
             concurrency=args.concurrency,
             resume=args.resume,
-            output_csv=args.csv,
             module_filter=args.module,
             custom_ports=args.ports,
             chunk_size=args.chunk_size,
@@ -1807,7 +1803,6 @@ async def cmd_domain_scan(args):
         targets_file=None,
         concurrency=args.concurrency,
         resume=False,
-        output_csv=True,
         module_filter=None,
         module_mode='domain-scan',
         domain_scan_file=args.domain,
@@ -1858,7 +1853,6 @@ if __name__ == "__main__":
     sp_scan.add_argument("--connect-timeout", type=float, default=DEFAULT_CONNECT_TIMEOUT)
     sp_scan.add_argument("--port-retries", type=int, default=DEFAULT_PORT_RETRIES)
     sp_scan.add_argument("-r", "--resume", action="store_true")
-    sp_scan.add_argument("--csv", action="store_true", help="Save results to CSV (always written; flag kept for compat)")
     sp_scan.add_argument("--format",
         choices=["csv", "json", "sarif", "all"],
         default=None,

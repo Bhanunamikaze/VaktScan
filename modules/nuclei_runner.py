@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime
 
 class NucleiRunner:
-    def __init__(self, output_dir="recon_results"):
+    def __init__(self, output_dir="reports"):
         self.output_dir = output_dir
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
