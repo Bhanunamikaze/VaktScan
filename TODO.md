@@ -1,6 +1,6 @@
 # VaktScan — ASM Coverage TODO
 
-Current state: port scan → service identification → CVE/vuln checks → web recon → DNS recon → JS analysis → cPanel module → DNS recon module.
+Current state: subcommand CLI (scan / enum / probe / dns / cloud / js-paths / google-dork) → subdomain enum → DNS recon + cloud enum (parallel) → port scan → httpx → web checks → nuclei → service vuln checks → dirsearch → gau → waybackurls → JS paths → NVD/EPSS/CISA-KEV enrichment → Nmap CVE scripts → inventory delta report.
 
 ---
 
@@ -126,13 +126,14 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 
 ---
 
-## 4. Vulnerability Correlation (partial — see Remaining Backlog)
+## 4. Vulnerability Correlation ✅ DONE
 
-- **Version → CVE mapping**: detected service version → NVD API lookup → filter by CVSS ≥ 7
-- **CPE generation** from banner strings for accurate CVE matching
-- **CISA KEV cross-reference**: flag CVEs that appear on CISA's Known Exploited Vulnerabilities catalog
-- **EPSS scoring**: enrich CVE findings with FIRST.org exploitation probability score
-- **Nuclei template auto-sync**: pull latest community templates before scan run
+- ✅ **Version → CVE mapping** — `modules/nvd.py` `lookup_cves()` + `extract_product_and_version()`, CVSS ≥ 7 filter
+- ✅ **CPE generation from banner strings** — regex extraction for SSH, FTP, MySQL, Redis, Tomcat, Apache, Nginx, IIS in `nvd.py`
+- ✅ **Nmap CVE script scan** — `modules/nmap_runner.py`, runs `nmap --script vuln,vulners`, parses XML, emits canonical findings
+- ✅ **CISA KEV cross-reference** — `modules/cisa_kev.py`
+- ✅ **EPSS scoring** — `modules/epss.py`
+- ✅ **Nuclei template auto-sync** — `sync_nuclei_templates(force=False)` called at scan startup; skips if synced within 7 days
 
 ---
 
@@ -148,9 +149,9 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 
 ## 6. Operational / Platform (partial)
 
-- **Asset inventory persistence** — SQLite store of discovered assets across runs
-- **Proxy support** — route scans through Burp / upstream proxy
-- **IPv6 scanning** — currently IPv4 only
+- ✅ **Asset inventory persistence** — `modules/inventory.py`, SQLite, delta reports wired in scan pipeline
+- ✅ **IPv6 scanning** — `port_scanner.py` strips brackets and handles IPv6 addresses via `asyncio.open_connection`
+- **Proxy support** — route scans through Burp / upstream proxy *(pending)*
 
 ---
 
@@ -172,10 +173,7 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 
 ### Remaining backlog
 
-1. **NVD API generic version→CVE mapping** — per-module version checks exist (grafana, kibana, prometheus) but no generic `detected_version → NVD API → CVSS ≥ 7` pipeline; CPE generation from banner strings also missing
-2. **IPv6 scanning** — `port_scanner.py` is IPv4 only; `socket.AF_INET6` support needed throughout scan pipeline
-3. **Certificate Transparency alerting** — crt.sh polling for *new* certificates (change detection) is not yet wired; current CT log lookup is one-shot per scan only
-4. **Nuclei template auto-sync on schedule** — `sync_nuclei_templates()` exists but is only called via `--update-templates`; could run automatically if templates are > N days old
+1. **Certificate Transparency alerting** — crt.sh polling for *new* certificates (change detection) not yet wired; current CT lookup is one-shot per scan only
 
 ---
 
@@ -193,51 +191,47 @@ This section tracks the full CLI redesign approved in the June 2026 brainstorm.
 
 ### Tasks
 
-#### 7.1 CLI Architecture
-- [ ] Refactor main.py to use argparse subparsers (scan, enum, probe, dns, cloud, js-paths, google-dork)
-- [ ] Auto-detect target type (IP/CIDR/domain/file) inside scan subcommand
-- [ ] Add --no-subdomain-enum flag to scan subcommand
-- [ ] Add -m/--module flag to scan subcommand (all modules by default, one module when specified)
-- [ ] Write per-subcommand help text that is accurate and complete
-- [ ] Pass args.module only as module_filter (remove the double-pass bug where it's sent as both module_filter and module_mode)
+#### 7.1 CLI Architecture ✅ DONE
+- [x] Refactor main.py to use argparse subparsers (scan, enum, probe, dns, cloud, js-paths, google-dork, domain-scan)
+- [x] Auto-detect target type (IP/CIDR/domain/file) inside scan subcommand
+- [x] Add --no-subdomain-enum flag to scan subcommand
+- [x] Add -m/--module flag to scan subcommand (all modules by default, one module when specified)
+- [x] Write per-subcommand help text that is accurate and complete
+- [x] Pass args.module only as module_filter (double-pass bug removed)
 
 #### 7.2 Full Scan Pipeline (Domain)
-- [ ] Wire full domain pipeline in scan subcommand: enum → DNS recon → cloud enum → port scan → httpx → web checks + nuclei (parallel) → service vuln checks → dirsearch → gau + waybackurls → JS paths → enrichments → CSV
-- [ ] Run DNS recon and cloud enum in parallel (both take domain, no dependency on each other)
+- [x] Wire full domain pipeline in scan subcommand: enum → DNS recon → cloud enum → port scan → httpx → web checks → nuclei → service vuln checks → dirsearch → gau → waybackurls → JS paths → enrichments → CSV
+- [x] Run DNS recon and cloud enum in parallel — `_run_parallel_passive()` uses `asyncio.gather`
 - [ ] Run web checks and nuclei in parallel on alive URLs (currently sequential)
-- [ ] Run GAU and waybackurls in parallel (currently sequential)
-- [ ] Run per-host service vuln checks in parallel (each host/port is independent)
-- [ ] After enum, feed discovered subs + primary domain together into port scan
+- [ ] Run GAU and waybackurls in parallel (currently sequential — `await gau`, then `await wayback`)
+- [x] Run per-host service vuln checks in parallel — `asyncio.gather(*tasks)` at scan level
+- [x] After enum, feed discovered subs + primary domain together into port scan
 
 #### 7.3 probe Subcommand
-- [ ] Implement probe subcommand: accepts a file of hosts/URLs and runs httpx → web checks + nuclei (parallel) → dirsearch → gau → waybackurls → JS paths
-- [ ] Wire probe as the reusable web-pipeline step (used internally by scan after enum, and standalone)
+- [x] Implement probe subcommand: `cmd_probe()` accepts target, runs port scan + httpx pipeline
+- [ ] Wire probe as the reusable web-pipeline step used internally by scan after enum (currently standalone only)
 
-#### 7.4 Unified Finding Schema
-- [ ] Define canonical finding schema in a shared module (e.g. utils.py or a new findings.py)
-- [ ] Patch elastic, kibana, grafana, prometheus modules to emit all required schema keys
-- [ ] Patch aem, cpanel, jenkins, service_recon, react_to_shell modules similarly
-- [ ] Patch dns_recon, cloud_enum, web_checks, domain_scan to match schema
-- [ ] Patch js_paths module to match schema
-- [ ] Add schema validation helper function that normalises a finding dict (fills missing keys with N/A)
+#### 7.4 Unified Finding Schema ✅ DONE
+- [x] Canonical finding schema defined in `modules/schema.py` with `normalize_finding()`
+- [x] All modules patched to emit canonical schema keys
+- [x] Schema validation helper normalises missing keys to N/A
 
-#### 7.5 Reporting — reports/ Directory
-- [ ] Create reports/ directory at startup in all scan paths (scan, probe, dns, cloud, js-paths, google-dork)
-- [ ] Move save_results_to_csv() to always write into reports/ with naming: reports/{subcommand}_{target}_{timestamp}.csv
-- [ ] Move save_port_scan_csv() to reports/ as well
-- [ ] Ensure every subcommand writes its CSV at the end regardless of --csv flag (make it always-on)
-- [ ] Remove --csv flag (CSV is now always generated)
-- [ ] Extend existing reporting/inventory module rather than duplicating output logic
+#### 7.5 Reporting — Output Directory
+- [ ] Consolidate all output to `reports/` — scan, probe, dns, cloud, js-paths, google-dork currently write to `recon_results/`
+- [ ] Rename `recon_results/` → `reports/` throughout `main.py` and subcommands
+- [ ] Ensure every subcommand writes CSV unconditionally (currently gated in some paths)
+- [ ] Remove --csv flag (CSV should always be generated)
+- [x] Reporting logic centralised in `reporter.py` — `save_results_to_csv()`, `save_results_to_json()`, `save_port_scan_csv()`
 
-#### 7.6 Google Dork Subcommand
-- [ ] Implement google-dork subcommand (domain target, --google-api-key, --google-cx flags)
-- [ ] Wire google-dork into the full scan pipeline (runs after cloud enum, before port scan) for domain targets
-- [ ] Rate limit to 1 req/s, deduplicate results across dork categories
-- [ ] Emit findings in canonical schema with severity INFO
+#### 7.6 Google Dork Subcommand ✅ DONE
+- [x] `vaktscan google-dork` subcommand — `GOOGLE_API_KEY` / `GOOGLE_CX` env vars; Playwright + HTML scraping fallback
+- [x] Wired into full scan pipeline in parallel with subdomain enum for domain targets
+- [x] Rate-limited to 1 req/s, deduplicated across 28 dork categories
+- [x] Findings emitted in canonical schema with severity INFO
 
-#### 7.7 enum Subcommand
-- [ ] Implement enum subcommand: subdomain discovery only (amass, subfinder, etc.), writes subs to reports/{domain}_subdomains_{timestamp}.txt
-- [ ] Add --probe flag to enum that auto-chains into probe subcommand when done
+#### 7.7 enum Subcommand ✅ DONE
+- [x] `vaktscan enum <domain>` — subdomain discovery, writes subs to `reports/`
+- [x] `--probe` flag chains into probe subcommand after enum completes
 
 ---
 
