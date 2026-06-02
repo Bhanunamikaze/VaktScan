@@ -22,10 +22,11 @@ class Colors:
     RESET = '\033[0m'
 
 class ReconScanner:
-    def __init__(self, domain, output_dir="reports", wordlist=None):
+    def __init__(self, domain, output_dir="reports", wordlist=None, detailed_dashboard=True):
         self.domain = domain.strip().lower()
         self.output_dir = output_dir
         self.wordlist = wordlist
+        self.detailed_dashboard = detailed_dashboard
         self.subdomains = set()
         self.raw_candidates = []
         self.tools = {
@@ -370,18 +371,30 @@ class ReconScanner:
         async def wrap_task(task_coro, name):
             task_id = name.lower()
             if dashboard.active:
-                dashboard.add_task(task_id, f"{name} Enum")
+                if self.detailed_dashboard:
+                    dashboard.add_task(task_id, f"{name} Enum")
+                else:
+                    dashboard.update_task(f"recon_{self.domain}", status=f"Running {name}...")
             try:
                 before_count = len(self.subdomains)
                 await task_coro
                 after_count = len(self.subdomains)
                 diff = after_count - before_count
                 if dashboard.active:
-                    dashboard.complete_task(task_id, f"Found {diff} subdomains")
+                    if self.detailed_dashboard:
+                        dashboard.complete_task(task_id, f"Found {diff} subdomains")
+                    else:
+                        dashboard.update_task(f"recon_{self.domain}", status=f"Running... (found {len(self.subdomains)} subdomains)")
             except Exception as e:
                 if dashboard.active:
-                    dashboard.complete_task(task_id, f"Failed: {str(e)}")
+                    if self.detailed_dashboard:
+                        dashboard.complete_task(task_id, f"Failed: {str(e)}")
+                    else:
+                        dashboard.update_task(f"recon_{self.domain}", status=f"Failed {name}: {str(e)}")
                 raise e
+
+        if dashboard.active and not self.detailed_dashboard:
+            dashboard.add_task(f"recon_{self.domain}", f"{self.domain} Recon")
 
         tasks = []
         #if "amass" not in missing: tasks.append(wrap_task(self.run_amass(), "Amass"))
@@ -397,6 +410,9 @@ class ReconScanner:
         # Run passive tools concurrently
         if tasks:
             await asyncio.gather(*tasks)
+
+        if dashboard.active and not self.detailed_dashboard:
+            dashboard.complete_task(f"recon_{self.domain}", f"Found {len(self.subdomains)} subdomains")
         
         # Run ffuf-based enumeration via the standalone DirEnumerator
         # Save combined + deduplicated results inside the domain output directory

@@ -479,14 +479,14 @@ def expand_recon_inputs(recon_args):
 
     return expanded
 
-async def _run_parallel_passive(domain: str, concurrency: int = 20) -> tuple:
+async def _run_parallel_passive(domain: str, concurrency: int = 20, detailed_dashboard: bool = True) -> tuple:
     """Run DNS recon, cloud enum, and CT monitoring in parallel for a domain.
 
     Returns (dns_findings, cloud_findings, ct_findings).
     """
     from modules.dashboard import LiveDashboard
     dashboard = LiveDashboard()
-    if dashboard.active:
+    if dashboard.active and detailed_dashboard:
         dashboard.add_task("dns_recon", "DNS Recon")
         dashboard.add_task("cloud_enum", "Cloud Enum")
         dashboard.add_task("ct_monitor", "CT Monitor")
@@ -499,7 +499,7 @@ async def _run_parallel_passive(domain: str, concurrency: int = 20) -> tuple:
             return_exceptions=True,
         )
     finally:
-        if dashboard.active:
+        if dashboard.active and detailed_dashboard:
             dashboard.complete_task("dns_recon")
             dashboard.complete_task("cloud_enum")
             dashboard.complete_task("ct_monitor")
@@ -942,7 +942,8 @@ async def main(
 
             async def handle_domain(domain):
                 print(f"{Colors.CYAN}[*] Enumerating subdomains for {domain}...{Colors.RESET}")
-                scanner = recon.ReconScanner(domain, wordlist=wordlist)
+                is_detailed = (len(normalized_domains) == 1)
+                scanner = recon.ReconScanner(domain, wordlist=wordlist, detailed_dashboard=is_detailed)
 
                 # Run subdomain enum and Google Dork in parallel
                 _gapi_key = os.environ.get('GOOGLE_API_KEY', '')
@@ -961,7 +962,7 @@ async def main(
                 (enum_result, dork_findings, passive_tuple) = await asyncio.gather(
                     scanner.run_all(),
                     _maybe_dork(),
-                    _run_parallel_passive(domain, concurrency),
+                    _run_parallel_passive(domain, concurrency, detailed_dashboard=is_detailed),
                     return_exceptions=False,
                 )
                 results_file, subdomains = enum_result
