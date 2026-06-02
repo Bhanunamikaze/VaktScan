@@ -275,6 +275,9 @@ async def run_recon_followups(
             )
             nmap_inst = nmap_runner.NmapRunner(output_base_dir=output_dir)
             await nmap_inst.run_batch(nmap_jobs, concurrency=concurrency)
+            nmap_cve_findings = await nmap_inst.run_cve_scan_batch(nmap_jobs, concurrency=concurrency)
+            if nmap_cve_findings:
+                all_findings.extend(nmap_cve_findings)
             print(
                 f"{Colors.GREEN}[+] Nmap follow-up completed for {len(nmap_jobs)} host(s).{Colors.RESET}"
             )
@@ -479,15 +482,16 @@ async def main(
     
     print_logo()
     
+    # Auto-sync Nuclei templates on scan start
+    try:
+        nuclei_runner.sync_nuclei_templates(force=False)
+    except Exception as e:
+        print(f"[*] Warning: nuclei auto-sync check failed: {e}")
+
     # Store recon results to pass to scanner if needed
     nuclei_vulns_found = False
     recon_targets_file = None
     recon_targets_count = 0
-
-    # Validation: --nmap needs recon mode
-    if nmap_enabled and not recon_domains:
-        print(f"{Colors.RED}[!] Error: --nmap cannot be used without -m recon.{Colors.RESET}")
-        sys.exit(1)
 
     # --- DNS RECON MODE (-m dns) ---
     if module_mode == 'dns':
@@ -874,10 +878,14 @@ async def main(
                 _gcx     = os.environ.get('GOOGLE_CX', '')
 
                 async def _maybe_dork():
-                    if not (_gapi_key and _gcx):
+                    if getattr(args, 'no_dork', False):
                         return []
                     print(f"{Colors.CYAN}[*] Google Dork recon running in parallel for {domain}...{Colors.RESET}")
-                    return await google_dork.run(domain, api_key=_gapi_key, cx=_gcx)
+                    dork_method = getattr(args, 'dork_method', 'auto')
+                    return await google_dork.run(
+                        domain, api_key=_gapi_key, cx=_gcx,
+                        method=dork_method
+                    )
 
                 (enum_result, dork_findings) = await asyncio.gather(
                     scanner.run_all(), _maybe_dork(), return_exceptions=False
@@ -1006,13 +1014,14 @@ async def main(
             return await process_streaming_scan(
                 raw_targets,
                 concurrency,
-                output_csv,
-                module_filter,
-                custom_ports,
-                chunk_size,
-                state_manager,
-                connect_timeout,
-                port_retries,
+                output_csv=output_csv,
+                module_filter=module_filter,
+                custom_ports=custom_ports,
+                chunk_size=chunk_size,
+                state_manager=state_manager,
+                connect_timeout=connect_timeout,
+                port_retries=port_retries,
+                nmap_enabled=nmap_enabled,
             )
         
         if not is_resume or state_manager.state["phase"] == "initializing":
@@ -1099,6 +1108,23 @@ async def main(
                 _hostname = _target_obj.get('display_target', '')
                 if _ip:
                     inventory.upsert_asset(_ip, _hostname, _open_ports)
+
+            # If Nmap is enabled, run Nmap CVE script scan on open ports
+            if nmap_enabled:
+                nmap_targets_data = []
+                for target_obj, data in open_ports_results:
+                    open_ports = data.get('open_ports', [])
+                    if open_ports:
+                        ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
+                        host = target_obj.get('display_target') or ip
+                        nmap_targets_data.append((ip, sorted(open_ports), host))
+                if nmap_targets_data:
+                    nmap_inst = nmap_runner.NmapRunner(output_base_dir=web_output_dir or "recon_results")
+                    nmap_cve_findings = await nmap_inst.run_cve_scan_batch(nmap_targets_data, concurrency=concurrency)
+                    if nmap_cve_findings:
+                        print(f"{Colors.GREEN}[+] Nmap CVE Scan: {len(nmap_cve_findings)} finding(s).{Colors.RESET}")
+                        for v in nmap_cve_findings:
+                            state_manager.add_vulnerability(v)
 
             # Run httpx + nuclei on any open web ports found (80, 443, 8080, etc.)
             # These ports have no specific service module — probe them directly.
@@ -1310,12 +1336,11 @@ async def main(
     _nvd_seen_versions: set[tuple[str, str]] = set()
     _nvd_tasks = []
     for _f in final_vulnerabilities:
-        _mod = _f.get("module", "")
-        _ver = _f.get("service_version", "")
-        if _ver and _ver not in ("N/A", "Unknown", "unknown") and (_mod, _ver) not in _nvd_seen_versions:
-            _nvd_seen_versions.add((_mod, _ver))
+        _prod, _ver = nvd.extract_product_and_version(_f)
+        if _prod and _ver and (_prod, _ver) not in _nvd_seen_versions:
+            _nvd_seen_versions.add((_prod, _ver))
             _nvd_tasks.append(nvd.lookup_cves(
-                product=_mod,
+                product=_prod,
                 version=_ver,
                 target=_f.get("target", "N/A"),
                 resolved_ip=_f.get("resolved_ip", "N/A"),
@@ -1337,17 +1362,22 @@ async def main(
         if _f.get("url") not in _existing_urls:
             final_vulnerabilities.append(_f)
             _existing_urls.add(_f.get("url"))
-    # Merge NVD CVE findings, deduplicate by CVE ID
-    _seen_cve_ids: set[str] = set()
+    # Merge NVD CVE findings, deduplicate by target, port, and CVE ID
+    _seen_cve_keys: set[tuple[str, str, str]] = set()
+    _added_cve_count = 0
     for _batch in nvd_results_list:
         for _f in _batch:
             _cve_id = _f.get("vulnerability", "").split(" — ")[0].strip()
-            if _cve_id and _cve_id not in _seen_cve_ids:
-                _seen_cve_ids.add(_cve_id)
+            _target = _f.get("target", "N/A")
+            _port = _f.get("port", "N/A")
+            _key = (_target, _port, _cve_id)
+            if _cve_id and _key not in _seen_cve_keys:
+                _seen_cve_keys.add(_key)
                 final_vulnerabilities.append(_f)
+                _added_cve_count += 1
     print(f"{Colors.CYAN}[*] CISA KEV cross-reference complete.{Colors.RESET}")
-    if _seen_cve_ids:
-        print(f"{Colors.CYAN}[*] NVD enrichment added {len(_seen_cve_ids)} CVE finding(s).{Colors.RESET}")
+    if _added_cve_count:
+        print(f"{Colors.CYAN}[*] NVD enrichment added {_added_cve_count} CVE finding(s).{Colors.RESET}")
 
     # Inventory delta report
     delta = inventory.save_findings(run_id, final_vulnerabilities)
@@ -1387,6 +1417,7 @@ async def process_streaming_scan(
     state_manager=None,
     connect_timeout=DEFAULT_CONNECT_TIMEOUT,
     port_retries=DEFAULT_PORT_RETRIES,
+    nmap_enabled=False,
 ):
     print(f"{Colors.CYAN}[*] Calculating total targets for progress estimation...{Colors.RESET}")
     total_targets = 0
@@ -1439,6 +1470,25 @@ async def process_streaming_scan(
             )
             all_port_scan_results.extend(open_ports_results)
             chunk_vulnerabilities = await process_chunk_services(open_ports_results, service_ports, module_filter, custom_ports, state_manager)
+            
+            # Run Nmap CVE scan if enabled
+            if nmap_enabled:
+                nmap_targets_data = []
+                for target_obj, data in open_ports_results:
+                    open_ports = data.get('open_ports', [])
+                    if open_ports:
+                        ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
+                        host = target_obj.get('display_target') or ip
+                        nmap_targets_data.append((ip, sorted(open_ports), host))
+                if nmap_targets_data:
+                    nmap_inst = nmap_runner.NmapRunner(output_base_dir="recon_results")
+                    nmap_cve_findings = await nmap_inst.run_cve_scan_batch(nmap_targets_data, concurrency=concurrency)
+                    if nmap_cve_findings:
+                        print(f"{Colors.GREEN}[+] Nmap CVE Scan: {len(nmap_cve_findings)} finding(s).{Colors.RESET}")
+                        for v in nmap_cve_findings:
+                            state_manager.add_vulnerability(v)
+                            chunk_vulnerabilities.append(v)
+
             all_vulnerabilities.extend(chunk_vulnerabilities)
             
             if state_manager:
@@ -1452,6 +1502,38 @@ async def process_streaming_scan(
 
     if all_port_scan_results:
         save_port_scan_csv(all_port_scan_results, "streaming")
+
+    # Collect NVD CVE findings for unique (product, version) pairs from existing findings
+    _nvd_seen_versions = set()
+    _nvd_tasks = []
+    for _f in all_vulnerabilities:
+        _prod, _ver = nvd.extract_product_and_version(_f)
+        if _prod and _ver and (_prod, _ver) not in _nvd_seen_versions:
+            _nvd_seen_versions.add((_prod, _ver))
+            _nvd_tasks.append(nvd.lookup_cves(
+                product=_prod,
+                version=_ver,
+                target=_f.get("target", "N/A"),
+                resolved_ip=_f.get("resolved_ip", "N/A"),
+                port=_f.get("port", "N/A"),
+            ))
+
+    if _nvd_tasks:
+        nvd_results_list = await asyncio.gather(*_nvd_tasks)
+        _seen_cve_keys = set()
+        _added_cve_count = 0
+        for _batch in nvd_results_list:
+            for _f in _batch:
+                _cve_id = _f.get("vulnerability", "").split(" — ")[0].strip()
+                _target = _f.get("target", "N/A")
+                _port = _f.get("port", "N/A")
+                _key = (_target, _port, _cve_id)
+                if _cve_id and _key not in _seen_cve_keys:
+                    _seen_cve_keys.add(_key)
+                    all_vulnerabilities.append(_f)
+                    _added_cve_count += 1
+        if _added_cve_count:
+            print(f"{Colors.CYAN}[*] NVD enrichment added {_added_cve_count} CVE finding(s).{Colors.RESET}")
 
     await print_final_results(all_vulnerabilities, output_csv)
     return all_vulnerabilities
@@ -1703,8 +1785,8 @@ async def cmd_domain_scan(args):
 
 async def cmd_google_dork(args):
     """Handler for `vaktscan google-dork` — Google Dorking passive recon."""
-    if not args.google_api_key or not args.google_cx:
-        print(f"{Colors.RED}[!] --google-api-key and --google-cx are required (or set GOOGLE_API_KEY / GOOGLE_CX env vars){Colors.RESET}")
+    if args.method == "api" and (not args.google_api_key or not args.google_cx):
+        print(f"{Colors.RED}[!] --google-api-key and --google-cx are required for 'api' method (or set GOOGLE_API_KEY / GOOGLE_CX env vars){Colors.RESET}")
         sys.exit(1)
     os.makedirs(args.output_dir, exist_ok=True)
     findings = await google_dork.run(
@@ -1714,6 +1796,7 @@ async def cmd_google_dork(args):
         dorks=args.dorks,
         delay=args.delay,
         max_results=args.max_results,
+        method=args.method,
     )
     if findings:
         ts = time.strftime("%Y%m%d_%H%M%S")
@@ -1763,6 +1846,9 @@ if __name__ == "__main__":
         help="Skip subdomain enumeration for domain targets")
     sp_scan.add_argument("--proxy", metavar="URL", default=None)
     sp_scan.add_argument("--update-templates", action="store_true", dest="update_templates")
+    sp_scan.add_argument("--no-dork", action="store_true", help="Skip Google Dorking passive recon")
+    sp_scan.add_argument("--dork-method", choices=["api", "playwright", "html", "auto"], default="auto",
+                         help="Search method for Google Dorking (default: auto)")
 
     # ---- enum subcommand ----
     sp_enum = subparsers.add_parser("enum", help="Subdomain enumeration only")
@@ -1815,6 +1901,8 @@ if __name__ == "__main__":
     sp_dork.add_argument("--output-dir", default="reports/")
     sp_dork.add_argument("--delay", type=float, default=1.0)
     sp_dork.add_argument("--max-results", type=int, default=10)
+    sp_dork.add_argument("--method", choices=["api", "playwright", "html", "auto"], default="auto",
+                         help="Search method: api, playwright, html, or auto (default: auto)")
 
     args = parser.parse_args()
 

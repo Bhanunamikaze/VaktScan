@@ -8,6 +8,7 @@ Usage:
 
 import asyncio
 import os
+import re
 import httpx
 from datetime import datetime
 
@@ -38,6 +39,14 @@ CPE_VENDOR_MAP = {
     "mysql":         "oracle",
     "docker":        "docker",
     "kubernetes":    "kubernetes",
+    "openssh":       "openbsd",
+    "dropbear":      "dropbear",
+    "vsftpd":        "vsftpd",
+    "proftpd":       "proftpd",
+    "pure-ftpd":     "pureftpd",
+    "http_server":   "apache",
+    "nginx":         "nginx",
+    "iis":           "microsoft",
 }
 
 
@@ -134,3 +143,96 @@ async def lookup_cves(
         print(f"  [!] NVD lookup failed for {product} {version}: {e}")
 
     return findings
+
+
+def extract_product_and_version(finding: dict) -> tuple[str, str]:
+    """
+    Extract product name and version from a finding.
+    First checks if service_version is present. If not, parses details for banners.
+    Returns (product, version) or ('', '').
+    """
+    version = finding.get("service_version", "")
+    if version in ("Unknown", "N/A", "unknown"):
+        version = ""
+
+    module = finding.get("module", "").lower()
+    vuln = finding.get("vulnerability", "").lower()
+    details = finding.get("details", "")
+    port = str(finding.get("port", ""))
+
+    product = finding.get("product", "")
+    if product:
+        return product, version
+
+    # Try to parse banners or names
+    # 1. SSH
+    if "ssh" in vuln or port == "22":
+        match = re.search(r'openssh[_-]([0-9.a-z\-]+)', details, re.IGNORECASE)
+        if match:
+            return "openssh", match.group(1)
+        match_db = re.search(r'dropbear[_-]([0-9.]+)', details, re.IGNORECASE)
+        if match_db:
+            return "dropbear", match_db.group(1)
+        if not version:
+            match_generic = re.search(r'ssh[-_](([0-9.]+)[^\s]*)', details, re.IGNORECASE)
+            if match_generic:
+                return "ssh", match_generic.group(1)
+        return "ssh", version
+
+    # 2. FTP
+    if "ftp" in vuln or port == "21":
+        match_vs = re.search(r'vsftpd\s*([0-9a-zA-Z.-]+)', details, re.IGNORECASE)
+        if match_vs:
+            return "vsftpd", match_vs.group(1)
+        match_pro = re.search(r'proftpd\s*([0-9a-zA-Z.-]+)', details, re.IGNORECASE)
+        if match_pro:
+            return "proftpd", match_pro.group(1)
+        match_pure = re.search(r'pure-ftpd\s*([0-9a-zA-Z.-]+)', details, re.IGNORECASE)
+        if match_pure:
+            return "pure-ftpd", match_pure.group(1)
+        return "ftp", version
+
+    # 3. MySQL
+    if "mysql" in vuln or port == "3306":
+        if not version:
+            match = re.search(r'(\d+\.\d+\.\d+)', details)
+            if match:
+                version = match.group(1)
+        return "mysql", version
+
+    # 4. Redis
+    if "redis" in vuln or port == "6379":
+        if not version:
+            match = re.search(r'(?:version|redis_version):(\S+)', details, re.IGNORECASE)
+            if match:
+                version = match.group(1)
+        return "redis", version
+
+    # 5. Tomcat
+    if "tomcat" in vuln or port in ("8080", "8443"):
+        match = re.search(r'tomcat/([0-9a-zA-Z.-]+)', details, re.IGNORECASE)
+        if match:
+            return "tomcat", match.group(1)
+
+    # 6. Apache httpd
+    if "apache" in details.lower() or "apache" in vuln:
+        match = re.search(r'apache/([0-9a-zA-Z.-]+)', details, re.IGNORECASE)
+        if match:
+            return "http_server", match.group(1)
+
+    # 7. Nginx
+    if "nginx" in details.lower() or "nginx" in vuln:
+        match = re.search(r'nginx/([0-9a-zA-Z.-]+)', details, re.IGNORECASE)
+        if match:
+            return "nginx", match.group(1)
+
+    # 8. IIS
+    if "microsoft-iis" in details.lower() or "iis" in vuln:
+        match = re.search(r'microsoft-iis/([0-9a-zA-Z.-]+)', details, re.IGNORECASE)
+        if match:
+            return "iis", match.group(1)
+
+    if module != "servicerecon":
+        return module, version
+
+    return "", version
