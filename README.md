@@ -7,76 +7,75 @@ VaktScan is a high-performance attack surface scanner that accepts domains, IPs,
 
 ## Architecture
 
+See `docs/architecture.svg` for the full visual diagram.
+
 ```
 Input: <domain | IP | CIDR | file>
         │
         ▼
   target_classifier
         │
-  ┌─────┴──────────────────────────────────────────────────────┐
-  │ Domain target                                               │
-  │                                                             │
-  │  Stage 1 — Passive Recon (all four run in parallel):        │
-  │  ┌─────────────────┐  ┌───────────┐  ┌───────────────────┐ │
-  │  │ Subdomain Enum  │  │ DNS Recon │  │ Cloud Enum        │ │
-  │  │ subfinder/amass │  │ SPF/DMARC │  │ S3/Azure/GCP      │ │
-  │  │ crt.sh/bbot/... │  │ AXFR/DKIM │  │ bucket guessing   │ │
-  │  └────────┬────────┘  └─────┬─────┘  └────────┬──────────┘ │
-  │           │  (wait for      └──────┐  ┌────────┘           │
-  │           │   subdomain list)      │  │                     │
-  │           │              ┌─────────┴──┴──────────────────┐  │
-  │           │              │ Google Dork (if API keys set)  │  │
-  │           │              │ 12 operator templates          │  │
-  │           │              └───────────────────────────────┘  │
-  └───────────┼─────────────────────────────────────────────────┘
-              │ (subdomains + apex)
-              ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │ Stage 2 — Active Discovery (both targets converge here)      │
-  │                                                              │
-  │  Port Scanner (200 ports default, custom with --ports)       │
-  │       │                                                      │
-  │       ▼                                                      │
-  │  HTTPX Probe → alive URLs list                               │
-  └──────────────────────────────────────────────────────────────┘
+  ┌─────┴──────────────────────────────────────────────────────────────┐
+  │ Domain target                                                       │
+  │                                                                     │
+  │  Stage 1 — Passive Recon (all five run in parallel):                │
+  │  ┌──────────────┐  ┌───────────┐  ┌───────────────┐  ┌──────────┐  │
+  │  │ Subdomain    │  │ DNS Recon │  │ Cloud Enum    │  │    CT    │  │
+  │  │ Enum +       │  │ SPF/DMARC │  │ S3/Azure/GCS  │  │ Monitor  │  │
+  │  │ Google Dork  │  │ AXFR/DKIM │  │ CloudFront    │  │ crt.sh   │  │
+  │  │ (28 dorks)   │  │ DNSSEC    │  │ bucket guess  │  │ baseline │  │
+  │  └──────────────┘  └───────────┘  └───────────────┘  └──────────┘  │
+  └─────────────────────────────────────────────────────────────────────┘
+              │ (subdomains + apex domain)
+              ▼  ◄── IP/CIDR targets enter here (skip Stage 1)
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ Stage 2 — Active Discovery                                          │
+  │                                                                     │
+  │  Port Scanner (200 ports default, custom with --ports)              │
+  │       │                                                             │
+  │       ├── [--nmap] Nmap -sCV --script vuln,vulners (CVE scan)       │
+  │       ▼                                                             │
+  │  HTTPX Probe → alive URLs list                                      │
+  └─────────────────────────────────────────────────────────────────────┘
               │
               ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │ Stage 3 — Web-Level Analysis (all on alive URLs)             │
-  │                                                              │
-  │  ┌──────────┐ ┌────────────┐ ┌─────────────┐ ┌──────────┐  │
-  │  │  Nuclei  │ │ Web Checks │ │ Domain Scan │ │ Dirsearch│  │
-  │  │  (CVEs)  │ │ git/env    │ │ takeover    │ │ dir brute│  │
-  │  │          │ │ admin/CORS │ │ CORS/headers│ │ -force   │  │
-  │  └──────────┘ └────────────┘ └─────────────┘ └──────────┘  │
-  │  ┌──────────┐ ┌────────────┐ ┌─────────────┐               │
-  │  │ JS Paths │ │    GAU     │ │ WaybackURLs │ (domain only) │
-  │  │ secrets  │ │ URL harvest│ │ URL harvest │               │
-  │  │ endpoints│ │            │ │             │               │
-  │  └──────────┘ └────────────┘ └─────────────┘               │
-  └─────────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ Stage 3 — Web Analysis (all 5 run in parallel on alive URLs)         │
+  │                                                                     │
+  │  ┌──────────┐ ┌────────────┐ ┌─────────────┐ ┌──────────┐          │
+  │  │  Nuclei  │ │ Web Checks │ │ Domain Scan │ │Dirsearch │          │
+  │  │  (CVEs)  │ │ git/env    │ │ takeover    │ │dir brute │          │
+  │  │          │ │ admin/CORS │ │ CORS/headers│ │-force    │          │
+  │  └──────────┘ └────────────┘ └─────────────┘ └──────────┘          │
+  │  ┌──────────┐                                                       │
+  │  │ JS Paths │  + GAU ┐  (domain only, both parallel)               │
+  │  │ secrets/ │        ├── URL harvest → archived endpoint analysis   │
+  │  │ endpoints│  WaybackURLs ┘                                        │
+  │  └──────────┘                                                       │
+  └─────────────────────────────────────────────────────────────────────┘
               │
               ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │ Stage 4 — Service Vulnerability Scanning (per open port)     │
-  │                                                              │
-  │  elastic │ kibana │ grafana │ prometheus │ cpanel │ jenkins  │
-  │  aem │ service_recon (30+ checks: Redis/SMB/k8s/RMI/...)    │
-  │                                                              │
-  │  (fingerprint guard — checks only run when service          │
-  │   is confirmed by headers/body before probing)              │
-  └─────────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ Stage 4 — Service Vulnerability Scanning (per open port, parallel)  │
+  │                                                                     │
+  │  elastic │ kibana │ grafana │ prometheus │ cpanel │ jenkins         │
+  │  aem │ service_recon (30+ checks: Redis/SMB/k8s/RMI/IPMI/...)      │
+  │                                                                     │
+  │  (fingerprint guard — checks only fire when service is confirmed)   │
+  └─────────────────────────────────────────────────────────────────────┘
               │
               ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │ Stage 5 — Enrichment (sequential)                            │
-  │                                                              │
-  │  CISA KEV → EPSS scoring → NVD CVE lookup → Passive Intel   │
-  │  (Shodan + Censys host data for discovered IPs)             │
-  └─────────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ Stage 5 — Enrichment (parallel)                                     │
+  │                                                                     │
+  │  CISA KEV ──┐                                                       │
+  │  EPSS       ├── asyncio.gather → merged into final findings         │
+  │  NVD CVE  ──┘                                                       │
+  │  Passive Intel (Shodan + Censys)                                    │
+  └─────────────────────────────────────────────────────────────────────┘
               │
               ▼
-  recon_results/<target>_<YYYYMMDD_HHMMSS>/
+  reports/<target>_<YYYYMMDD_HHMMSS>/
   ├── portscan_results_*.csv
   ├── httpx_alive_*.csv
   ├── scan_results_*.csv     ← always written
@@ -84,7 +83,7 @@ Input: <domain | IP | CIDR | file>
   └── scan_results_*.sarif   ← with --format sarif/all
 ```
 
-> **IP/CIDR targets** skip Stage 1 (no subdomain enum, DNS recon, cloud enum, or Google Dork)
+> **IP/CIDR targets** skip Stage 1 (no subdomain enum, DNS recon, cloud enum, CT monitor, or Google Dork)
 > and go directly to Stage 2. GAU/WaybackURLs also skip for raw IP targets.
 
 
@@ -144,7 +143,7 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for per-comm
 | `enum` | `domain` `-c` `--wordlist` `--output-dir` `--probe` | Subdomain enumeration only (subfinder, amass, crt.sh, ffuf VHost fuzzing); optionally chains into `probe` |
 | `probe` | `target` `--ports` `-c` `--timeout` `--output-dir` | Port scan + httpx probe; outputs open-port CSV and alive-URL list |
 | `dns` | `domain [...]` `-c` `--output-dir` | DNS recon: A/AAAA/MX/NS/TXT/SOA/CAA/DNSKEY, SPF/DMARC/DKIM, AXFR, open recursion, DNSSEC |
-| `cloud` | `domain` `-c` `--output-dir` | Cloud asset enumeration: S3 bucket guessing, Azure blob, GCP storage |
+| `cloud` | `domain` `-c` `--output-dir` | Cloud asset enumeration: S3 bucket guessing, Azure Blob, GCP storage, CloudFront detection |
 | `js-paths` | `target` `--threads` `--timeout` `--output-dir` | JavaScript path extraction: secrets, source maps, internal IPs, endpoint probing |
 | `domain-scan` | `domain` `--httpx-data` `-c` `--output-dir` | HTTP-level domain analysis: classification, takeover detection (58 signatures), CORS, header audit |
 | `google-dork` | `domain` `--google-api-key` `--google-cx` `--dorks` `--delay` `--max-results` `--output-dir` | Passive recon via Google Custom Search API using operator-crafted dorks |
@@ -220,8 +219,8 @@ Create a `.env` file in the project root (or export variables in your shell). Al
 | Module | Subcommand | What It Does |
 |---|---|---|
 | `dns_recon` | `dns` | Wire-format DNS: SPF classification, DMARC `p=none`, DKIM (16 selectors), AXFR, open recursion, CAA/DNSSEC absence |
-| `cloud_enum` | `cloud` | S3/Azure/GCP bucket and blob permutation + existence checks |
-| `google_dork` | `google-dork` | Operator-crafted Google dorks via Custom Search API |
+| `cloud_enum` | `cloud` | S3/Azure/GCP bucket and blob permutation + existence checks; CloudFront detection |
+| `google_dork` | `google-dork` | 28 operator-crafted dorks via Custom Search API or Playwright/HTML scraping fallback |
 | `js_paths` | `js-paths` | 12+ JS extraction strategies: hardcoded secrets, source maps, internal IPs, endpoint probing |
 | `domain_scan` | `domain-scan` | Internal/external classification, parked-page detection, 58-signature takeover detection (GitHub Pages, S3, Heroku, Cloudflare, Vercel, Netlify, Azure, and more), CORS/header anomalies |
 | `web_checks` | auto on all alive URLs | Security headers, `.git/HEAD`/`.env` exposure, GraphQL introspection, Swagger/OpenAPI exposure, SSL expiry, admin panels, directory listing, default CMS credentials |
