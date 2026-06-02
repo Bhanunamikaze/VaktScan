@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
 """
-Refresh modules/data/cpanel_tsr.json from cPanel's TSR archive.
+Refresh modules/data/cpanel_tsr.json from cPanel's release notes.
 
-Source:  https://news.cpanel.com/category/security-advisories/
-Cross-check: https://www.cve.org/CVERecord/SearchResults?query=cpanel
+Source:  https://docs.cpanel.net/release-notes/release-notes/
+         (news.cpanel.com/category/security-advisories/ redirects here as of 2025)
+
+The new format is a single mega-page. Security advisories appear as
+"cPanel & WHM Security Update" h2 sections listing affected branches
+(e.g. "versions 136, 134, and 126") and CVE IDs. There are no longer
+separate TSR-XXXX-XXXX per-bulletin pages with 4-part build versions.
+
+Version range strategy: for each affected branch B, emit the range
+  >=11.B.0.0,<11.(B+2).0.0
+cPanel uses even-numbered branches; B+2 is the next branch boundary.
+For branches with no known successor yet, emit >=11.B.0.0 (open-ended).
 
 Usage:
     python scripts/build_cpanel_tsr.py           # refresh in place
     python scripts/build_cpanel_tsr.py --dry-run # print without writing
 
-The script is best-effort: cPanel publishes TSRs as blog posts, so parsing
-is heuristic. The output JSON is validated against the schema used by
-modules/cpanel.py (`{id, published, severity, affected_versions, fixed_in,
-cves, surface, auth_required, observable, summary}`) before being written.
-Run this from CI on a schedule (weekly) and commit the result.
+Run from CI on a schedule (weekly) and commit the result.
 """
 import argparse
 import datetime
@@ -26,64 +32,112 @@ import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUT_PATH = os.path.join(ROOT, 'modules', 'data', 'cpanel_tsr.json')
-INDEX_URL = 'https://news.cpanel.com/category/security-advisories/'
+SOURCE_URL = 'https://docs.cpanel.net/release-notes/release-notes/'
 
 
-def fetch(url, timeout=15):
+def fetch(url, timeout=30):
     req = urllib.request.Request(url, headers={'User-Agent': 'VaktScan-TSR-refresh/1.0'})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode('utf-8', errors='replace')
 
 
-def parse_index(html):
-    """Yield (tsr_id, post_url) from the index page."""
-    seen = set()
-    for m in re.finditer(r'href="([^"]+)"[^>]*>\s*(TSR-\d{4}-\d{4})\b', html):
-        url, tsr_id = m.group(1), m.group(2)
-        if tsr_id in seen:
+def _branches_to_ranges(branches):
+    """Convert a list of cPanel branch ints to affected version range strings."""
+    if not branches:
+        return []
+    max_branch = max(branches)
+    ranges = []
+    for b in sorted(branches):
+        next_b = b + 2
+        if b == max_branch:
+            # Unknown upper bound for the newest branch — open-ended range.
+            ranges.append(f">=11.{b}.0.0")
+        else:
+            ranges.append(f">=11.{b}.0.0,<11.{next_b}.0.0")
+    return ranges
+
+
+def parse_security_blocks(html):
+    """
+    Parse 'cPanel & WHM Security Update' h2 sections from the release notes page.
+    Returns a list of bulletin dicts matching the cpanel.py schema.
+    """
+    raw_blocks = re.split(r'(?=<h2[^>]*id=)', html)
+    bulletins = []
+    seen_ids = set()
+
+    for block in raw_blocks:
+        title_m = re.search(r'<h2[^>]*>(.+?)</h2>', block, re.DOTALL)
+        if not title_m:
             continue
-        seen.add(tsr_id)
-        yield tsr_id, url
+        title_text = re.sub(r'<[^>]+>', '', title_m.group(1)).strip()
 
+        if not re.search(r'cpanel.*whm.*security|security.*update', title_text, re.IGNORECASE):
+            continue
 
-def parse_bulletin(tsr_id, html):
-    cves = sorted(set(re.findall(r'CVE-\d{4}-\d{4,7}', html)))
-    severity = 'MEDIUM'
-    for s in ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW'):
-        if re.search(rf'\b{s}\b', html, re.IGNORECASE):
-            severity = s
-            break
+        text = re.sub(r'<[^>]+>', ' ', block)
 
-    # Affected version ranges: try to find "cPanel & WHM version X.Y.Z.W" lines.
-    fixed = sorted(set(re.findall(r'\b(\d{2}\.\d+\.\d+\.\d+)\b', html)))
-    if not fixed:
-        return None
+        cves = sorted(set(re.findall(r'CVE-\d{4}-\d{4,7}', block)))
+        if not cves:
+            continue
 
-    affected = []
-    for fix in fixed:
-        major, minor, patch, build = fix.split('.')
-        affected.append(f">={major}.{minor}.0.0,<{fix}")
+        # Parse date
+        date_str = None
+        date_m = re.search(r'(\d{4} \w+ \d+)', text)
+        if date_m:
+            for fmt in ('%Y %B %d', '%Y %b %d'):
+                try:
+                    date_str = datetime.datetime.strptime(date_m.group(1), fmt).strftime('%Y-%m-%d')
+                    break
+                except ValueError:
+                    pass
 
-    title_match = re.search(r'<title>(.+?)</title>', html, re.IGNORECASE | re.DOTALL)
-    summary = (title_match.group(1).strip()[:200] if title_match else f'cPanel & WHM Security Advisory {tsr_id}')
+        # Parse severity
+        severity = 'MEDIUM'
+        for s in ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW'):
+            if re.search(rf'\b{s}\b', text, re.IGNORECASE):
+                severity = s
+                break
 
-    published = None
-    pm = re.search(r'(20\d{2}-\d{2}-\d{2})', html)
-    if pm:
-        published = pm.group(1)
+        # Extract affected branch numbers: "versions 136, 134, and 126"
+        # Also handles "all supported ... versions (136, 134, 132, ...)"
+        branch_m = re.search(
+            r'versions?\s*\(?([\d,\s]+(?:and\s+\d+)?)\)?',
+            text, re.IGNORECASE
+        )
+        branches = []
+        if branch_m:
+            nums = [int(n) for n in re.findall(r'\d+', branch_m.group(1))]
+            branches = [n for n in nums if 50 < n < 500]
 
-    return {
-        'id': tsr_id,
-        'published': published or datetime.date.today().isoformat(),
-        'severity': severity,
-        'affected_versions': affected,
-        'fixed_in': fixed,
-        'cves': cves,
-        'surface': ['cpanel', 'whm'],
-        'auth_required': False,
-        'observable': bool(cves),
-        'summary': summary,
-    }
+        affected = _branches_to_ranges(branches)
+
+        # Synthetic ID: prefer date-based, fall back to index
+        bul_id = f"SEC-{date_str}" if date_str else f"SEC-{len(bulletins):04d}"
+        if bul_id in seen_ids:
+            bul_id = f"{bul_id}-{len(bulletins)}"
+        seen_ids.add(bul_id)
+
+        # Extract a meaningful summary from the advisory text
+        summary_m = re.search(r'(addressing.{10,200}?)(?:\.|$)', text)
+        if not summary_m:
+            summary_m = re.search(r'(patches?.{10,200}?)(?:\.|$)', text, re.IGNORECASE)
+        summary = summary_m.group(1).strip()[:200] if summary_m else title_text[:200]
+
+        bulletins.append({
+            'id': bul_id,
+            'published': date_str or datetime.date.today().isoformat(),
+            'severity': severity,
+            'affected_versions': affected,
+            'fixed_in': [f"11.{b}.latest" for b in sorted(branches)],
+            'cves': cves,
+            'surface': ['cpanel', 'whm'],
+            'auth_required': False,
+            'observable': True,
+            'summary': summary,
+        })
+
+    return bulletins
 
 
 def main():
@@ -92,31 +146,42 @@ def main():
     args = parser.parse_args()
 
     try:
-        html = fetch(INDEX_URL)
+        html = fetch(SOURCE_URL)
     except (urllib.error.URLError, TimeoutError) as e:
-        print(f"[!] Could not fetch index ({e}). Existing cpanel_tsr.json left untouched.")
+        print(f"[!] Could not fetch release notes ({e}). Existing cpanel_tsr.json left untouched.")
         sys.exit(2)
 
-    bulletins = []
-    for tsr_id, url in parse_index(html):
-        try:
-            page = fetch(url)
-        except Exception:
-            continue
-        b = parse_bulletin(tsr_id, page)
-        if b:
-            bulletins.append(b)
+    bulletins = parse_security_blocks(html)
 
     if not bulletins:
-        print("[!] No bulletins parsed — refusing to overwrite existing JSON.")
+        print("[!] No security update blocks parsed — refusing to overwrite existing JSON.")
         sys.exit(3)
+
+    # Preserve any hand-crafted bulletins from the existing file that have
+    # real 4-part affected_versions (old TSR format) and aren't in the new data.
+    if os.path.exists(OUT_PATH):
+        with open(OUT_PATH, 'r', encoding='utf-8') as fh:
+            existing = json.load(fh)
+        existing_ids = {b['id'] for b in bulletins}
+        for old in existing.get('bulletins', []):
+            if old['id'] not in existing_ids and any(
+                re.match(r'>=\d+\.\d+\.\d+\.\d+', r) for r in old.get('affected_versions', [])
+            ):
+                bulletins.append(old)
+
+    bulletins.sort(key=lambda b: b['published'], reverse=True)
 
     out = {
         '_meta': {
-            'source': INDEX_URL,
+            'source': SOURCE_URL,
             'schema_version': 1,
             'refreshed_at': datetime.datetime.utcnow().isoformat() + 'Z',
             'count': len(bulletins),
+            'description': (
+                'cPanel & WHM security advisories parsed from the release notes page. '
+                'affected_versions uses branch-level ranges (>=11.B.0.0,<11.B+2.0.0). '
+                'Refreshed by scripts/build_cpanel_tsr.py. Run weekly.'
+            ),
         },
         'bulletins': bulletins,
     }

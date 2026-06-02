@@ -47,7 +47,7 @@ COMPONENT_CPES = {
     'awstats':      'cpe:2.3:a:awstats:awstats',
     'powerdns':     'cpe:2.3:a:powerdns:authoritative',
     'bind':         'cpe:2.3:a:isc:bind',
-    'mysql':        'cpe:2.3:a:mysql:mysql',
+    'mysql':        'cpe:2.3:a:oracle:mysql',
     'postgresql':   'cpe:2.3:a:postgresql:postgresql',
     'owncloud':     'cpe:2.3:a:owncloud:owncloud',
     'imagemagick':  'cpe:2.3:a:imagemagick:imagemagick',
@@ -66,12 +66,28 @@ def severity_from_cvss(cvss):
     return 'LOW'
 
 
-def fetch_nvd(cpe, results_per_page=200):
-    params = {'cpeName': cpe + ':*:*:*:*:*:*:*', 'resultsPerPage': str(results_per_page)}
-    url = NVD_API + '?' + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={'User-Agent': 'VaktScan-bundled-refresh/1.0'})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode('utf-8'))
+def fetch_nvd(cpe, results_per_page=2000):
+    """Fetch all NVD results for a CPE, paginating until exhausted."""
+    all_vulns = []
+    start = 0
+    while True:
+        params = {
+            'cpeName': cpe + ':*:*:*:*:*:*:*',
+            'resultsPerPage': str(results_per_page),
+            'startIndex': str(start),
+        }
+        url = NVD_API + '?' + urllib.parse.urlencode(params)
+        req = urllib.request.Request(url, headers={'User-Agent': 'VaktScan-bundled-refresh/1.0'})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        batch = data.get('vulnerabilities', [])
+        all_vulns.extend(batch)
+        total = data.get('totalResults', 0)
+        start += len(batch)
+        if start >= total or not batch:
+            break
+        time.sleep(6)  # NVD rate limit between pages
+    return {'vulnerabilities': all_vulns}
 
 
 def extract_entries(nvd_payload):
@@ -88,7 +104,7 @@ def extract_entries(nvd_payload):
                 break
         cvss = 0.0
         metrics = cve.get('metrics', {})
-        for key in ('cvssMetricV31', 'cvssMetricV30', 'cvssMetricV2'):
+        for key in ('cvssMetricV40', 'cvssMetricV31', 'cvssMetricV30', 'cvssMetricV2'):
             if key in metrics and metrics[key]:
                 cvss = metrics[key][0].get('cvssData', {}).get('baseScore', 0.0)
                 break
@@ -99,12 +115,18 @@ def extract_entries(nvd_payload):
                 for match in node.get('cpeMatch', []):
                     if not match.get('vulnerable'):
                         continue
-                    lo = match.get('versionStartIncluding') or match.get('versionStartExcluding')
-                    hi = match.get('versionEndExcluding') or match.get('versionEndIncluding')
+                    lo_inc = match.get('versionStartIncluding')
+                    lo_exc = match.get('versionStartExcluding')
+                    hi_exc = match.get('versionEndExcluding')
+                    hi_inc = match.get('versionEndIncluding')
+                    lo = lo_inc or lo_exc
+                    hi = hi_exc or hi_inc
+                    lo_op = '>=' if lo_inc else '>'
+                    hi_op = '<' if hi_exc else '<='
                     if lo and hi:
-                        ranges.append(f">={lo},<{hi}")
+                        ranges.append(f"{lo_op}{lo},{hi_op}{hi}")
                     elif hi:
-                        ranges.append(f"<{hi}")
+                        ranges.append(f"{hi_op}{hi}")
         out.append({
             'cve': cve_id,
             'severity': severity_from_cvss(cvss),
