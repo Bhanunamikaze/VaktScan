@@ -98,11 +98,18 @@ class NmapRunner:
 
         async def sem_task(t_data):
             nonlocal completed
+            ip, ports, host = t_data
+            target_name = host if host and host != 'N/A' else ip
+            ports_str = ",".join(map(str, ports))
+            if not dashboard.active:
+                print(f"[*] [Nmap Scan] Starting scan on {target_name} (ports: {ports_str})...")
             async with semaphore:
-                await self.run_nmap_on_target(t_data[0], t_data[1], t_data[2])
+                await self.run_nmap_on_target(ip, ports, host)
                 completed += 1
                 if dashboard.active:
                     dashboard.update_task("nmap", completed=completed, status=f"Scanned {completed}/{len(targets_data)} hosts")
+                else:
+                    print(f"[+] [Nmap Scan] Completed scan on {target_name} ({completed}/{len(targets_data)} hosts done)")
 
         try:
             tasks = [sem_task(t) for t in targets_data]
@@ -377,12 +384,19 @@ class NmapRunner:
 
         async def sem_task(t_data):
             nonlocal completed
+            ip, ports, host = t_data
+            target_name = host if host and host != 'N/A' else ip
+            ports_str = ",".join(map(str, ports))
+            if not dashboard.active:
+                print(f"[*] [Nmap CVE Scan] Starting scan on {target_name} (ports: {ports_str})...")
             async with semaphore:
-                res = await self.run_cve_scan_on_target(t_data[0], t_data[1], t_data[2])
+                res = await self.run_cve_scan_on_target(ip, ports, host)
                 all_findings.extend(res)
                 completed += 1
                 if dashboard.active:
                     dashboard.update_task("nmap_cve", completed=completed, status=f"Scanned {completed}/{len(targets_data)} hosts (findings: {len(all_findings)})")
+                else:
+                    print(f"[+] [Nmap CVE Scan] Completed scan on {target_name} ({completed}/{len(targets_data)} hosts done) — Found {len(res)} finding(s)")
 
         try:
             tasks = [sem_task(t) for t in targets_data]
