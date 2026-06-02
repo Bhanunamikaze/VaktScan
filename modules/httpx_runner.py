@@ -10,6 +10,16 @@ from urllib.parse import urlparse
 
 import httpx as python_httpx
 
+
+def _print_httpx_progress(completed, total, alive, step):
+    if completed % step == 0 or completed == total:
+        pct = completed * 100 // total
+        print(
+            f"\r\033[96m[*] httpx: {completed}/{total} probed ({pct}%) | alive: {alive}\033[0m",
+            end='', flush=True
+        )
+
+
 class HTTPXRunner:
     def __init__(self, output_dir="reports"):
         self.output_dir = output_dir
@@ -195,6 +205,9 @@ class HTTPXRunner:
         timeout = python_httpx.Timeout(10.0, connect=5.0)
         results = []
         seen_urls = set()
+        total = len(expanded_targets)
+        completed = 0
+        progress_step = max(1, total // 10)
 
         async with python_httpx.AsyncClient(
             timeout=timeout,
@@ -202,13 +215,18 @@ class HTTPXRunner:
             follow_redirects=True,
         ) as client:
             async def probe(target):
+                nonlocal completed
                 async with semaphore:
                     try:
                         response = await client.get(target)
                     except python_httpx.HTTPError:
+                        completed += 1
+                        _print_httpx_progress(completed, total, len(results), progress_step)
                         return
 
                     final_url = str(response.url)
+                    completed += 1
+                    _print_httpx_progress(completed, total, len(results), progress_step)
                     if final_url in seen_urls:
                         return
                     seen_urls.add(final_url)
@@ -228,6 +246,7 @@ class HTTPXRunner:
                     })
 
             await asyncio.gather(*(probe(target) for target in expanded_targets))
+        print()  # newline after progress line
 
         print(f"\033[92m[+] Python httpx fallback finished. Found {len(results)} alive services.\033[0m")
         return results

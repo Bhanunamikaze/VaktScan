@@ -114,6 +114,7 @@ class NucleiRunner:
             "-timeout", "15",
             "-severity", "critical,high,medium",
             "-nc",
+            "-stats", "-stats-interval", "30",
         ]
         if self.output_flag:
             cmd.append(self.output_flag)
@@ -128,13 +129,21 @@ class NucleiRunner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await process.communicate()
+
+            # Stream stderr live so nuclei stats/progress appear in real time
+            async def _stream_stderr():
+                async for raw in process.stderr:
+                    line = raw.decode().strip()
+                    if line:
+                        print(f"\033[90m[nuclei] {line}\033[0m", flush=True)
+
+            stderr_task = asyncio.create_task(_stream_stderr())
+            stdout = await process.stdout.read()
+            await stderr_task
+            await process.wait()
 
             if process.returncode not in (0, None):
                 print(f"\033[93m[!] Nuclei exited with code {process.returncode}.\033[0m")
-                stderr_text = stderr.decode().strip()
-                if stderr_text:
-                    print(f"\033[90m[*] nuclei stderr:\033[0m\n{stderr_text}")
 
             # Prefer file output, but fall back to stdout if file missing
             data_lines = []
