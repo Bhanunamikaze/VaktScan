@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1180" width="900" height="1180">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 1200" width="920" height="1200">
   <defs>
     <marker id="arr" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
       <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
@@ -8,256 +8,267 @@
     </marker>
     <style>
       text { font-family: 'Segoe UI', Roboto, Arial, sans-serif; }
-      .title    { font-size: 20px; font-weight: 700; fill: #f0f6fc; }
-      .sh       { font-size: 12px; font-weight: 700; fill: #ffffff; }
-      .sm       { font-size: 11px; font-weight: 600; fill: #93c5fd; }
-      .sd       { font-size: 10px; fill: #8b949e; }
-      .sdc      { font-size: 10px; fill: #4ade80; }
-      .label    { font-size: 11px; fill: #8b949e; }
-      .badge    { font-size: 10px; font-weight: 600; fill: #4ade80; }
-      .output   { font-size: 11px; fill: #d2a8ff; font-family: monospace; }
+      .title  { font-size: 19px; font-weight: 700; fill: #f0f6fc; }
+      .sh     { font-size: 12px; font-weight: 700; fill: #ffffff; }
+      .sm     { font-size: 11px; font-weight: 600; fill: #93c5fd; }
+      .sd     { font-size: 10px; fill: #8b949e; }
+      .sdc    { font-size: 10px; fill: #4ade80; }
+      .lbl    { font-size: 11px; fill: #8b949e; }
+      .badge  { font-size: 10px; font-weight: 700; fill: #4ade80; }
+      .out    { font-size: 11px; fill: #d2a8ff; font-family: 'Courier New', monospace; }
     </style>
   </defs>
 
   <!-- background -->
-  <rect width="900" height="1180" fill="#0d1117"/>
+  <rect width="920" height="1200" fill="#0d1117"/>
 
-  <!-- ── TITLE ── -->
-  <text x="450" y="38" text-anchor="middle" class="title">VaktScan — Attack Surface Scanner Architecture</text>
+  <!-- TITLE -->
+  <text x="460" y="36" text-anchor="middle" class="title">VaktScan — Attack Surface Scanner Architecture</text>
 
-  <!-- ── INPUT ── -->
-  <rect x="275" y="55" width="350" height="52" rx="8" fill="#1f6feb" stroke="#388bfd" stroke-width="1.5"/>
-  <text x="450" y="77" text-anchor="middle" class="sh">Input</text>
-  <text x="450" y="96" text-anchor="middle" class="sd">domain  │  IP  │  CIDR  │  targets file</text>
+  <!-- INPUT -->
+  <rect x="285" y="52" width="350" height="48" rx="8" fill="#1f6feb" stroke="#388bfd" stroke-width="1.5"/>
+  <text x="460" y="72" text-anchor="middle" class="sh">Input</text>
+  <text x="460" y="90" text-anchor="middle" class="sd">domain  │  IP  │  CIDR  │  targets file</text>
 
-  <!-- INPUT → classifier -->
-  <line x1="450" y1="107" x2="450" y2="127" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <!-- input → classifier -->
+  <line x1="460" y1="100" x2="460" y2="118" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
 
-  <!-- ── CLASSIFIER ── -->
-  <rect x="330" y="127" width="240" height="32" rx="6" fill="#21262d" stroke="#30363d" stroke-width="1"/>
-  <text x="450" y="148" text-anchor="middle" class="label">target_classifier()</text>
+  <!-- CLASSIFIER -->
+  <rect x="340" y="118" width="240" height="30" rx="6" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+  <text x="460" y="138" text-anchor="middle" class="lbl">target_classifier()</text>
 
-  <!-- fork line -->
-  <line x1="450" y1="159" x2="450" y2="173" stroke="#58a6ff" stroke-width="2"/>
-  <line x1="180" y1="173" x2="720" y2="173" stroke="#58a6ff" stroke-width="2"/>
-  <!-- domain branch -->
-  <line x1="320" y1="173" x2="320" y2="193" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
-  <text x="244" y="186" class="sdc">domain</text>
-  <!-- IP/CIDR branch label -->
-  <line x1="620" y1="173" x2="620" y2="620" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="5,3"/>
-  <text x="625" y="186" class="label">IP / CIDR</text>
-  <text x="625" y="200" class="label">(skip Stage 1)</text>
+  <!-- fork -->
+  <line x1="460" y1="148" x2="460" y2="162" stroke="#58a6ff" stroke-width="2"/>
+  <line x1="185" y1="162" x2="735" y2="162" stroke="#58a6ff" stroke-width="2"/>
+  <line x1="310" y1="162" x2="310" y2="182" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="238" y="175" class="sdc">domain</text>
+  <line x1="680" y1="162" x2="680" y2="600" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="686" y="175" class="lbl">IP / CIDR</text>
+  <text x="686" y="189" class="lbl">(skip Stage 1)</text>
 
-  <!-- ══════════════════════════════════════════════════════ -->
-  <!-- STAGE 1                                               -->
-  <!-- ══════════════════════════════════════════════════════ -->
-  <rect x="30" y="193" width="560" height="210" rx="8" fill="#0c1a2e" stroke="#1d4ed8" stroke-width="1.5"/>
-  <!-- header -->
-  <rect x="30" y="193" width="560" height="26" rx="8" fill="#1d4ed8"/>
-  <rect x="30" y="207" width="560" height="12" fill="#1d4ed8"/>
-  <text x="310" y="211" text-anchor="middle" class="sh">Stage 1 — Passive Recon</text>
-  <text x="480" y="211" text-anchor="middle" class="badge">all parallel</text>
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- STAGE 1  — widened to 840px, 4 equal boxes     -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <rect x="22" y="182" width="840" height="220" rx="8" fill="#0c1a2e" stroke="#1d4ed8" stroke-width="1.5"/>
+  <rect x="22" y="182" width="840" height="26" rx="8" fill="#1d4ed8"/>
+  <rect x="22" y="196" width="840" height="12" fill="#1d4ed8"/>
+  <text x="380" y="200" text-anchor="middle" class="sh">Stage 1 — Passive Recon</text>
+  <text x="700" y="200" text-anchor="middle" class="badge">✦ all parallel</text>
 
-  <!-- box 1: Subdomain Enum + Google Dork -->
-  <rect x="44" y="228" width="150" height="88" rx="5" fill="#0f2d52" stroke="#1e40af" stroke-width="1"/>
-  <text x="119" y="246" text-anchor="middle" class="sm">Subdomain Enum</text>
-  <text x="119" y="259" text-anchor="middle" class="sd">subfinder / amass</text>
-  <text x="119" y="271" text-anchor="middle" class="sd">bbot / findomain</text>
-  <text x="119" y="283" text-anchor="middle" class="sd">crt.sh / knockpy</text>
-  <line x1="44" y1="296" x2="194" y2="296" stroke="#1e40af" stroke-width="1"/>
-  <text x="119" y="308" text-anchor="middle" class="sm">Google Dork</text>
+  <!-- Box widths: (840 - 2*22 - 3*12) / 4 = (796 - 36)/4 = 190px each, gap 12 -->
+  <!-- x positions: 34, 236, 438, 640 -->
 
-  <!-- box 2: DNS Recon -->
-  <rect x="204" y="228" width="132" height="88" rx="5" fill="#0f2d52" stroke="#1e40af" stroke-width="1"/>
-  <text x="270" y="246" text-anchor="middle" class="sm">DNS Recon</text>
-  <text x="270" y="259" text-anchor="middle" class="sd">SPF / DMARC</text>
-  <text x="270" y="271" text-anchor="middle" class="sd">DKIM / AXFR</text>
-  <text x="270" y="283" text-anchor="middle" class="sd">DNSSEC / CAA</text>
-  <text x="270" y="296" text-anchor="middle" class="sd">open recursion</text>
-  <text x="270" y="309" text-anchor="middle" class="sd">zone transfer</text>
+  <!-- S1 box 1: Subdomain Enum + Google Dork -->
+  <rect x="34" y="218" width="190" height="170" rx="5" fill="#0f2d52" stroke="#1e40af" stroke-width="1"/>
+  <text x="129" y="237" text-anchor="middle" class="sm">Subdomain Enum</text>
+  <text x="129" y="252" text-anchor="middle" class="sd">subfinder / amass</text>
+  <text x="129" y="265" text-anchor="middle" class="sd">bbot / findomain</text>
+  <text x="129" y="278" text-anchor="middle" class="sd">crt.sh / knockpy</text>
+  <text x="129" y="291" text-anchor="middle" class="sd">Censys / Sublist3r</text>
+  <line x1="34" y1="303" x2="224" y2="303" stroke="#1e40af" stroke-width="1"/>
+  <text x="129" y="321" text-anchor="middle" class="sm">Google Dork</text>
+  <text x="129" y="335" text-anchor="middle" class="sd">28 operator templates</text>
+  <text x="129" y="348" text-anchor="middle" class="sd">API / Playwright / HTML</text>
+  <text x="129" y="362" text-anchor="middle" class="sdc">runs in parallel with enum</text>
 
-  <!-- box 3: Cloud Enum -->
-  <rect x="346" y="228" width="132" height="88" rx="5" fill="#0f2d52" stroke="#1e40af" stroke-width="1"/>
-  <text x="412" y="246" text-anchor="middle" class="sm">Cloud Enum</text>
-  <text x="412" y="259" text-anchor="middle" class="sd">S3 bucket enum</text>
-  <text x="412" y="271" text-anchor="middle" class="sd">Azure Blob enum</text>
-  <text x="412" y="283" text-anchor="middle" class="sd">GCS enum</text>
-  <text x="412" y="296" text-anchor="middle" class="sd">CloudFront detect</text>
-  <text x="412" y="309" text-anchor="middle" class="sd">metadata SSRF</text>
+  <!-- S1 box 2: DNS Recon -->
+  <rect x="236" y="218" width="190" height="170" rx="5" fill="#0f2d52" stroke="#1e40af" stroke-width="1"/>
+  <text x="331" y="237" text-anchor="middle" class="sm">DNS Recon</text>
+  <text x="331" y="252" text-anchor="middle" class="sd">A / AAAA / MX / NS</text>
+  <text x="331" y="265" text-anchor="middle" class="sd">SPF / DMARC / DKIM</text>
+  <text x="331" y="278" text-anchor="middle" class="sd">AXFR zone transfer</text>
+  <text x="331" y="291" text-anchor="middle" class="sd">DNSSEC / CAA</text>
+  <text x="331" y="304" text-anchor="middle" class="sd">open recursion</text>
+  <text x="331" y="317" text-anchor="middle" class="sd">subdomain takeover</text>
+  <text x="331" y="330" text-anchor="middle" class="sd">wildcard detection</text>
 
-  <!-- box 4: CT Monitor -->
-  <rect x="488" y="228" width="90" height="88" rx="5" fill="#0f2d52" stroke="#1e40af" stroke-width="1"/>
-  <text x="533" y="246" text-anchor="middle" class="sm">CT Monitor</text>
-  <text x="533" y="262" text-anchor="middle" class="sd">crt.sh query</text>
-  <text x="533" y="275" text-anchor="middle" class="sd">SQLite baseline</text>
-  <text x="533" y="288" text-anchor="middle" class="sd">diff detection</text>
-  <text x="533" y="301" text-anchor="middle" class="sd">new cert alert</text>
-  <text x="533" y="315" text-anchor="middle" class="sdc">HIGH on change</text>
+  <!-- S1 box 3: Cloud Enum -->
+  <rect x="438" y="218" width="190" height="170" rx="5" fill="#0f2d52" stroke="#1e40af" stroke-width="1"/>
+  <text x="533" y="237" text-anchor="middle" class="sm">Cloud Enum</text>
+  <text x="533" y="252" text-anchor="middle" class="sd">S3 bucket enum</text>
+  <text x="533" y="265" text-anchor="middle" class="sd">Azure Blob enum</text>
+  <text x="533" y="278" text-anchor="middle" class="sd">GCS bucket enum</text>
+  <text x="533" y="291" text-anchor="middle" class="sd">CloudFront detection</text>
+  <text x="533" y="304" text-anchor="middle" class="sd">Azure AD tenant</text>
+  <text x="533" y="317" text-anchor="middle" class="sd">EC2 / GCP metadata</text>
+  <text x="533" y="330" text-anchor="middle" class="sd">SSRF indicator</text>
 
-  <!-- parallel brace label -->
-  <text x="310" y="392" text-anchor="middle" class="sd">asyncio.gather — all five run concurrently</text>
+  <!-- S1 box 4: CT Monitor -->
+  <rect x="640" y="218" width="190" height="170" rx="5" fill="#0f2d52" stroke="#1e40af" stroke-width="1"/>
+  <text x="735" y="237" text-anchor="middle" class="sm">CT Monitor</text>
+  <text x="735" y="252" text-anchor="middle" class="sd">crt.sh query</text>
+  <text x="735" y="265" text-anchor="middle" class="sd">SQLite baseline</text>
+  <text x="735" y="278" text-anchor="middle" class="sd">diff detection</text>
+  <text x="735" y="291" text-anchor="middle" class="sd">new cert alert</text>
+  <text x="735" y="304" text-anchor="middle" class="sd">INFO on first scan</text>
+  <text x="735" y="317" text-anchor="middle" class="sdc">HIGH on change</text>
+
+  <!-- Stage 1 footer note -->
+  <text x="442" y="400" text-anchor="middle" class="sd">asyncio.gather — all four groups run concurrently per domain</text>
 
   <!-- Stage 1 → Stage 2 -->
-  <line x1="310" y1="403" x2="310" y2="428" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
-  <!-- IP dashed joins here -->
-  <line x1="620" y1="620" x2="620" y2="435" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-dim)"/>
+  <line x1="442" y1="410" x2="442" y2="432" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <!-- IP dashed line meets Stage 2 -->
+  <line x1="680" y1="600" x2="680" y2="442" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arr-dim)"/>
 
-  <!-- ══════════════════════════════════════════════════════ -->
-  <!-- STAGE 2                                               -->
-  <!-- ══════════════════════════════════════════════════════ -->
-  <rect x="30" y="428" width="660" height="140" rx="8" fill="#0c1a2e" stroke="#7c3aed" stroke-width="1.5"/>
-  <rect x="30" y="428" width="660" height="26" rx="8" fill="#7c3aed"/>
-  <rect x="30" y="442" width="660" height="12" fill="#7c3aed"/>
-  <text x="360" y="446" text-anchor="middle" class="sh">Stage 2 — Active Discovery</text>
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- STAGE 2                                        -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <rect x="22" y="432" width="840" height="160" rx="8" fill="#130d2b" stroke="#7c3aed" stroke-width="1.5"/>
+  <rect x="22" y="432" width="840" height="26" rx="8" fill="#7c3aed"/>
+  <rect x="22" y="446" width="840" height="12" fill="#7c3aed"/>
+  <text x="442" y="450" text-anchor="middle" class="sh">Stage 2 — Active Discovery</text>
 
-  <!-- Port Scanner -->
-  <rect x="50" y="464" width="190" height="50" rx="5" fill="#1e1b4b" stroke="#7c3aed" stroke-width="1"/>
-  <text x="145" y="484" text-anchor="middle" class="sm">Port Scanner</text>
-  <text x="145" y="498" text-anchor="middle" class="sd">200 ports default · --ports to extend</text>
-  <text x="145" y="511" text-anchor="middle" class="sd">IPv4 + IPv6 · streaming for large CIDRs</text>
+  <!-- Port Scanner box -->
+  <rect x="38" y="468" width="230" height="106" rx="5" fill="#1e1b4b" stroke="#7c3aed" stroke-width="1"/>
+  <text x="153" y="487" text-anchor="middle" class="sm">Port Scanner</text>
+  <text x="153" y="502" text-anchor="middle" class="sd">200 common ports (default)</text>
+  <text x="153" y="516" text-anchor="middle" class="sd">extend with --ports flag</text>
+  <text x="153" y="530" text-anchor="middle" class="sd">IPv4 + IPv6 support</text>
+  <text x="153" y="544" text-anchor="middle" class="sd">streaming for large CIDRs</text>
+  <text x="153" y="560" text-anchor="middle" class="sdc">→ open ports list</text>
 
-  <!-- Nmap optional -->
-  <rect x="260" y="464" width="180" height="50" rx="5" fill="#1e1b4b" stroke="#6b21a8" stroke-width="1" stroke-dasharray="4,2"/>
-  <text x="350" y="481" text-anchor="middle" class="sm">Nmap CVE Scan</text>
-  <text x="350" y="494" text-anchor="middle" class="sd">--nmap flag · -sCV --script</text>
-  <text x="350" y="507" text-anchor="middle" class="sd">vuln,vulners · XML parse</text>
-  <text x="350" y="521" text-anchor="middle" class="label">(optional)</text>
+  <!-- arrow: Port Scanner → Nmap -->
+  <line x1="268" y1="521" x2="298" y2="521" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr)"/>
 
-  <!-- HTTPX -->
-  <rect x="460" y="464" width="210" height="50" rx="5" fill="#1e1b4b" stroke="#7c3aed" stroke-width="1"/>
-  <text x="565" y="484" text-anchor="middle" class="sm">HTTPX Probe</text>
-  <text x="565" y="498" text-anchor="middle" class="sd">title · status · tech detect</text>
-  <text x="565" y="511" text-anchor="middle" class="sd">→ alive URLs list</text>
+  <!-- Nmap optional box -->
+  <rect x="298" y="468" width="220" height="106" rx="5" fill="#1e1b4b" stroke="#6b21a8" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="408" y="487" text-anchor="middle" class="sm">Nmap CVE Scan</text>
+  <text x="408" y="502" text-anchor="middle" class="sd">--nmap flag (optional)</text>
+  <text x="408" y="516" text-anchor="middle" class="sd">-sCV --script vuln,vulners</text>
+  <text x="408" y="530" text-anchor="middle" class="sd">XML output parsed</text>
+  <text x="408" y="544" text-anchor="middle" class="sd">CVSS ≥ 7.0 filter</text>
+  <text x="408" y="560" text-anchor="middle" class="sdc">→ CVE findings</text>
 
-  <!-- arrows inside stage 2 -->
-  <line x1="240" y1="489" x2="258" y2="489" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="3,2" marker-end="url(#arr)"/>
-  <line x1="240" y1="489" x2="458" y2="489" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr)"/>
+  <!-- arrow: Port Scanner → HTTPX (skips over Nmap) -->
+  <line x1="268" y1="538" x2="538" y2="538" stroke="#58a6ff" stroke-width="1.5"/>
+  <line x1="538" y1="521" x2="538" y2="538" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- HTTPX box -->
+  <rect x="538" y="468" width="306" height="106" rx="5" fill="#1e1b4b" stroke="#7c3aed" stroke-width="1"/>
+  <text x="691" y="487" text-anchor="middle" class="sm">HTTPX Probe</text>
+  <text x="691" y="502" text-anchor="middle" class="sd">probes open web ports</text>
+  <text x="691" y="516" text-anchor="middle" class="sd">status code / title / tech detect</text>
+  <text x="691" y="530" text-anchor="middle" class="sd">vhost fuzzing (ffuf, optional)</text>
+  <text x="691" y="544" text-anchor="middle" class="sd">saves httpx_alive_*.csv</text>
+  <text x="691" y="560" text-anchor="middle" class="sdc">→ alive URLs list</text>
 
   <!-- Stage 2 → Stage 3 -->
-  <line x1="360" y1="568" x2="360" y2="598" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="442" y1="592" x2="442" y2="618" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
 
-  <!-- ══════════════════════════════════════════════════════ -->
-  <!-- STAGE 3                                               -->
-  <!-- ══════════════════════════════════════════════════════ -->
-  <rect x="30" y="598" width="660" height="195" rx="8" fill="#0c2218" stroke="#166534" stroke-width="1.5"/>
-  <rect x="30" y="598" width="660" height="26" rx="8" fill="#166534"/>
-  <rect x="30" y="612" width="660" height="12" fill="#166534"/>
-  <text x="310" y="616" text-anchor="middle" class="sh">Stage 3 — Web Analysis (alive URLs)</text>
-  <text x="575" y="616" text-anchor="middle" class="badge">all parallel</text>
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- STAGE 3                                        -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <rect x="22" y="618" width="840" height="210" rx="8" fill="#0c2218" stroke="#166534" stroke-width="1.5"/>
+  <rect x="22" y="618" width="840" height="26" rx="8" fill="#166534"/>
+  <rect x="22" y="632" width="840" height="12" fill="#166534"/>
+  <text x="360" y="636" text-anchor="middle" class="sh">Stage 3 — Web Analysis (alive URLs)</text>
+  <text x="720" y="636" text-anchor="middle" class="badge">✦ all parallel</text>
 
-  <!-- 5 parallel web boxes -->
-  <!-- Nuclei -->
-  <rect x="42" y="634" width="116" height="80" rx="4" fill="#052e16" stroke="#166534" stroke-width="1"/>
-  <text x="100" y="652" text-anchor="middle" class="sm">Nuclei</text>
-  <text x="100" y="665" text-anchor="middle" class="sd">CVE templates</text>
-  <text x="100" y="678" text-anchor="middle" class="sd">auto-sync</text>
-  <text x="100" y="691" text-anchor="middle" class="sd">7000+ templates</text>
-  <text x="100" y="705" text-anchor="middle" class="sdc">findings</text>
+  <!-- 5 equal boxes: width = (840-12-5*8)/5 = 154px, gap 8 -->
+  <!-- x: 34, 196, 358, 520, 682  -->
 
-  <!-- Web Checks -->
-  <rect x="166" y="634" width="116" height="80" rx="4" fill="#052e16" stroke="#166534" stroke-width="1"/>
-  <text x="224" y="652" text-anchor="middle" class="sm">Web Checks</text>
-  <text x="224" y="665" text-anchor="middle" class="sd">.git/.env expose</text>
-  <text x="224" y="678" text-anchor="middle" class="sd">admin panels</text>
-  <text x="224" y="691" text-anchor="middle" class="sd">dir listing</text>
-  <text x="224" y="705" text-anchor="middle" class="sd">sec headers</text>
+  <rect x="34"  y="652" width="154" height="100" rx="4" fill="#052e16" stroke="#166534" stroke-width="1"/>
+  <text x="111" y="670" text-anchor="middle" class="sm">Nuclei</text>
+  <text x="111" y="684" text-anchor="middle" class="sd">CVE / misconfig</text>
+  <text x="111" y="697" text-anchor="middle" class="sd">7000+ templates</text>
+  <text x="111" y="710" text-anchor="middle" class="sd">auto-sync on startup</text>
+  <text x="111" y="724" text-anchor="middle" class="sdc">→ CVE findings</text>
 
-  <!-- Domain Scan -->
-  <rect x="290" y="634" width="116" height="80" rx="4" fill="#052e16" stroke="#166534" stroke-width="1"/>
-  <text x="348" y="652" text-anchor="middle" class="sm">Domain Scan</text>
-  <text x="348" y="665" text-anchor="middle" class="sd">58-sig takeover</text>
-  <text x="348" y="678" text-anchor="middle" class="sd">CORS / headers</text>
-  <text x="348" y="691" text-anchor="middle" class="sd">parked detect</text>
-  <text x="348" y="705" text-anchor="middle" class="sd">classification</text>
+  <rect x="196" y="652" width="154" height="100" rx="4" fill="#052e16" stroke="#166534" stroke-width="1"/>
+  <text x="273" y="670" text-anchor="middle" class="sm">Web Checks</text>
+  <text x="273" y="684" text-anchor="middle" class="sd">.git/.env exposure</text>
+  <text x="273" y="697" text-anchor="middle" class="sd">admin panels</text>
+  <text x="273" y="710" text-anchor="middle" class="sd">security headers</text>
+  <text x="273" y="724" text-anchor="middle" class="sd">dir listing / GraphQL</text>
 
-  <!-- Dirsearch -->
-  <rect x="414" y="634" width="116" height="80" rx="4" fill="#052e16" stroke="#166534" stroke-width="1"/>
-  <text x="472" y="652" text-anchor="middle" class="sm">Dirsearch</text>
-  <text x="472" y="665" text-anchor="middle" class="sd">dir brute-force</text>
-  <text x="472" y="678" text-anchor="middle" class="sd">backup files</text>
-  <text x="472" y="691" text-anchor="middle" class="sd">config leaks</text>
-  <text x="472" y="705" text-anchor="middle" class="sd">wordlist scan</text>
+  <rect x="358" y="652" width="154" height="100" rx="4" fill="#052e16" stroke="#166534" stroke-width="1"/>
+  <text x="435" y="670" text-anchor="middle" class="sm">Domain Scan</text>
+  <text x="435" y="684" text-anchor="middle" class="sd">58-sig takeover detect</text>
+  <text x="435" y="697" text-anchor="middle" class="sd">CORS / header audit</text>
+  <text x="435" y="710" text-anchor="middle" class="sd">parked page detect</text>
+  <text x="435" y="724" text-anchor="middle" class="sd">int/ext classification</text>
 
-  <!-- JS Paths -->
-  <rect x="538" y="634" width="140" height="80" rx="4" fill="#052e16" stroke="#166534" stroke-width="1"/>
-  <text x="608" y="652" text-anchor="middle" class="sm">JS Paths</text>
-  <text x="608" y="665" text-anchor="middle" class="sd">secrets / API keys</text>
-  <text x="608" y="678" text-anchor="middle" class="sd">source maps</text>
-  <text x="608" y="691" text-anchor="middle" class="sd">internal IPs</text>
-  <text x="608" y="705" text-anchor="middle" class="sd">endpoint probe</text>
+  <rect x="520" y="652" width="154" height="100" rx="4" fill="#052e16" stroke="#166534" stroke-width="1"/>
+  <text x="597" y="670" text-anchor="middle" class="sm">Dirsearch</text>
+  <text x="597" y="684" text-anchor="middle" class="sd">dir brute-force</text>
+  <text x="597" y="697" text-anchor="middle" class="sd">backup / config files</text>
+  <text x="597" y="710" text-anchor="middle" class="sd">wordlist-based scan</text>
+  <text x="597" y="724" text-anchor="middle" class="sd">hidden endpoints</text>
 
-  <!-- GAU + Wayback row (domain only) -->
-  <rect x="42" y="726" width="240" height="50" rx="4" fill="#052e16" stroke="#14532d" stroke-width="1"/>
-  <text x="162" y="744" text-anchor="middle" class="sm">GAU</text>
-  <text x="162" y="758" text-anchor="middle" class="sd">archived URL harvest</text>
-  <text x="162" y="770" text-anchor="middle" class="sd">→ passive endpoint list</text>
+  <rect x="682" y="652" width="154" height="100" rx="4" fill="#052e16" stroke="#166534" stroke-width="1"/>
+  <text x="759" y="670" text-anchor="middle" class="sm">JS Paths</text>
+  <text x="759" y="684" text-anchor="middle" class="sd">hardcoded secrets</text>
+  <text x="759" y="697" text-anchor="middle" class="sd">source maps</text>
+  <text x="759" y="710" text-anchor="middle" class="sd">internal IPs</text>
+  <text x="759" y="724" text-anchor="middle" class="sd">endpoint probing</text>
 
-  <rect x="292" y="726" width="240" height="50" rx="4" fill="#052e16" stroke="#14532d" stroke-width="1"/>
-  <text x="412" y="744" text-anchor="middle" class="sm">WaybackURLs</text>
-  <text x="412" y="758" text-anchor="middle" class="sd">Wayback Machine harvest</text>
-  <text x="412" y="770" text-anchor="middle" class="sd">→ passive endpoint list</text>
+  <!-- GAU + Wayback row -->
+  <rect x="34"  y="762" width="394" height="50" rx="4" fill="#052e16" stroke="#14532d" stroke-width="1"/>
+  <text x="231" y="781" text-anchor="middle" class="sm">GAU — archived URL harvest</text>
+  <text x="231" y="797" text-anchor="middle" class="sd">passive endpoint discovery via getallurls</text>
 
-  <text x="560" y="754" text-anchor="start" class="sd">(domain targets only,</text>
-  <text x="560" y="768" text-anchor="start" class="sd"> both in parallel)</text>
+  <rect x="438" y="762" width="398" height="50" rx="4" fill="#052e16" stroke="#14532d" stroke-width="1"/>
+  <text x="637" y="781" text-anchor="middle" class="sm">WaybackURLs — Wayback Machine harvest</text>
+  <text x="637" y="797" text-anchor="middle" class="sd">domain targets only · both run in parallel</text>
 
   <!-- Stage 3 → Stage 4 -->
-  <line x1="360" y1="793" x2="360" y2="823" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="442" y1="828" x2="442" y2="854" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
 
-  <!-- ══════════════════════════════════════════════════════ -->
-  <!-- STAGE 4                                               -->
-  <!-- ══════════════════════════════════════════════════════ -->
-  <rect x="30" y="823" width="660" height="120" rx="8" fill="#1a0c0c" stroke="#991b1b" stroke-width="1.5"/>
-  <rect x="30" y="823" width="660" height="26" rx="8" fill="#991b1b"/>
-  <rect x="30" y="837" width="660" height="12" fill="#991b1b"/>
-  <text x="310" y="841" text-anchor="middle" class="sh">Stage 4 — Service Vulnerability Scanning (per open port, parallel)</text>
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- STAGE 4                                        -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <rect x="22" y="854" width="840" height="120" rx="8" fill="#1a0c0c" stroke="#991b1b" stroke-width="1.5"/>
+  <rect x="22" y="854" width="840" height="26" rx="8" fill="#991b1b"/>
+  <rect x="22" y="868" width="840" height="12" fill="#991b1b"/>
+  <text x="360" y="872" text-anchor="middle" class="sh">Stage 4 — Service Vulnerability Scanning</text>
+  <text x="700" y="872" text-anchor="middle" class="badge">✦ per port, parallel</text>
 
-  <text x="350" y="870" text-anchor="middle" class="sm">elastic · kibana · grafana · prometheus · cpanel · jenkins · aem</text>
-  <text x="350" y="886" text-anchor="middle" class="sd">service_recon: Redis · SMB · RMI · Docker API · etcd · Kubernetes · MongoDB</text>
-  <text x="350" y="900" text-anchor="middle" class="sd">Cassandra · RabbitMQ · Vault · TeamCity CVE-2024-27198 · IPMI · Jupyter · Hadoop YARN · ...</text>
-  <text x="350" y="918" text-anchor="middle" class="sdc">fingerprint guard — service confirmed by headers/body before probe</text>
-  <text x="350" y="932" text-anchor="middle" class="sd">30+ CVE checks across 79 port mappings</text>
+  <text x="442" y="900" text-anchor="middle" class="sm">elastic · kibana · grafana · prometheus · cpanel · jenkins · aem</text>
+  <text x="442" y="916" text-anchor="middle" class="sd">service_recon: Redis · SMB · RMI · Docker API · etcd · Kubernetes · MongoDB · Cassandra</text>
+  <text x="442" y="930" text-anchor="middle" class="sd">RabbitMQ · Vault · TeamCity · IPMI · Jupyter · Hadoop YARN · Jira · Confluence · GitLab · ...</text>
+  <text x="442" y="948" text-anchor="middle" class="sdc">fingerprint guard — service confirmed by headers/body before each probe · 30+ CVEs · 79 port mappings</text>
 
   <!-- Stage 4 → Stage 5 -->
-  <line x1="360" y1="943" x2="360" y2="973" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="442" y1="974" x2="442" y2="1000" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
 
-  <!-- ══════════════════════════════════════════════════════ -->
-  <!-- STAGE 5                                               -->
-  <!-- ══════════════════════════════════════════════════════ -->
-  <rect x="30" y="973" width="660" height="110" rx="8" fill="#12101e" stroke="#6d28d9" stroke-width="1.5"/>
-  <rect x="30" y="973" width="660" height="26" rx="8" fill="#6d28d9"/>
-  <rect x="30" y="987" width="660" height="12" fill="#6d28d9"/>
-  <text x="310" y="991" text-anchor="middle" class="sh">Stage 5 — Enrichment</text>
-  <text x="510" y="991" text-anchor="middle" class="badge">parallel</text>
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- STAGE 5                                        -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <rect x="22" y="1000" width="840" height="116" rx="8" fill="#12101e" stroke="#6d28d9" stroke-width="1.5"/>
+  <rect x="22" y="1000" width="840" height="26" rx="8" fill="#6d28d9"/>
+  <rect x="22" y="1014" width="840" height="12" fill="#6d28d9"/>
+  <text x="360" y="1018" text-anchor="middle" class="sh">Stage 5 — Enrichment</text>
+  <text x="700" y="1018" text-anchor="middle" class="badge">✦ parallel</text>
 
-  <!-- 4 enrichment boxes -->
-  <rect x="44"  y="1009" width="143" height="56" rx="4" fill="#1e0a3c" stroke="#6d28d9" stroke-width="1"/>
-  <text x="115" y="1027" text-anchor="middle" class="sm">CISA KEV</text>
-  <text x="115" y="1042" text-anchor="middle" class="sd">Known Exploited</text>
-  <text x="115" y="1056" text-anchor="middle" class="sd">Vulnerabilities flag</text>
+  <!-- 4 enrichment boxes: width=(840-12-3*10)/4=198px, gap 10 -->
+  <!-- x: 34, 242, 450, 658 -->
+  <rect x="34"  y="1034" width="198" height="66" rx="4" fill="#1e0a3c" stroke="#6d28d9" stroke-width="1"/>
+  <text x="133" y="1053" text-anchor="middle" class="sm">CISA KEV</text>
+  <text x="133" y="1068" text-anchor="middle" class="sd">Known Exploited</text>
+  <text x="133" y="1082" text-anchor="middle" class="sd">Vulnerabilities flag</text>
 
-  <rect x="197" y="1009" width="143" height="56" rx="4" fill="#1e0a3c" stroke="#6d28d9" stroke-width="1"/>
-  <text x="268" y="1027" text-anchor="middle" class="sm">EPSS</text>
-  <text x="268" y="1042" text-anchor="middle" class="sd">exploit probability</text>
-  <text x="268" y="1056" text-anchor="middle" class="sd">score per CVE</text>
+  <rect x="242" y="1034" width="198" height="66" rx="4" fill="#1e0a3c" stroke="#6d28d9" stroke-width="1"/>
+  <text x="341" y="1053" text-anchor="middle" class="sm">EPSS</text>
+  <text x="341" y="1068" text-anchor="middle" class="sd">exploit probability</text>
+  <text x="341" y="1082" text-anchor="middle" class="sd">score per CVE</text>
 
-  <rect x="350" y="1009" width="143" height="56" rx="4" fill="#1e0a3c" stroke="#6d28d9" stroke-width="1"/>
-  <text x="421" y="1027" text-anchor="middle" class="sm">NVD CVE Lookup</text>
-  <text x="421" y="1042" text-anchor="middle" class="sd">banner → CPE → CVE</text>
-  <text x="421" y="1056" text-anchor="middle" class="sd">CVSS ≥ 7 filter</text>
+  <rect x="450" y="1034" width="198" height="66" rx="4" fill="#1e0a3c" stroke="#6d28d9" stroke-width="1"/>
+  <text x="549" y="1053" text-anchor="middle" class="sm">NVD CVE Lookup</text>
+  <text x="549" y="1068" text-anchor="middle" class="sd">banner → CPE → CVE</text>
+  <text x="549" y="1082" text-anchor="middle" class="sd">CVSS ≥ 7.0 filter</text>
 
-  <rect x="503" y="1009" width="175" height="56" rx="4" fill="#1e0a3c" stroke="#6d28d9" stroke-width="1"/>
-  <text x="590" y="1027" text-anchor="middle" class="sm">Passive Intel</text>
-  <text x="590" y="1042" text-anchor="middle" class="sd">Shodan + Censys</text>
-  <text x="590" y="1056" text-anchor="middle" class="sd">host enrichment</text>
+  <rect x="658" y="1034" width="198" height="66" rx="4" fill="#1e0a3c" stroke="#6d28d9" stroke-width="1"/>
+  <text x="757" y="1053" text-anchor="middle" class="sm">Passive Intel</text>
+  <text x="757" y="1068" text-anchor="middle" class="sd">Shodan + Censys</text>
+  <text x="757" y="1082" text-anchor="middle" class="sd">host enrichment</text>
 
   <!-- Stage 5 → Output -->
-  <line x1="360" y1="1083" x2="360" y2="1110" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="442" y1="1116" x2="442" y2="1142" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
 
-  <!-- ══════════════════════════════════════════════════════ -->
-  <!-- OUTPUT                                                -->
-  <!-- ══════════════════════════════════════════════════════ -->
-  <rect x="130" y="1110" width="520" height="58" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
-  <text x="390" y="1130" text-anchor="middle" class="output">reports/&lt;target&gt;_&lt;YYYYMMDD_HHMMSS&gt;/</text>
-  <text x="390" y="1148" text-anchor="middle" class="sd">scan_results_*.csv  ·  scan_results_*.json  ·  scan_results_*.sarif  ·  portscan_*.csv</text>
+  <!-- OUTPUT -->
+  <rect x="160" y="1142" width="600" height="46" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="460" y="1161" text-anchor="middle" class="out">reports/&lt;target&gt;_&lt;YYYYMMDD_HHMMSS&gt;/</text>
+  <text x="460" y="1178" text-anchor="middle" class="sd">scan_results_*.csv  ·  scan_results_*.json  ·  scan_results_*.sarif  ·  portscan_*.csv</text>
 
 </svg>

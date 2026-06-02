@@ -240,11 +240,11 @@ This section tracks the full CLI redesign approved in the June 2026 brainstorm.
 - [x] Print info message showing domain count vs IP count when mixed file detected
 - [x] Pass domain lines to recon pipeline (subdomain enum) when --no-subdomain-enum is not set
 - [x] --no-subdomain-enum skips enum for domain lines but they still get port-scanned
-- [ ] Full integration test: mixed file with 1 domain + 1 IP completes both pipelines
+- [x] Full integration test: mixed file with 1 domain + 1 IP completes both pipelines — `tests/test_mixed_targets.py` (11 tests)
 
 ## 9. Documentation ✅ DONE
 
 - [x] README.md rewritten with ASCII architecture diagram, CLI reference, quick start, module table
 - [x] docs/adding-a-module.md — step-by-step guide for adding a new scanner module (all 7 touch points)
 - [ ] Add screenshot/GIF of a real scan run to README
-- [ ] docs/adding-a-module.md — add example for adding a check to an existing module (not just new module)
+- [x] docs/adding-a-module.md — "Adding a Check to an Existing Module" section added with full example

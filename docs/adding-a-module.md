@@ -508,3 +508,105 @@ If the check is already fully implemented, mark the section header with `✅ DON
 [ ] python -m pytest tests/ -q passes (all 94+ tests green)
 [ ] TODO.md updated
 ```
+
+---
+
+## Adding a Check to an Existing Module
+
+Use this when the new finding belongs logically inside an existing module (e.g. a new CVE for Grafana, a new sensitive path for `web_checks`, a new DNS record type in `dns_recon`).
+
+### When to extend vs. create new
+
+| Situation | Action |
+|-----------|--------|
+| New CVE / technique for a service already in a module | Add a new `check_*()` function inside that module |
+| New port or protocol for a wholly different service | Create a new module (see above) |
+| New class of HTTP check that applies to all alive URLs | Add to `web_checks.py` |
+| New DNS record or validation rule | Add to `dns_recon.py` |
+
+### Step-by-step: adding a CVE check to an existing module
+
+**Example: adding CVE-2024-99999 to `modules/grafana.py`**
+
+#### 1. Write the check function
+
+Add a new `async def check_*` function inside the module file. Follow the existing pattern — use the shared `_finding()` helper, validate before firing, and return a list:
+
+```python
+async def check_cve_2024_99999(client, host, port):
+    """CVE-2024-99999 — Grafana unauthenticated config read."""
+    url = f"https://{host}:{port}/api/config"
+    try:
+        resp = await client.get(url, timeout=5)
+        if resp.status_code == 200 and "database" in resp.text.lower():
+            return [_finding(
+                host, port,
+                status="VULNERABLE",
+                severity="HIGH",
+                vulnerability="CVE-2024-99999 — Grafana Unauthenticated Config Read",
+                url=url,
+                details="GET /api/config returned 200 with database config without authentication.",
+            )]
+    except Exception:
+        pass
+    return []
+```
+
+Key rules:
+- Always `try/except` — network errors must not crash the scan
+- Validate the response body, not just the status code (no false positives)
+- Return `[]` when the check does not fire
+
+#### 2. Wire it into `run_scans()`
+
+Find the existing `run_scans()` in the module and add your check to the gathered tasks:
+
+```python
+async def run_scans(target_obj, port, **_):
+    host = target_obj.get('display_target') or target_obj.get('scan_address')
+    findings = []
+    async with httpx.AsyncClient(verify=False) as client:
+        results = await asyncio.gather(
+            check_existing_cve(client, host, port),
+            check_another_cve(client, host, port),
+            check_cve_2024_99999(client, host, port),  # ← add here
+            return_exceptions=True,
+        )
+    for r in results:
+        if isinstance(r, list):
+            findings.extend(r)
+    return findings
+```
+
+#### 3. Add a test
+
+Open (or create) `tests/test_grafana.py` and add a test for the new check. Mock the HTTP response and assert the finding fires when expected and does not fire on non-matching responses:
+
+```python
+class TestCVE202499999(unittest.TestCase):
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_fires_on_200_with_database_keyword(self):
+        mock_resp = MagicMock(status_code=200, text='{"database": "sqlite3"}')
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)):
+            async with httpx.AsyncClient() as client:
+                findings = self._run(grafana.check_cve_2024_99999(client, "10.0.0.1", 3000))
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["status"], "VULNERABLE")
+
+    def test_does_not_fire_on_401(self):
+        mock_resp = MagicMock(status_code=401, text="Unauthorized")
+        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)):
+            async with httpx.AsyncClient() as client:
+                findings = self._run(grafana.check_cve_2024_99999(client, "10.0.0.1", 3000))
+        self.assertEqual(findings, [])
+```
+
+#### 4. Run the suite
+
+```bash
+python -m pytest tests/ -q
+```
+
+All existing tests must stay green. Only add the new check — do not refactor surrounding code unless it is directly required.
