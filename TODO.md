@@ -73,11 +73,11 @@ These are the same class of bug as the cPanel false positive fix. Every item her
 
 ## 3. Missing Recon / Discovery
 
-### Cloud Asset Discovery
+### Cloud Asset Discovery ✅ DONE
 
-- **AWS**: S3 bucket enumeration (permutation-based), CloudFront origin IP leak, EC2 metadata endpoint (169.254.169.254) SSRF indicator
-- **Azure**: Blob storage enumeration, Azure AD tenant discovery
-- **GCP**: GCS bucket enumeration, GCP metadata endpoint SSRF
+- ✅ **AWS**: S3 permutation-based enumeration, EC2 metadata SSRF indicator, CloudFront detection (DNS + response headers, origin server leak)
+- ✅ **Azure**: Blob storage enumeration, Azure AD tenant discovery
+- ✅ **GCP**: GCS bucket enumeration, GCP metadata SSRF indicator
 
 ### Google Dorking (domain/subdomain targets only — not applicable to raw IPs)
 

@@ -448,14 +448,98 @@ async def _enumerate_gcs(
     return deduped
 
 
+# ─── CloudFront detection ──────────────────────────────────────────────────────
+
+_CLOUDFRONT_IP_RANGES = [
+    '13.32.0.0/15', '13.35.0.0/16', '52.84.0.0/14',
+    '54.182.0.0/16', '54.192.0.0/14', '54.230.0.0/16',
+    '64.252.64.0/18', '99.84.0.0/16', '204.246.164.0/22',
+    '205.251.192.0/19', '216.137.32.0/19',
+]
+
+def _is_cloudfront_ip(ip_str: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return any(ip in ipaddress.ip_network(r) for r in _CLOUDFRONT_IP_RANGES)
+    except ValueError:
+        return False
+
+
+async def _detect_cloudfront(client: httpx.AsyncClient, domain: str) -> list[dict]:
+    """
+    Detect if *domain* is behind CloudFront via DNS and response headers.
+
+    Returns INFO finding if CloudFront is confirmed.
+    Returns HIGH if the origin server header leaks backend identity.
+    """
+    findings: list[dict] = []
+
+    # DNS: check if domain resolves to a CloudFront IP
+    is_cf_dns = False
+    cf_cname = ''
+    try:
+        loop = asyncio.get_event_loop()
+        info = await loop.run_in_executor(None, socket.getaddrinfo, domain, None)
+        for item in info:
+            addr = item[4][0]
+            if _is_cloudfront_ip(addr):
+                is_cf_dns = True
+                break
+        # Also check CNAME via getfqdn
+        fqdn = await loop.run_in_executor(None, socket.getfqdn, domain)
+        if 'cloudfront.net' in fqdn.lower():
+            is_cf_dns = True
+            cf_cname = fqdn
+    except Exception:
+        pass
+
+    # HTTP: check response headers
+    url = f"https://{domain}"
+    is_cf_http = False
+    origin_server = ''
+    try:
+        resp = await client.get(url)
+        h = {k.lower(): v for k, v in resp.headers.items()}
+        if (
+            'x-amz-cf-id' in h
+            or 'cloudfront' in h.get('via', '').lower()
+            or 'cloudfront' in h.get('x-cache', '').lower()
+        ):
+            is_cf_http = True
+        origin_server = h.get('server', '')
+    except Exception:
+        pass
+
+    if not (is_cf_dns or is_cf_http):
+        return findings
+
+    severity = 'INFO'
+    status = 'INFO'
+    details_parts = [f"CloudFront distribution confirmed for {domain}."]
+    if cf_cname:
+        details_parts.append(f"CNAME: {cf_cname}")
+    if origin_server and origin_server.lower() not in ('cloudfront', 'amazons3', ''):
+        details_parts.append(f"Origin Server header leaked: {origin_server}")
+        severity = 'HIGH'
+        status = 'VULNERABLE'
+
+    findings.append(_finding(
+        status, severity,
+        f'CloudFront Distribution Detected — {domain}',
+        ' '.join(details_parts),
+        url=url,
+    ))
+    return findings
+
+
 # ─── Public entry point ────────────────────────────────────────────────────────
 
 async def enumerate_cloud_assets(domain: str, concurrency: int = 50) -> list[dict]:
     """
     Enumerate publicly accessible cloud storage assets for *domain*.
 
-    Probes AWS S3, Azure Blob Storage, and GCP GCS using permutation-based
-    bucket names derived from the domain. No API keys required.
+    Probes AWS S3, Azure Blob Storage, GCP GCS, and CloudFront.
+    No API keys required — pure public HTTP/DNS probes.
 
     Returns a list of finding dicts in VaktScan canonical format.
     """
@@ -468,21 +552,21 @@ async def enumerate_cloud_assets(domain: str, concurrency: int = 50) -> list[dic
         timeout=_TIMEOUT,
         follow_redirects=True,
         max_redirects=3,
-        verify=False,          # many cloud endpoints have valid certs, but avoid failures on edge cases
+        verify=False,
         transport=transport,
         headers={'User-Agent': 'VaktScan/1.0 cloud-enum'},
     ) as client:
-        s3_task    = _enumerate_s3(client, sem, domain)
-        azure_task = _enumerate_azure(client, sem, domain)
-        gcs_task   = _enumerate_gcs(client, sem, domain)
-
-        s3_findings, azure_findings, gcs_findings = await asyncio.gather(
-            s3_task, azure_task, gcs_task, return_exceptions=True
+        s3_findings, azure_findings, gcs_findings, cf_findings = await asyncio.gather(
+            _enumerate_s3(client, sem, domain),
+            _enumerate_azure(client, sem, domain),
+            _enumerate_gcs(client, sem, domain),
+            _detect_cloudfront(client, domain),
+            return_exceptions=True,
         )
 
     all_findings: list[dict] = []
-    for bucket in (s3_findings, azure_findings, gcs_findings):
-        if isinstance(bucket, list):
-            all_findings.extend(bucket)
+    for result in (s3_findings, azure_findings, gcs_findings, cf_findings):
+        if isinstance(result, list):
+            all_findings.extend(result)
 
     return all_findings
