@@ -538,10 +538,11 @@ class JSRecon:
 # ---------------------------------------------------------------------------
 
 class JSPathsScanner:
-    def __init__(self, target_urls: list, threads: int = 20, timeout: int = 10):
+    def __init__(self, target_urls: list, threads: int = 20, timeout: int = 10, output_dir: str = None):
         self.target_urls = target_urls
         self.threads     = threads
         self.timeout     = timeout
+        self.output_dir  = output_dir
 
     async def run(self) -> dict:
         """

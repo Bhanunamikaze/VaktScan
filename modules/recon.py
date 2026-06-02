@@ -364,16 +364,35 @@ class ReconScanner:
             disabled.update(sudo_needed)
             print(f"{Colors.YELLOW}[!] Skipping privileged tools: {', '.join(sorted(disabled))}{Colors.RESET}")
 
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+
+        async def wrap_task(task_coro, name):
+            task_id = name.lower()
+            if dashboard.active:
+                dashboard.add_task(task_id, f"{name} Enum")
+            try:
+                before_count = len(self.subdomains)
+                await task_coro
+                after_count = len(self.subdomains)
+                diff = after_count - before_count
+                if dashboard.active:
+                    dashboard.complete_task(task_id, f"Found {diff} subdomains")
+            except Exception as e:
+                if dashboard.active:
+                    dashboard.complete_task(task_id, f"Failed: {str(e)}")
+                raise e
+
         tasks = []
-        #if "amass" not in missing: tasks.append(self.run_amass())
-        if "subfinder" not in missing: tasks.append(self.run_subfinder())
-        if "assetfinder" not in missing: tasks.append(self.run_assetfinder())
-        if "findomain" not in missing: tasks.append(self.run_findomain())
-        if "sublist3r" not in missing: tasks.append(self.run_sublist3r())
-        if "knockpy" not in missing: tasks.append(self.run_knockpy())
-        if "bbot" not in missing and "bbot" not in disabled: tasks.append(self.run_bbot())
-        if "censys" not in missing: tasks.append(self.run_censys())
-        if "crtsh" not in missing: tasks.append(self.run_crtsh())
+        #if "amass" not in missing: tasks.append(wrap_task(self.run_amass(), "Amass"))
+        if "subfinder" not in missing: tasks.append(wrap_task(self.run_subfinder(), "Subfinder"))
+        if "assetfinder" not in missing: tasks.append(wrap_task(self.run_assetfinder(), "Assetfinder"))
+        if "findomain" not in missing: tasks.append(wrap_task(self.run_findomain(), "Findomain"))
+        if "sublist3r" not in missing: tasks.append(wrap_task(self.run_sublist3r(), "Sublist3r"))
+        if "knockpy" not in missing: tasks.append(wrap_task(self.run_knockpy(), "Knockpy"))
+        if "bbot" not in missing and "bbot" not in disabled: tasks.append(wrap_task(self.run_bbot(), "BBOT"))
+        if "censys" not in missing: tasks.append(wrap_task(self.run_censys(), "Censys"))
+        if "crtsh" not in missing: tasks.append(wrap_task(self.run_crtsh(), "Crtsh"))
         
         # Run passive tools concurrently
         if tasks:

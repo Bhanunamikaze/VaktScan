@@ -196,6 +196,9 @@ class HTTPXRunner:
         if not expanded_targets:
             return []
 
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+        
         print(
             f"\033[96m[*] Running Python httpx fallback on {len(expanded_targets)} URL probes "
             f"(Concurrency: {concurrency})...\033[0m"
@@ -209,6 +212,9 @@ class HTTPXRunner:
         completed = 0
         progress_step = max(1, total // 10)
 
+        if dashboard.active:
+            dashboard.update_task("httpx", total=total)
+
         async with python_httpx.AsyncClient(
             timeout=timeout,
             verify=False,
@@ -221,12 +227,18 @@ class HTTPXRunner:
                         response = await client.get(target)
                     except python_httpx.HTTPError:
                         completed += 1
-                        _print_httpx_progress(completed, total, len(results), progress_step)
+                        if dashboard.active:
+                            dashboard.update_task("httpx", completed=completed, status=f"Probed {completed}/{total} (alive: {len(results)})")
+                        else:
+                            _print_httpx_progress(completed, total, len(results), progress_step)
                         return
 
                     final_url = str(response.url)
                     completed += 1
-                    _print_httpx_progress(completed, total, len(results), progress_step)
+                    if dashboard.active:
+                        dashboard.update_task("httpx", completed=completed, status=f"Probed {completed}/{total} (alive: {len(results)})")
+                    else:
+                        _print_httpx_progress(completed, total, len(results), progress_step)
                     if final_url in seen_urls:
                         return
                     seen_urls.add(final_url)
@@ -246,7 +258,9 @@ class HTTPXRunner:
                     })
 
             await asyncio.gather(*(probe(target) for target in expanded_targets))
-        print()  # newline after progress line
+        
+        if not dashboard.active:
+            print()  # newline after progress line
 
         print(f"\033[92m[+] Python httpx fallback finished. Found {len(results)} alive services.\033[0m")
         return results
@@ -258,11 +272,20 @@ class HTTPXRunner:
         if not targets:
             return []
 
-        if self.binary:
-            return await self._run_httpx_binary(targets, concurrency)
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+        if dashboard.active:
+            dashboard.add_task("httpx", "HTTPX Probing", total=len(targets))
 
-        print("\033[93m[!] ProjectDiscovery httpx binary unavailable. Using Python httpx fallback.\033[0m")
-        return await self._run_httpx_library(targets, concurrency)
+        try:
+            if self.binary:
+                return await self._run_httpx_binary(targets, concurrency)
+
+            print("\033[93m[!] ProjectDiscovery httpx binary unavailable. Using Python httpx fallback.\033[0m")
+            return await self._run_httpx_library(targets, concurrency)
+        finally:
+            if dashboard.active:
+                dashboard.complete_task("httpx")
 
     def save_csv(self, httpx_data, domain_label):
         """

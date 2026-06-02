@@ -345,25 +345,42 @@ async def run_recon_followups(
         nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
         js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=output_dir)
 
-        (
-            domain_scan_findings,
-            _dirsearch,
-            nuclei_results,
-            wc_results,
-            js_result,
-        ) = await asyncio.gather(
-            scanner.run(
-                domains=unique_targets,
-                httpx_data=httpx_data,
-                alive_urls=alive_urls,
-                concurrency=concurrency,
-            ),
-            dir_enumerator.run_dirsearch(alive_urls),
-            nuclei_inst.run_nuclei(alive_urls),
-            web_checks.run_checks(alive_urls, concurrency),
-            js_scanner.run(),
-            return_exceptions=True,
-        )
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+        if dashboard.active:
+            dashboard.add_task("domain_scan", "Domain Scan")
+            dashboard.add_task("dirsearch", "Dirsearch Scan")
+            dashboard.add_task("nuclei", "Nuclei Scan")
+            dashboard.add_task("web_checks", "Web Checks")
+            dashboard.add_task("js_paths", "JS Paths Scan")
+
+        try:
+            (
+                domain_scan_findings,
+                _dirsearch,
+                nuclei_results,
+                wc_results,
+                js_result,
+            ) = await asyncio.gather(
+                scanner.run(
+                    domains=unique_targets,
+                    httpx_data=httpx_data,
+                    alive_urls=alive_urls,
+                    concurrency=concurrency,
+                ),
+                dir_enumerator.run_dirsearch(alive_urls),
+                nuclei_inst.run_nuclei(alive_urls),
+                web_checks.run_checks(alive_urls, concurrency),
+                js_scanner.run(),
+                return_exceptions=True,
+            )
+        finally:
+            if dashboard.active:
+                dashboard.complete_task("domain_scan")
+                dashboard.complete_task("dirsearch")
+                dashboard.complete_task("nuclei")
+                dashboard.complete_task("web_checks")
+                dashboard.complete_task("js_paths")
 
         if isinstance(domain_scan_findings, Exception):
             print(f"{Colors.YELLOW}[!] Domain scanner error: {domain_scan_findings}{Colors.RESET}")
@@ -409,11 +426,23 @@ async def run_recon_followups(
         print(f"{Colors.CYAN}[*] Harvesting archived URLs for {len(domain_hosts)} host(s) (gau + waybackurls in parallel)...{Colors.RESET}")
         gau_inst = gau_runner.GAURunner(output_dir=output_dir)
         wayback_inst = waybackurls_runner.WaybackURLsRunner(output_dir=output_dir)
-        await asyncio.gather(
-            gau_inst.run(domain_hosts),
-            wayback_inst.run(domain_hosts),
-            return_exceptions=True,
-        )
+
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+        if dashboard.active:
+            dashboard.add_task("gau", "GAU Archival")
+            dashboard.add_task("wayback", "Wayback Archival")
+
+        try:
+            await asyncio.gather(
+                gau_inst.run(domain_hosts),
+                wayback_inst.run(domain_hosts),
+                return_exceptions=True,
+            )
+        finally:
+            if dashboard.active:
+                dashboard.complete_task("gau")
+                dashboard.complete_task("wayback")
     else:
         print(f"{Colors.YELLOW}[!] No hostname targets available for gau/waybackurls.{Colors.RESET}")
 
@@ -455,12 +484,26 @@ async def _run_parallel_passive(domain: str, concurrency: int = 20) -> tuple:
 
     Returns (dns_findings, cloud_findings, ct_findings).
     """
-    dns_f, cloud_f, ct_f = await asyncio.gather(
-        dns_recon.run_dns_recon([domain], concurrency=concurrency),
-        cloud_enum.enumerate_cloud_assets(domain),
-        ct_monitor.check_new_certificates(domain),
-        return_exceptions=True,
-    )
+    from modules.dashboard import LiveDashboard
+    dashboard = LiveDashboard()
+    if dashboard.active:
+        dashboard.add_task("dns_recon", "DNS Recon")
+        dashboard.add_task("cloud_enum", "Cloud Enum")
+        dashboard.add_task("ct_monitor", "CT Monitor")
+
+    try:
+        dns_f, cloud_f, ct_f = await asyncio.gather(
+            dns_recon.run_dns_recon([domain], concurrency=concurrency),
+            cloud_enum.enumerate_cloud_assets(domain),
+            ct_monitor.check_new_certificates(domain),
+            return_exceptions=True,
+        )
+    finally:
+        if dashboard.active:
+            dashboard.complete_task("dns_recon")
+            dashboard.complete_task("cloud_enum")
+            dashboard.complete_task("ct_monitor")
+
     if isinstance(dns_f, Exception):
         print(f"[!] DNS recon error: {dns_f}")
         dns_f = []
@@ -1638,6 +1681,12 @@ async def cmd_scan(args):
     global _partial_findings
     import ipaddress
     import tempfile
+
+    from modules.dashboard import LiveDashboard
+    dashboard = LiveDashboard()
+    if not getattr(args, 'no_dashboard', False):
+        dashboard.start()
+
     target_type = target_classifier(args.target)
     print(f"{Colors.CYAN}[*] Target type: {target_type} — {args.target}{Colors.RESET}")
 
@@ -1717,6 +1766,8 @@ async def cmd_scan(args):
             print(f"\n{Colors.YELLOW}[!] Partial results ({len(_partial_findings)} findings) saved to: {partial_path}{Colors.RESET}")
         raise  # re-raise so the outer try/except in __main__ handles sys.exit
     finally:
+        if not getattr(args, 'no_dashboard', False):
+            dashboard.stop()
         if _tmp_file and os.path.exists(_tmp_file):
             os.unlink(_tmp_file)
 
@@ -1724,22 +1775,33 @@ async def cmd_scan(args):
 async def cmd_enum(args):
     """Handler for `vaktscan enum` — subdomain enumeration only."""
     os.makedirs(args.output_dir, exist_ok=True)
-    scanner = recon.ReconScanner(args.domain, output_dir=args.output_dir, wordlist=args.wordlist)
-    subdomains = await scanner.run_all()
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    out_file = os.path.join(args.output_dir, f"{args.domain}_subdomains_{ts}.txt")
-    with open(out_file, 'w') as f:
-        for sub in sorted(subdomains):
-            f.write(sub + '\n')
-    print(f"{Colors.GREEN}[+] {len(subdomains)} subdomains found. Written to: {out_file}{Colors.RESET}")
-    if args.probe:
-        await cmd_probe(argparse.Namespace(
-            target=out_file,
-            ports=None,
-            concurrency=args.concurrency,
-            timeout=10.0,
-            output_dir=args.output_dir,
-        ))
+
+    from modules.dashboard import LiveDashboard
+    dashboard = LiveDashboard()
+    if not getattr(args, 'no_dashboard', False):
+        dashboard.start()
+
+    try:
+        scanner = recon.ReconScanner(args.domain, output_dir=args.output_dir, wordlist=args.wordlist)
+        results_file, subdomains = await scanner.run_all()
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_file = os.path.join(args.output_dir, f"{args.domain}_subdomains_{ts}.txt")
+        with open(out_file, 'w') as f:
+            for sub in sorted(subdomains):
+                f.write(sub + '\n')
+        print(f"{Colors.GREEN}[+] {len(subdomains)} subdomains found. Written to: {out_file}{Colors.RESET}")
+        if args.probe:
+            await cmd_probe(argparse.Namespace(
+                target=out_file,
+                ports=None,
+                concurrency=args.concurrency,
+                timeout=10.0,
+                output_dir=args.output_dir,
+                no_dashboard=getattr(args, 'no_dashboard', False),
+            ))
+    finally:
+        if not getattr(args, 'no_dashboard', False):
+            dashboard.stop()
 
 
 async def cmd_probe(args):
@@ -1757,15 +1819,26 @@ async def cmd_probe(args):
     safe_name = re.sub(r'[^\w.-]', '_', recon_domain)
     output_dir = os.path.join(args.output_dir, f"probe_{safe_name}_{ts}")
     os.makedirs(output_dir, exist_ok=True)
+
+    from modules.dashboard import LiveDashboard
+    dashboard = LiveDashboard()
+    if not getattr(args, 'no_dashboard', False):
+        dashboard.start()
+
     print(f"{Colors.CYAN}[*] Probe: {len(targets)} target(s) → {output_dir}{Colors.RESET}")
-    findings = await run_recon_followups(
-        subdomains=targets,
-        recon_domain=recon_domain,
-        output_dir=output_dir,
-        concurrency=args.concurrency,
-        nmap_enabled=False,
-        connect_timeout=args.timeout,
-    )
+    try:
+        findings = await run_recon_followups(
+            subdomains=targets,
+            recon_domain=recon_domain,
+            output_dir=output_dir,
+            concurrency=args.concurrency,
+            nmap_enabled=False,
+            connect_timeout=args.timeout,
+        )
+    finally:
+        if not getattr(args, 'no_dashboard', False):
+            dashboard.stop()
+
     if findings:
         out_csv = os.path.join(output_dir, f"probe_findings_{ts}.csv")
         save_results_to_csv(findings, out_csv)
@@ -1899,6 +1972,7 @@ if __name__ == "__main__":
     sp_scan.add_argument("--recon-concurrency", type=int, default=2)
     sp_scan.add_argument("--no-subdomain-enum", action="store_true", dest="no_subdomain_enum",
         help="Skip subdomain enumeration for domain targets")
+    sp_scan.add_argument("--no-dashboard", action="store_true", help="Disable the multi-row live progress dashboard")
     sp_scan.add_argument("--proxy", metavar="URL", default=None)
     sp_scan.add_argument("--update-templates", action="store_true", dest="update_templates")
     sp_scan.add_argument("--no-dork", action="store_true", help="Skip Google Dorking passive recon")
@@ -1912,6 +1986,7 @@ if __name__ == "__main__":
     sp_enum.add_argument("--wordlist")
     sp_enum.add_argument("--output-dir", default="reports/")
     sp_enum.add_argument("--probe", action="store_true", help="Chain into probe after enum")
+    sp_enum.add_argument("--no-dashboard", action="store_true", help="Disable the multi-row live progress dashboard")
 
     # ---- probe subcommand ----
     sp_probe = subparsers.add_parser("probe", help="Port scan + httpx probe")
@@ -1919,6 +1994,7 @@ if __name__ == "__main__":
     sp_probe.add_argument("--ports", type=str)
     sp_probe.add_argument("-c", "--concurrency", type=int, default=50)
     sp_probe.add_argument("--timeout", type=float, default=10.0)
+    sp_probe.add_argument("--no-dashboard", action="store_true", help="Disable the multi-row live progress dashboard")
     sp_probe.add_argument("--output-dir", default="reports/")
     sp_probe.add_argument("--proxy", metavar="URL", default=None, help="Route traffic through proxy (e.g. http://127.0.0.1:8080)")
 

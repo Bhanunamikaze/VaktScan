@@ -90,6 +90,12 @@ class NucleiRunner:
         if not targets:
             return []
 
+        import re
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+        if dashboard.active:
+            dashboard.add_task("nuclei", "Nuclei Scan")
+
         # Create input file for nuclei
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         input_file = os.path.join(self.output_dir, f"nuclei_targets_{timestamp}.txt")
@@ -114,7 +120,7 @@ class NucleiRunner:
             "-timeout", "15",
             "-severity", "critical,high,medium",
             "-nc",
-            "-stats", "-stats-interval", "30",
+            "-stats", "-stats-interval", "5",
         ]
         if self.output_flag:
             cmd.append(self.output_flag)
@@ -135,7 +141,29 @@ class NucleiRunner:
                 async for raw in process.stderr:
                     line = raw.decode().strip()
                     if line:
-                        print(f"\033[90m[nuclei] {line}\033[0m", flush=True)
+                        if dashboard.active:
+                            clean_line = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', line)
+                            # Try parsing as JSON first
+                            try:
+                                stats = json.loads(clean_line)
+                                percent = stats.get("percent")
+                                progress_val = float(percent) if percent is not None else None
+                                reqs = stats.get("requests", 0)
+                                total_reqs = stats.get("total", 0)
+                                rps = stats.get("rps", 0)
+                                matched = stats.get("matched", 0)
+                                duration = stats.get("duration", "")
+                                clean_status = f"Progress: {percent}% | Reqs: {reqs}/{total_reqs} | RPS: {rps} | Matches: {matched} | Duration: {duration}"
+                                dashboard.update_task("nuclei", status=clean_status, progress=progress_val)
+                            except (json.JSONDecodeError, ValueError, TypeError):
+                                clean_line = clean_line.replace('[INF]', '').replace('[stats]', '').strip()
+                                pct_match = re.search(r'(\d+)%', clean_line)
+                                progress_val = None
+                                if pct_match:
+                                    progress_val = float(pct_match.group(1))
+                                dashboard.update_task("nuclei", status=clean_line, progress=progress_val)
+                        else:
+                            print(f"\033[90m[nuclei] {line}\033[0m", flush=True)
 
             stderr_task = asyncio.create_task(_stream_stderr())
             stdout = await process.stdout.read()
@@ -219,6 +247,9 @@ class NucleiRunner:
         except Exception as e:
             print(f"\033[91m[!] Error running nuclei: {e}\033[0m")
             return []
+        finally:
+            if dashboard.active:
+                dashboard.complete_task("nuclei")
 
     def _map_severity(self, severity):
         """Maps nuclei severity to VaktScan status codes."""

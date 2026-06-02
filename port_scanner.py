@@ -182,12 +182,19 @@ async def check_port_with_progress(
             # Update progress periodically
             if state_manager:
                 state_manager.update_port_scan_progress(completed_tasks[0])
+            from modules.dashboard import LiveDashboard
+            dashboard = LiveDashboard()
+            if dashboard.active:
+                dashboard.update_task("port_scan", completed=completed_tasks[0])
         return result
 
 async def progress_reporter(total_tasks, completed_tasks, start_time):
     """
     Reports scanning progress in real-time.
     """
+    from modules.dashboard import LiveDashboard
+    dashboard = LiveDashboard()
+    
     while completed_tasks[0] < total_tasks:
         await asyncio.sleep(0.1)
         current_time = time.time()
@@ -199,8 +206,16 @@ async def progress_reporter(total_tasks, completed_tasks, start_time):
             rate = completed / elapsed if elapsed > 0 else 0
             eta = (total_tasks - completed) / rate if rate > 0 else 0
             
-            sys.stdout.write(f"\r[*] Progress: {completed:,}/{total_tasks:,} ({progress:.1f}%) | Rate: {rate:.1f} scans/sec | ETA: {eta:.0f}s")
-            sys.stdout.flush()
+            if dashboard.active:
+                dashboard.update_task(
+                    "port_scan", 
+                    completed=completed, 
+                    total=total_tasks,
+                    status=f"{completed:,}/{total_tasks:,} | Rate: {rate:.1f} scans/s | ETA: {eta:.0f}s"
+                )
+            else:
+                sys.stdout.write(f"\r[*] Progress: {completed:,}/{total_tasks:,} ({progress:.1f}%) | Rate: {rate:.1f} scans/sec | ETA: {eta:.0f}s")
+                sys.stdout.flush()
 
 async def scan_ports(
     targets,
@@ -229,6 +244,11 @@ async def scan_ports(
     total_tasks = len(targets) * len(ports)
     completed_tasks = [0]
     start_time = time.time()
+    
+    from modules.dashboard import LiveDashboard
+    dashboard = LiveDashboard()
+    if dashboard.active:
+        dashboard.add_task("port_scan", "Port Scan", total=total_tasks)
     
     print(f"{Colors.CYAN}[*] Scanning {len(targets)} targets across {len(ports)} ports ({total_tasks:,} total combinations){Colors.RESET}")
     if effective_concurrency != concurrency:
@@ -278,7 +298,9 @@ async def scan_ports(
     finally:
         if progress_task and not progress_task.done():
             progress_task.cancel()
-
+        if dashboard.active:
+            dashboard.complete_task("port_scan")
+    
     elapsed = time.time() - start_time
     rate = total_tasks / elapsed if elapsed > 0 else 0
     print(f"\r{Colors.GREEN}[+] Port scan completed: {total_tasks:,} combinations in {elapsed:.1f}s ({rate:.1f} scans/sec){Colors.RESET}")

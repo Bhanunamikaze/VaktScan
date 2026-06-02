@@ -73,15 +73,29 @@ class NmapRunner:
             print("\033[93m[*] No targets with open ports to scan with Nmap.\033[0m")
             return
 
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+        if dashboard.active:
+            dashboard.add_task("nmap", "Nmap Scan", total=len(targets_data))
+
         actual_concurrency = max(1, concurrency)
         semaphore = asyncio.Semaphore(actual_concurrency)
+        completed = 0
 
         async def sem_task(t_data):
+            nonlocal completed
             async with semaphore:
                 await self.run_nmap_on_target(t_data[0], t_data[1], t_data[2])
+                completed += 1
+                if dashboard.active:
+                    dashboard.update_task("nmap", completed=completed, status=f"Scanned {completed}/{len(targets_data)} hosts")
 
-        tasks = [sem_task(t) for t in targets_data]
-        await asyncio.gather(*tasks)
+        try:
+            tasks = [sem_task(t) for t in targets_data]
+            await asyncio.gather(*tasks)
+        finally:
+            if dashboard.active:
+                dashboard.complete_task("nmap")
 
     async def run_cve_scan_on_target(self, ip, ports, hostname=None):
         if not self.binary or not ports:
@@ -190,7 +204,7 @@ class NmapRunner:
                         else:
                             is_vuln = False
                             if "vulnerable" in output.lower():
-                                is_vuln = True
+                                    is_vuln = True
 
                             if is_vuln:
                                 cves = re.findall(r'CVE-\d{4}-\d+', script_id + " " + output, re.IGNORECASE)
@@ -261,17 +275,31 @@ class NmapRunner:
             print("\033[93m[*] No targets with open ports to scan with Nmap CVE scripts.\033[0m")
             return []
 
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+        if dashboard.active:
+            dashboard.add_task("nmap_cve", "Nmap CVE Scan", total=len(targets_data))
+
         print(f"\033[96m[*] Running Nmap CVE/vuln scans on {len(targets_data)} target(s)...\033[0m")
         actual_concurrency = max(1, concurrency)
         semaphore = asyncio.Semaphore(actual_concurrency)
         all_findings = []
+        completed = 0
 
         async def sem_task(t_data):
+            nonlocal completed
             async with semaphore:
                 res = await self.run_cve_scan_on_target(t_data[0], t_data[1], t_data[2])
                 all_findings.extend(res)
+                completed += 1
+                if dashboard.active:
+                    dashboard.update_task("nmap_cve", completed=completed, status=f"Scanned {completed}/{len(targets_data)} hosts (findings: {len(all_findings)})")
 
-        tasks = [sem_task(t) for t in targets_data]
-        await asyncio.gather(*tasks)
+        try:
+            tasks = [sem_task(t) for t in targets_data]
+            await asyncio.gather(*tasks)
+        finally:
+            if dashboard.active:
+                dashboard.complete_task("nmap_cve")
         return all_findings
 

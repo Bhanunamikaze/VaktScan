@@ -45,6 +45,7 @@ def _make_args(**overrides):
         connect_timeout=3.0,
         port_retries=1,
         proxy=None,
+        no_dashboard=True,
     )
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
