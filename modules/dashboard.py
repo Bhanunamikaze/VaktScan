@@ -126,8 +126,13 @@ class LiveDashboard:
         if not self.active or not self.tasks:
             return
         
+        import shutil
+        term_width = shutil.get_terminal_size((80, 24)).columns
+        max_line_len = term_width - 1
+        
         lines = []
-        lines.append("\033[90m" + "—"*70 + "\033[0m")
+        sep_width = min(max_line_len, 80)
+        lines.append("\033[90m" + "—"*sep_width + "\033[0m")
         
         spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         spinner_char = spinners[int(time.time() * 10) % len(spinners)]
@@ -153,10 +158,31 @@ class LiveDashboard:
             else:
                 indicator = f"[{spinner_char}] Running..."
 
-            line = f" \033[96m* {name:<35}\033[0m {indicator} | {status}"
+            name_width = 30
+            if term_width < 80:
+                name_width = max(15, term_width - 50)
+
+            display_name = name
+            if len(display_name) > name_width:
+                display_name = display_name[:name_width-3] + "..."
+
+            prefix_text = f" * {display_name:<{name_width}}"
+            middle_text = f" {indicator} | "
+
+            used_width = len(prefix_text) + len(middle_text)
+            available_status_width = max_line_len - used_width
+
+            display_status = status
+            if len(display_status) > available_status_width:
+                if available_status_width > 5:
+                    display_status = display_status[:available_status_width-3] + "..."
+                else:
+                    display_status = display_status[:max(0, available_status_width)]
+
+            line = f" \033[96m* {display_name:<{name_width}}\033[0m {indicator} | {display_status}"
             lines.append(line)
             
-        lines.append("\033[90m" + "—"*70 + "\033[0m")
+        lines.append("\033[90m" + "—"*sep_width + "\033[0m")
         
         # Write dashboard content with trailing newline, keeping the cursor at the end
         dashboard_content = "\n".join(lines) + "\n"

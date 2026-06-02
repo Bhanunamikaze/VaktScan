@@ -170,6 +170,28 @@ def parse_targets_file(filepath: str) -> list:
             # Skip obviously invalid tokens (single chars, pure punctuation)
             if len(t) < 2:
                 continue
+
+            # Validate target: must be a valid IP, CIDR, or domain name
+            is_valid = False
+            try:
+                ipaddress.ip_address(t)
+                is_valid = True
+            except ValueError:
+                pass
+
+            if not is_valid:
+                try:
+                    ipaddress.ip_network(t, strict=False)
+                    is_valid = True
+                except ValueError:
+                    pass
+
+            if not is_valid and is_valid_domain(t):
+                is_valid = True
+
+            if not is_valid:
+                continue
+
             if t not in seen:
                 seen.add(t)
                 results.append(t)
