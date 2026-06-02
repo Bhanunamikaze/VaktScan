@@ -1919,6 +1919,7 @@ if __name__ == "__main__":
     sp_probe.add_argument("-c", "--concurrency", type=int, default=50)
     sp_probe.add_argument("--timeout", type=float, default=10.0)
     sp_probe.add_argument("--output-dir", default="reports/")
+    sp_probe.add_argument("--proxy", metavar="URL", default=None, help="Route traffic through proxy (e.g. http://127.0.0.1:8080)")
 
     # ---- dns subcommand ----
     sp_dns = subparsers.add_parser("dns", help="DNS recon only")
@@ -1957,6 +1958,7 @@ if __name__ == "__main__":
     sp_dork.add_argument("--max-results", type=int, default=10)
     sp_dork.add_argument("--method", choices=["api", "playwright", "html", "auto"], default="auto",
                          help="Search method: api, playwright, html, or auto (default: auto)")
+    sp_dork.add_argument("--proxy", metavar="URL", default=None, help="Route traffic through proxy (e.g. http://127.0.0.1:8080)")
 
     args = parser.parse_args()
 
@@ -1964,7 +1966,8 @@ if __name__ == "__main__":
     if hasattr(args, 'proxy') and args.proxy:
         os.environ['HTTP_PROXY'] = args.proxy
         os.environ['HTTPS_PROXY'] = args.proxy
-        print(f"[*] Proxy set: {args.proxy}")
+        os.environ['ALL_PROXY'] = args.proxy
+        print(f"[*] Proxy set: {args.proxy} (HTTP_PROXY / HTTPS_PROXY / ALL_PROXY)")
 
     if hasattr(args, 'update_templates') and args.update_templates:
         nuclei_runner.sync_nuclei_templates()

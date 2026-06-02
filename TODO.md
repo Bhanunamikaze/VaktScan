@@ -147,11 +147,11 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 
 ---
 
-## 6. Operational / Platform (partial)
+## 6. Operational / Platform ✅ DONE
 
 - ✅ **Asset inventory persistence** — `modules/inventory.py`, SQLite, delta reports wired in scan pipeline
 - ✅ **IPv6 scanning** — `port_scanner.py` strips brackets and handles IPv6 addresses via `asyncio.open_connection`
-- **Proxy support** — route scans through Burp / upstream proxy *(pending)*
+- ✅ **Proxy support** — `--proxy URL` on `scan`, `probe`, `google-dork`; sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` so httpx and all subprocess tools inherit it
 
 ---
 
