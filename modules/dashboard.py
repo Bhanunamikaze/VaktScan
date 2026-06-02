@@ -111,10 +111,8 @@ class LiveDashboard:
 
     def _clear_dashboard(self):
         if self.drawn_lines > 0:
-            clear_str = ""
-            for _ in range(self.drawn_lines):
-                clear_str += "\033[F\033[K"
-            self.original_stdout_write(clear_str)
+            # \033[u restores cursor to the saved position, \033[J clears screen below it
+            self.original_stdout_write("\033[u\033[J")
             self.drawn_lines = 0
 
     def _draw_dashboard(self):
@@ -153,7 +151,8 @@ class LiveDashboard:
             
         lines.append("\033[90m" + "—"*70 + "\033[0m")
         
-        dashboard_content = "\n".join(lines) + "\n"
+        # Save cursor position (\033[s), write dashboard content with trailing newline, then restore cursor (\033[u)
+        dashboard_content = "\033[s" + "\n".join(lines) + "\n" + "\033[u"
         self.original_stdout_write(dashboard_content)
         sys.stdout.flush()
         self.drawn_lines = len(lines)
