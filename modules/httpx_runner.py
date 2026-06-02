@@ -277,15 +277,17 @@ class HTTPXRunner:
         if dashboard.active:
             dashboard.add_task("httpx", "HTTPX Probing", total=len(targets))
 
+        res = []
         try:
             if self.binary:
-                return await self._run_httpx_binary(targets, concurrency)
-
-            print("\033[93m[!] ProjectDiscovery httpx binary unavailable. Using Python httpx fallback.\033[0m")
-            return await self._run_httpx_library(targets, concurrency)
+                res = await self._run_httpx_binary(targets, concurrency)
+            else:
+                print("\033[93m[!] ProjectDiscovery httpx binary unavailable. Using Python httpx fallback.\033[0m")
+                res = await self._run_httpx_library(targets, concurrency)
+            return res
         finally:
             if dashboard.active:
-                dashboard.complete_task("httpx")
+                dashboard.complete_task("httpx", f"Found {len(res)} alive services")
 
     def save_csv(self, httpx_data, domain_label):
         """

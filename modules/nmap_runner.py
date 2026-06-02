@@ -403,5 +403,5 @@ class NmapRunner:
             await asyncio.gather(*tasks)
         finally:
             if dashboard.active:
-                dashboard.complete_task("nmap_cve")
+                dashboard.complete_task("nmap_cve", f"Found {len(all_findings)} vulnerabilities")
         return all_findings

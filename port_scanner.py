@@ -299,7 +299,14 @@ async def scan_ports(
         if progress_task and not progress_task.done():
             progress_task.cancel()
         if dashboard.active:
-            dashboard.complete_task("port_scan")
+            open_ports_count = 0
+            for _, _, t in tasks:
+                try:
+                    if t.done() and not t.exception() and t.result():
+                        open_ports_count += 1
+                except Exception:
+                    pass
+            dashboard.complete_task("port_scan", f"Found {open_ports_count} open ports")
     
     elapsed = time.time() - start_time
     rate = total_tasks / elapsed if elapsed > 0 else 0

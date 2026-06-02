@@ -377,11 +377,32 @@ async def run_recon_followups(
             )
         finally:
             if dashboard.active:
-                dashboard.complete_task("domain_scan")
-                dashboard.complete_task("dirsearch")
-                dashboard.complete_task("nuclei")
-                dashboard.complete_task("web_checks")
-                dashboard.complete_task("js_paths")
+                loc = locals()
+                
+                # domain_scan
+                ds_val = loc.get("domain_scan_findings")
+                ds_count = len(ds_val) if isinstance(ds_val, list) else 0
+                dashboard.complete_task("domain_scan", f"Found {ds_count} vulnerabilities")
+                
+                # dirsearch
+                dir_val = loc.get("_dirsearch")
+                dir_count = len(dir_val) if isinstance(dir_val, (list, dict)) else 0
+                dashboard.complete_task("dirsearch", f"Found {dir_count} directories")
+                
+                # nuclei
+                nuc_val = loc.get("nuclei_results")
+                nuc_count = len(nuc_val) if isinstance(nuc_val, list) else 0
+                dashboard.complete_task("nuclei", f"Found {nuc_count} vulnerabilities")
+                
+                # web_checks
+                wc_val = loc.get("wc_results")
+                wc_count = len(wc_val) if isinstance(wc_val, list) else 0
+                dashboard.complete_task("web_checks", f"Found {wc_count} vulnerabilities")
+                
+                # js_paths
+                js_val = loc.get("js_result")
+                js_count = len(js_val) if isinstance(js_val, list) else 0
+                dashboard.complete_task("js_paths", f"Found {js_count} findings")
 
         if isinstance(domain_scan_findings, Exception):
             print(f"{Colors.YELLOW}[!] Domain scanner error: {domain_scan_findings}{Colors.RESET}")
@@ -501,9 +522,19 @@ async def _run_parallel_passive(domain: str, concurrency: int = 20, detailed_das
         )
     finally:
         if dashboard.active and detailed_dashboard:
-            dashboard.complete_task("dns_recon")
-            dashboard.complete_task("cloud_enum")
-            dashboard.complete_task("ct_monitor")
+            loc = locals()
+            
+            dns_val = loc.get("dns_f")
+            dns_count = len(dns_val) if isinstance(dns_val, list) else 0
+            dashboard.complete_task("dns_recon", f"Found {dns_count} findings")
+            
+            cloud_val = loc.get("cloud_f")
+            cloud_count = len(cloud_val) if isinstance(cloud_val, list) else 0
+            dashboard.complete_task("cloud_enum", f"Found {cloud_count} findings")
+            
+            ct_val = loc.get("ct_f")
+            ct_count = len(ct_val) if isinstance(ct_val, list) else 0
+            dashboard.complete_task("ct_monitor", f"Found {ct_count} findings")
 
     if isinstance(dns_f, Exception):
         print(f"[!] DNS recon error: {dns_f}")
