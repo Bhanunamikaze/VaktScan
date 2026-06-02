@@ -48,6 +48,60 @@ def _normalize_target_token(raw: str) -> str:
     return t.lower().strip()
 
 
+def is_valid_domain(domain: str) -> bool:
+    """
+    Validate if a domain name is structured correctly for public DNS/recon.
+    A valid domain must:
+    - Not be empty
+    - Contain at least one dot ('.') separating labels
+    - Not start or end with a dot or hyphen
+    - Not contain consecutive dots (e.g., '..')
+    - Only contain alphanumeric characters, dots, and hyphens (and underscores, though rare on root domains)
+    - Not be a local domain (like 'localhost' or ending in '.local')
+    - Not be a raw IP address
+    """
+    domain = (domain or "").strip().lower()
+    if not domain:
+        return False
+    
+    # Exclude localhost or local domain suffixes
+    if domain == "localhost" or domain.endswith(".local") or domain.endswith(".internal"):
+        return False
+
+    # Check for at least one dot
+    if "." not in domain:
+        return False
+
+    # Check for starting/ending with dots or hyphens
+    if domain.startswith(".") or domain.endswith(".") or domain.startswith("-") or domain.endswith("-"):
+        return False
+
+    # Check for consecutive dots
+    if ".." in domain:
+        return False
+
+    # Check for invalid characters
+    import re
+    if not re.match(r"^[a-z0-9\-_\.]+$", domain):
+        return False
+
+    # Exclude IP addresses
+    import ipaddress
+    try:
+        ipaddress.ip_address(domain)
+        return False
+    except ValueError:
+        pass
+
+    # Each label must be between 1 and 63 characters
+    labels = domain.split(".")
+    for label in labels:
+        if not label or len(label) > 63:
+            return False
+
+    return True
+
+
 def parse_targets_file(filepath: str) -> list:
     """
     Robustly parse a targets file into a deduplicated list of clean target strings.

@@ -37,6 +37,7 @@ from utils import (
     process_targets,
     process_targets_streaming,
     resolve_hostnames,
+    is_valid_domain,
 )
 from port_scanner import scan_ports, DEFAULT_CONNECT_TIMEOUT, DEFAULT_PORT_RETRIES
 from service_validator import validate_service
@@ -882,6 +883,8 @@ async def main(
             domain = domain.strip().lower()
             if not domain:
                 continue
+            if not is_valid_domain(domain):
+                continue
             if domain in seen_domains:
                 continue
             seen_domains.add(domain)
@@ -1695,6 +1698,10 @@ async def cmd_scan(args):
     target_type = target_classifier(args.target)
     print(f"{Colors.CYAN}[*] Target type: {target_type} — {args.target}{Colors.RESET}")
 
+    if target_type == 'domain' and not is_valid_domain(args.target):
+        print(f"{Colors.RED}[!] Error: '{args.target}' is not a valid domain name.{Colors.RESET}")
+        sys.exit(1)
+
     # For file targets: use robust parser then classify each entry
     _file_domains = []
     _file_ips = []
@@ -1702,7 +1709,8 @@ async def cmd_scan(args):
         _lines = parse_targets_file(args.target)
         for _line in _lines:
             if target_classifier(_line) == 'domain':
-                _file_domains.append(_line)
+                if is_valid_domain(_line):
+                    _file_domains.append(_line)
             else:
                 _file_ips.append(_line)
         if _file_domains:
@@ -1780,6 +1788,10 @@ async def cmd_scan(args):
 async def cmd_enum(args):
     """Handler for `vaktscan enum` — subdomain enumeration only."""
     os.makedirs(args.output_dir, exist_ok=True)
+
+    if not is_valid_domain(args.domain):
+        print(f"{Colors.RED}[!] Error: '{args.domain}' is not a valid domain name.{Colors.RESET}")
+        sys.exit(1)
 
     from modules.dashboard import LiveDashboard
     dashboard = LiveDashboard()
