@@ -148,32 +148,49 @@ class DirEnumerator:
         )
 
         attempt = 0
+        current_env = env.copy()
         while attempt < 2:
             process = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=None,
                 stderr=asyncio.subprocess.PIPE,
-                env=env
+                env=current_env.copy()
             )
             _, stderr = await process.communicate()
 
-            if process.returncode == 0:
+            # Treat as success if output file exists and is either not empty, OR the scan completed (exit code 0 or 1).
+            if os.path.exists(output_file) and (os.path.getsize(output_file) > 0 or process.returncode in (0, 1)):
                 if stderr:
                     err = stderr.decode().strip()
                     if err:
                         print(err)
-                print(f"{Colors.GREEN}[+] dirsearch report saved: {output_file}{Colors.RESET}")
+                if process.returncode not in (0, 1):
+                    print(f"{Colors.YELLOW}[*] dirsearch completed with warnings/non-zero exit code ({process.returncode}) for {url}. report saved: {output_file}{Colors.RESET}")
+                else:
+                    print(f"{Colors.GREEN}[+] dirsearch report saved: {output_file}{Colors.RESET}")
                 return output_file
 
             err_text = stderr.decode().strip() if stderr else ""
-            match = re.search(r"ModuleNotFoundError: No module named '([^']+)'", err_text)
-            if match and attempt == 0:
-                missing = match.group(1)
-                print(f"{Colors.YELLOW}[!] dirsearch missing Python module '{missing}'. Installing...{Colors.RESET}")
-                if self._install_python_dependency(missing):
-                    print(f"{Colors.CYAN}[*] Retrying dirsearch after installing '{missing}'.{Colors.RESET}")
+            if attempt == 0:
+                # Check if Python environment variables are causing path conflicts (e.g. in a virtualenv)
+                # If so, retry by stripping them.
+                if any(var in current_env for var in ["PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"]):
+                    print(f"{Colors.YELLOW}[*] dirsearch failed. Retrying with stripped Python environment variables...{Colors.RESET}")
+                    current_env.pop("PYTHONPATH", None)
+                    current_env.pop("PYTHONHOME", None)
+                    current_env.pop("VIRTUAL_ENV", None)
                     attempt += 1
                     continue
+
+                # Check for missing Python modules
+                match = re.search(r"ModuleNotFoundError: No module named '([^']+)'", err_text)
+                if match:
+                    missing = match.group(1)
+                    print(f"{Colors.YELLOW}[!] dirsearch missing Python module '{missing}'. Installing...{Colors.RESET}")
+                    if self._install_python_dependency(missing):
+                        print(f"{Colors.CYAN}[*] Retrying dirsearch after installing '{missing}'.{Colors.RESET}")
+                        attempt += 1
+                        continue
 
             if err_text:
                 print(err_text)
@@ -197,9 +214,6 @@ class DirEnumerator:
         os.makedirs(reports_dir, exist_ok=True)
 
         env = os.environ.copy()
-        env.pop("PYTHONPATH", None)
-        env.pop("PYTHONHOME", None)
-        env.pop("VIRTUAL_ENV", None)
 
         unique_urls = sorted(set(urls))
         max_parallel = max(1, parallel_targets)
