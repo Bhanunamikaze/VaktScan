@@ -435,6 +435,31 @@ async def validate_service_recon(scan_address, port, timeout=3):
     return True
 
 
+async def validate_testssl(target_or_scan_address, port, timeout=3):
+    """
+    Validates if a service supports SSL/TLS on the given address:port
+    by initiating a handshake using Python's stdlib ssl.
+    """
+    import ssl
+    scan_address = _extract_scan_address(target_or_scan_address)
+    try:
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(scan_address, port, ssl=ssl_ctx),
+            timeout=timeout
+        )
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except:
+            pass
+        return True
+    except:
+        return False
+
+
 async def validate_service(service, target_or_scan_address, port):
     """
     Validates if a specific service is running on the given address:port.
@@ -450,6 +475,7 @@ async def validate_service(service, target_or_scan_address, port):
         'cpanel': validate_cpanel,
         'jenkins': validate_jenkins,
         'service_recon': validate_service_recon,
+        'testssl': validate_testssl,
     }
 
     validator = validators.get(service)

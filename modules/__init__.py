@@ -18,3 +18,4 @@ from . import cpanel
 from . import dns_recon
 from . import web_checks
 from . import cisa_kev
+from . import testssl_runner

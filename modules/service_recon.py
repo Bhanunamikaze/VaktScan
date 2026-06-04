@@ -328,6 +328,7 @@ async def check_mysql(host, port, target, resolved_ip):
 
     # AutoRecon: mysql -h HOST -u root --connect-timeout=5 -e 'SELECT version();'
     if _bin('mysql'):
+        # Try empty password first
         stdout, _, rc = await _run(
             ['mysql', '-h', host, '-P', str(port), '-u', 'root',
              '--connect-timeout=5', '-e', 'SELECT version();'],
@@ -336,6 +337,18 @@ async def check_mysql(host, port, target, resolved_ip):
             out.append(_finding('VULNERABLE', 'CRITICAL', 'MySQL Unauthenticated Root Access',
                 f'mysql -u root connected without password. Version: {stdout[:200]}',
                 target, resolved_ip, port, url=f'mysql://{host}:{port}'))
+        else:
+            # Try default passwords
+            for pwd in ('root', 'mysql', 'admin'):
+                stdout, _, rc = await _run(
+                    ['mysql', '-h', host, '-P', str(port), '-u', 'root', f'-p{pwd}',
+                     '--connect-timeout=5', '-e', 'SELECT version();'],
+                    timeout=10)
+                if rc == 0 and stdout:
+                    out.append(_finding('VULNERABLE', 'CRITICAL', f'MySQL Default Credentials (root:{pwd})',
+                        f'mysql connected as root:{pwd} successfully. Version: {stdout[:200]}',
+                        target, resolved_ip, port, url=f'mysql://{host}:{port}'))
+                    break
     return out
 
 
@@ -345,6 +358,7 @@ async def check_postgresql(host, port, target, resolved_ip):
     out = []
     # AutoRecon: psql -h HOST -U postgres -c '\conninfo'
     if _bin('psql'):
+        # Try trust auth (no password)
         stdout, _, rc = await _run(
             ['psql', '-h', host, '-p', str(port), '-U', 'postgres', '-c', r'\conninfo'],
             timeout=10)
@@ -352,6 +366,24 @@ async def check_postgresql(host, port, target, resolved_ip):
             out.append(_finding('VULNERABLE', 'CRITICAL', 'PostgreSQL Unauthenticated Access (postgres)',
                 f'psql connected as postgres without password:\n{stdout[:200]}',
                 target, resolved_ip, port, url=f'postgresql://{host}:{port}'))
+        else:
+            # Try default password 'postgres'
+            env = os.environ.copy()
+            env['PGPASSWORD'] = 'postgres'
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    'psql', '-h', host, '-p', str(port), '-U', 'postgres', '-c', r'\conninfo',
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env
+                )
+                stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+                if proc.returncode == 0 and stdout_bytes:
+                    out.append(_finding('VULNERABLE', 'CRITICAL', 'PostgreSQL Default Credentials (postgres:postgres)',
+                        'psql connected as postgres:postgres default credentials successfully.',
+                        target, resolved_ip, port, url=f'postgresql://{host}:{port}'))
+            except Exception:
+                pass
     return out
 
 
@@ -400,6 +432,7 @@ async def check_mongodb(host, port, target, resolved_ip):
     for tool in ('mongosh', 'mongo'):
         if not _bin(tool):
             continue
+        # Check unauthenticated first
         stdout, _, rc = await _run(
             [tool, '--host', host, '--port', str(port),
              '--eval', 'db.adminCommand({listDatabases:1})', '--quiet'],
@@ -408,6 +441,18 @@ async def check_mongodb(host, port, target, resolved_ip):
             out.append(_finding('VULNERABLE', 'CRITICAL', 'MongoDB Unauthenticated Access',
                 f'{tool} listDatabases succeeded without auth:\n{stdout[:400]}',
                 target, resolved_ip, port, url=f'mongodb://{host}:{port}'))
+        else:
+            # Try admin:admin and root:root
+            for user, pwd in (('admin', 'admin'), ('root', 'root')):
+                stdout, _, rc = await _run(
+                    [tool, '--host', host, '--port', str(port), '-u', user, '-p', pwd,
+                     '--authenticationDatabase', 'admin', '--eval', 'db.adminCommand({listDatabases:1})', '--quiet'],
+                    timeout=15)
+                if rc == 0 and stdout and 'databases' in stdout.lower():
+                    out.append(_finding('VULNERABLE', 'CRITICAL', f'MongoDB Default Credentials ({user}:{pwd})',
+                        f'{tool} authenticated successfully as {user}:{pwd} on admin database.',
+                        target, resolved_ip, port, url=f'mongodb://{host}:{port}'))
+                    break
         break
     return out
 
@@ -725,6 +770,12 @@ async def check_cassandra(host, port, target, resolved_ip):
             out.append(_finding('VULNERABLE', 'CRITICAL', 'Cassandra Unauthenticated Access',
                 f'cqlsh DESCRIBE KEYSPACES succeeded without auth:\n{stdout[:300]}',
                 target, resolved_ip, port, url=f'cassandra://{host}:{port}'))
+        else:
+            stdout, _, rc = await _run(['cqlsh', '-u', 'cassandra', '-p', 'cassandra', host, str(port), '-e', 'DESCRIBE KEYSPACES;'], timeout=15)
+            if rc == 0 and stdout:
+                out.append(_finding('VULNERABLE', 'CRITICAL', 'Cassandra Default Credentials (cassandra:cassandra)',
+                    f'cqlsh connected as cassandra:cassandra default credentials successfully. Keyspaces:\n{stdout[:300]}',
+                    target, resolved_ip, port, url=f'cassandra://{host}:{port}'))
     return out
 
 

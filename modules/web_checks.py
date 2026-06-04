@@ -977,8 +977,284 @@ async def check_default_creds(url: str, client: httpx.AsyncClient) -> list[dict]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Main entry point
+# Check 9 — Web Application Firewall (WAF) Detection
 # ──────────────────────────────────────────────────────────────────────────────
+
+async def check_waf(url: str, client: httpx.AsyncClient) -> list[dict]:
+    findings: list[dict] = []
+    try:
+        resp = await client.get(url)
+    except Exception:
+        return findings
+
+    h = {k.lower(): v for k, v in resp.headers.items()}
+    cookies = {c.name.lower(): c.value for c in client.cookie_jar}
+
+    detected_waf = None
+    evidence = ""
+
+    # Check normal headers/cookies
+    if "cf-ray" in h or h.get("server", "").lower() == "cloudflare" or "__cf_bm" in cookies:
+        detected_waf = "Cloudflare WAF"
+        evidence = f"Header: cf-ray={h.get('cf-ray')} or Server={h.get('server')}"
+    elif "x-sucuri-id" in h or "x-sucuri-cache" in h:
+        detected_waf = "Sucuri WAF"
+        evidence = f"Header: x-sucuri-id={h.get('x-sucuri-id')}"
+    elif "x-iinfo" in h or any("visid_incap" in k for k in cookies):
+        detected_waf = "Imperva Incapsula WAF"
+        evidence = f"Header: x-iinfo={h.get('x-iinfo')}"
+    elif "x-akamai-transformed" in h or h.get("server", "").lower() == "akamaighost":
+        detected_waf = "Akamai WAF"
+        evidence = "Server: AkamaiGhost or Header: x-akamai-transformed"
+
+    # If not detected, send a trigger payload to elicit a WAF block response
+    if not detected_waf:
+        try:
+            # Simple XSS payload to trigger WAF
+            trigger_url = url + "?q=%3Cscript%3Ealert(1)%3C/script%3E"
+            t_resp = await client.get(trigger_url)
+            if t_resp.status_code in (403, 406, 999):
+                t_h = {k.lower(): v for k, v in t_resp.headers.items()}
+                t_body = t_resp.text.lower()
+                if "cf-ray" in t_h or "cloudflare" in t_body:
+                    detected_waf = "Cloudflare WAF"
+                    evidence = f"Blocked with HTTP {t_resp.status_code}. Cloudflare markers found."
+                elif "awswaf" in t_body or "aws-waf" in t_body or "x-amz-cf-id" in t_h:
+                    detected_waf = "AWS WAF / CloudFront"
+                    evidence = f"Blocked with HTTP {t_resp.status_code}. AWS markers found."
+                elif "sucuri" in t_body or "x-sucuri-id" in t_h:
+                    detected_waf = "Sucuri WAF"
+                    evidence = f"Blocked with HTTP {t_resp.status_code}. Sucuri markers found."
+                elif "incapsula" in t_body or "visid_incap" in str(client.cookie_jar).lower():
+                    detected_waf = "Imperva Incapsula WAF"
+                    evidence = f"Blocked with HTTP {t_resp.status_code}. Imperva markers found."
+                elif "mod_security" in t_body or "modsecurity" in t_body or "mod_security" in t_h.get("server", ""):
+                    detected_waf = "ModSecurity WAF"
+                    evidence = f"Blocked with HTTP {t_resp.status_code}. ModSecurity markers found."
+                elif "wordfence" in t_body:
+                    detected_waf = "Wordfence WAF"
+                    evidence = f"Blocked with HTTP {t_resp.status_code}. Wordfence block page text found."
+                elif "fortiweb" in t_body or "fortiwaf" in str(client.cookie_jar).lower():
+                    detected_waf = "Fortinet FortiWeb WAF"
+                    evidence = f"Blocked with HTTP {t_resp.status_code}. Fortinet markers found."
+                elif "f5" in t_body or any(k.startswith("ts") for k in cookies):
+                    detected_waf = "F5 BIG-IP ASM WAF"
+                    evidence = f"Blocked with HTTP {t_resp.status_code}. F5 markers found."
+                else:
+                    detected_waf = "Generic WAF / Security Block"
+                    evidence = f"Blocked with HTTP {t_resp.status_code} when sending test XSS query parameter."
+        except Exception:
+            pass
+
+    if detected_waf:
+        title = _extract_title(resp.text)
+        http_status = str(resp.status_code)
+        cl = str(len(resp.content))
+        base = dict(url=url, payload_url=url, http_status=http_status,
+                    page_title=title, content_length=cl)
+        findings.append(_make_finding(
+            **base,
+            vulnerability=f"Web Application Firewall (WAF) Detected: {detected_waf}",
+            status="INFO",
+            severity="INFO",
+            details=(
+                f"A Web Application Firewall ({detected_waf}) was detected defending the application. "
+                f"Evidence: {evidence}. Scanning activities may be rate-limited, blocked, or altered by this WAF."
+            ),
+        ))
+
+    return findings
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Check 10 — Cookie Security Flags
+# ──────────────────────────────────────────────────────────────────────────────
+
+async def check_cookie_flags(url: str, client: httpx.AsyncClient) -> list[dict]:
+    findings: list[dict] = []
+    parsed = urlparse(url)
+    is_https = parsed.scheme == "https"
+    try:
+        resp = await client.get(url)
+    except Exception:
+        return findings
+
+    # Look for Set-Cookie headers
+    cookie_headers = [v for k, v in resp.headers.items() if k.lower() == "set-cookie"]
+    if not cookie_headers:
+        return findings
+
+    title = _extract_title(resp.text)
+    http_status = str(resp.status_code)
+    cl = str(len(resp.content))
+    base = dict(url=url, payload_url=url, http_status=http_status,
+                page_title=title, content_length=cl)
+
+    for cookie_header in cookie_headers:
+        parts = [p.strip().lower() for p in cookie_header.split(";")]
+        if not parts:
+            continue
+        cookie_name = cookie_header.split("=")[0].strip()
+
+        missing_flags = []
+        if is_https and not any(p == "secure" for p in parts):
+            missing_flags.append("Secure")
+        if not any(p == "httponly" for p in parts):
+            missing_flags.append("HttpOnly")
+        if not any(p.startswith("samesite") for p in parts):
+            missing_flags.append("SameSite")
+
+        if missing_flags:
+            findings.append(_make_finding(
+                **base,
+                vulnerability="Insecure Cookie Attributes",
+                status="VULNERABLE",
+                severity="LOW",
+                details=(
+                    f"The cookie '{cookie_name}' was set without the following security attributes: "
+                    f"{', '.join(missing_flags)}. Missing HttpOnly allows access via XSS, missing "
+                    "Secure allows transmission over HTTP (plain text), and missing SameSite leaves "
+                    "the cookie vulnerable to CSRF attacks."
+                ),
+            ))
+    return findings
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Check 11 — Software End-of-Life (EOL)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _check_eol_version(software: str, version_str: str) -> str | None:
+    """Verify if a version of a software is EOL."""
+    try:
+        parts = version_str.split('.')
+        if len(parts) >= 2:
+            major = int(parts[0])
+            minor = int(parts[1])
+        else:
+            return None
+    except ValueError:
+        return None
+
+    if software == "php":
+        if major < 8 or (major == 8 and minor <= 1):
+            return f"PHP version {version_str} is End-of-Life (EOL). Version 8.1 reached EOL in November 2024."
+    elif software == "nginx":
+        if major == 1 and minor < 24:
+            return f"Nginx version {version_str} is legacy/EOL. Current stable is 1.26.x."
+    elif software == "apache":
+        if major < 2 or (major == 2 and minor < 4):
+            return f"Apache HTTP Server version {version_str} is End-of-Life (EOL). All versions < 2.4 are unsupported."
+    elif software == "openssl":
+        if major < 3:
+            return f"OpenSSL version {version_str} is End-of-Life (EOL). OpenSSL 1.1.1 reached EOL in September 2023."
+    return None
+
+
+async def check_software_eol(url: str, client: httpx.AsyncClient) -> list[dict]:
+    findings: list[dict] = []
+    try:
+        resp = await client.get(url)
+    except Exception:
+        return findings
+
+    h = {k.lower(): v for k, v in resp.headers.items()}
+    server = h.get("server", "")
+    xpb = h.get("x-powered-by", "")
+
+    title = _extract_title(resp.text)
+    http_status = str(resp.status_code)
+    cl = str(len(resp.content))
+    base = dict(url=url, payload_url=url, http_status=http_status,
+                page_title=title, content_length=cl)
+
+    tech_headers = [server, xpb]
+    checked = set()
+
+    for header_val in tech_headers:
+        if not header_val:
+            continue
+        
+        matches = [
+            ("php", re.search(r"php/([0-9.]+)", header_val, re.I)),
+            ("nginx", re.search(r"nginx/([0-9.]+)", header_val, re.I)),
+            ("apache", re.search(r"apache/([0-9.]+)", header_val, re.I)),
+            ("openssl", re.search(r"openssl/([0-9a-zA-Z.]+)", header_val, re.I)),
+        ]
+
+        for software, match in matches:
+            if match:
+                version_str = match.group(1)
+                key = (software, version_str)
+                if key in checked:
+                    continue
+                checked.add(key)
+                
+                eol_reason = _check_eol_version(software, version_str)
+                if eol_reason:
+                    findings.append(_make_finding(
+                          **base,
+                          vulnerability=f"End-of-Life (EOL) Software Detected: {software.capitalize()}",
+                          status="VULNERABLE",
+                          severity="HIGH",
+                          details=(
+                              f"The server is running an End-of-Life version of {software.capitalize()} ({version_str}). "
+                              f"{eol_reason} Running EOL software leaves the server exposed to unpatched security "
+                              "vulnerabilities and compliance violations (e.g., PCI-DSS)."
+                          ),
+                          service_version=version_str,
+                      ))
+    return findings
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Check 12 — CORS Misconfiguration
+# ──────────────────────────────────────────────────────────────────────────────
+
+async def check_cors(url: str, client: httpx.AsyncClient) -> list[dict]:
+    findings: list[dict] = []
+    try:
+        origin = "https://evil-attacker-domain.com"
+        resp = await client.get(url, headers={"Origin": origin})
+    except Exception:
+        return findings
+
+    h = {k.lower(): v for k, v in resp.headers.items()}
+    acao = h.get("access-control-allow-origin", "")
+    acac = h.get("access-control-allow-credentials", "")
+
+    title = _extract_title(resp.text)
+    http_status = str(resp.status_code)
+    cl = str(len(resp.content))
+    base = dict(url=url, payload_url=url, http_status=http_status,
+                page_title=title, content_length=cl)
+
+    if acao == origin and acac.lower() == "true":
+        findings.append(_make_finding(
+            **base,
+            vulnerability="CORS Misconfiguration: Arbitrary Origin Reflection with Credentials",
+            status="VULNERABLE",
+            severity="HIGH",
+            details=(
+                "The server reflects the arbitrary request Origin header in Access-Control-Allow-Origin "
+                "and sets Access-Control-Allow-Credentials to true. This allows any external attacker-controlled "
+                "website to perform cross-origin requests and read sensitive response data on behalf of the user."
+            ),
+        ))
+    elif acao == "*" and acac.lower() == "true":
+        findings.append(_make_finding(
+            **base,
+            vulnerability="CORS Misconfiguration: Wildcard with Credentials",
+            status="VULNERABLE",
+            severity="HIGH",
+            details=(
+                "The server sets Access-Control-Allow-Origin to '*' while enabling Access-Control-Allow-Credentials "
+                "to true. (Note: Most browsers block this configuration, but it remains a security risk as some "
+                "HTTP clients or custom environments may allow it)."
+            ),
+        ))
+    return findings
+
 
 # All check functions, keyed for dedup tracking
 _ALL_CHECKS = [
@@ -990,6 +1266,10 @@ _ALL_CHECKS = [
     check_admin_panels,
     check_directory_listing,
     check_default_creds,
+    check_waf,
+    check_cookie_flags,
+    check_software_eol,
+    check_cors,
 ]
 
 

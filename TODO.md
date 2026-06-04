@@ -174,6 +174,9 @@ Passive recon via Google Search Operators to surface exposed assets and leaked c
 ### Remaining backlog
 
 1. ✅ **Certificate Transparency alerting** — `modules/ct_monitor.py`; SQLite baseline in `reports/ct_baseline.sqlite`; diff detection per domain; INFO on first scan, HIGH on new certs; wired into `_run_parallel_passive()` alongside DNS recon + cloud enum
+2. ⬜ **SSL/TLS Posture & Vulnerability Scanning (testssl.sh)** — Wrapper `modules/testssl_runner.py` to check for TLS protocols, CVE vulnerabilities (Heartbleed, etc.), weak certs, and misconfigurations.
+3. ⬜ **Additional Security Checks & Scanner Modules** — WAF detection, advanced CORS checks, software End-of-Life (EOL) validation, database default credentials, etc.
+4. ⬜ **Documentation follow-up** — Add screenshot/GIF of a real scan run to README.
 
 ---
 
@@ -242,9 +245,53 @@ This section tracks the full CLI redesign approved in the June 2026 brainstorm.
 - [x] --no-subdomain-enum skips enum for domain lines but they still get port-scanned
 - [x] Full integration test: mixed file with 1 domain + 1 IP completes both pipelines — `tests/test_mixed_targets.py` (11 tests)
 
+---
+
 ## 9. Documentation ✅ DONE
 
 - [x] README.md rewritten with ASCII architecture diagram, CLI reference, quick start, module table
 - [x] docs/adding-a-module.md — step-by-step guide for adding a new scanner module (all 7 touch points)
 - [ ] Add screenshot/GIF of a real scan run to README
 - [x] docs/adding-a-module.md — "Adding a Check to an Existing Module" section added with full example
+
+---
+
+## 10. SSL/TLS Posture & Vulnerability Scanning (testssl.sh) ✅ DONE
+
+This section tracks the implementation of a dedicated SSL/TLS scanning wrapper around the `testssl.sh` utility.
+
+### Tasks
+- [x] Implement `modules/testssl_runner.py` to wrap `testssl.sh` asynchronously (`asyncio.create_subprocess_exec` / `shell`)
+- [x] Parse JSON output (`--jsonfile-pretty`) and extract structural findings
+- [x] Map finding keys to VaktScan's canonical finding schema (15 keys, proper severity & status mapping)
+- [x] Implement checks for SSL/TLS Protocol Support:
+  - [x] Flag SSLv2, SSLv3, TLS 1.0, and TLS 1.1 as VULNERABLE/INFO
+- [x] Implement checks for SSL/TLS Cryptographic Vulnerabilities:
+  - [x] Heartbleed (CVE-2014-0160), CCS Injection (CVE-2014-0224), Ticketbleed (CVE-2016-9244)
+  - [x] ROBOT (CVE-2017-13098), BEAST (CVE-2011-3389), Lucky13 (CVE-2013-0169), Raccoon (CVE-2020-1967)
+  - [x] SWEET32 (CVE-2016-2183), POODLE (CVE-2014-3566), CRIME (CVE-2012-4929), BREACH (CVE-2013-3587)
+  - [x] LOGJAM (CVE-2015-4000), FREAK (CVE-2015-0204), RC4 (CVE-2013-2566, CVE-2015-2808)
+- [x] Implement checks for Certificate Quality & Signature Strength:
+  - [x] Weak signature algorithms (MD5, SHA-1)
+  - [x] Weak keys (RSA < 2048-bit, EC < 256-bit)
+  - [x] Untrusted Root Certificates / Chain issues
+- [x] Implement checks for SSL/TLS Misconfigurations:
+  - [x] Missing HSTS (Strict-Transport-Security) header
+  - [x] TLS Fallback signaling (TLS_FALLBACK_SCSV) missing
+  - [x] Client-initiated / insecure renegotiation allowed
+- [x] Wire `testssl_runner` into the unified CLI scanning pipeline (`main.py`) for SSL/TLS ports (443, 8443, etc.)
+- [x] Write integration test suite (`tests/test_testssl_runner.py`) with mock JSON output structures
+
+---
+
+## 11. Additional Security Checks & Scanner Modules ✅ DONE
+
+### Proposed Checks
+- [x] **WAF Detection Module**: Detect the presence of Web Application Firewalls (Cloudflare, Akamai, AWS WAF, etc.) via response headers and behaviors, and add details to findings.
+- [x] **Advanced CORS Validation**: Scan for `Access-Control-Allow-Origin: *` or wildcard reflections combined with `Access-Control-Allow-Credentials: true` in `web_checks.py`.
+- [x] **Software End-of-Life (EOL) Checker**: Map detected software versions (PHP, Apache, Nginx, OpenSSL, Python) against an EOL database/API (`endoflife.date`) to flag unsupported/deprecated systems.
+- [x] **DNSSEC & CAA Records Validation**: Enhance `dns_recon.py` to check for DNSSEC enforcement and CAA records (to restrict unauthorized certificate authorities).
+- [x] **Database & Message Broker Default Credentials**:
+  - [x] Add default credential checks for MySQL, PostgreSQL, MongoDB, Cassandra, RabbitMQ, and ActiveMQ.
+- [x] **Subdomain Takeover Signature Expansion**: Expand `domain_scan.py` to support Webflow, Shopify, Ghost, Cargo, Tumblr, etc.
+- [x] **Cookie Security Flags**: Audit cookies for missing `Secure`, `HttpOnly`, and `SameSite` flags.

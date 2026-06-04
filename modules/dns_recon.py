@@ -353,12 +353,24 @@ async def check_basic_records(domain: str, resolver: str) -> tuple[list[dict], d
             f'No CAA record published for {domain}',
             'Without a CAA record, any public CA can issue certificates for this domain.',
         ))
+    else:
+        findings.append(_finding(
+            domain, 'INFO', 'INFO',
+            f'CAA record present for {domain}',
+            f'Active CAA record(s): {", ".join(recovered["CAA"])}',
+        ))
 
     if not recovered['DNSKEY']:
         findings.append(_finding(
             domain, 'INFO', 'LOW',
             f'DNSSEC not enabled for {domain}',
             'No DNSKEY records returned. Zone is not DNSSEC-signed; cache poisoning is easier.',
+        ))
+    else:
+        findings.append(_finding(
+            domain, 'INFO', 'INFO',
+            f'DNSSEC enabled for {domain}',
+            f'Found DNSKEY record(s): {len(recovered["DNSKEY"])} active keys.',
         ))
 
     return findings, recovered

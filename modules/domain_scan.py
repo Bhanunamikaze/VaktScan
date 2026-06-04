@@ -104,6 +104,10 @@ TAKEOVER_SIGNATURES = [
     ("Uservoice",        "This UserVoice instance does not exist",                             (200, 404),       "HIGH"),
     ("Wishpond",         "https://www.wishpond.com/404",                                       (404,),           "HIGH"),
     ("Wpengine",         "The site you were looking for couldn't be found",                    (200, 404),       "HIGH"),
+    ("Fly.io",           "App not found",                                                      (404,),           "HIGH"),
+    ("Readme.io",        "Let's write some docs!",                                             (404,),           "HIGH"),
+    ("ActiveCampaign",   "Account not found",                                                  (200, 404),       "HIGH"),
+    ("Campaign Monitor", "Trying to send email?",                                              (200, 404),       "HIGH"),
 ]
 
 class SubResourceParser(HTMLParser):

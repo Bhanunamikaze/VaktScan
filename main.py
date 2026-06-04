@@ -71,6 +71,7 @@ from modules import (
     nvd,
     google_dork,
     ct_monitor,
+    testssl_runner,
 )
 
 # Map service names to their corresponding modules
@@ -84,6 +85,7 @@ SERVICE_TO_MODULE = {
     "cpanel": cpanel,
     "service_recon": service_recon,
     "jenkins": jenkins,
+    "testssl": testssl_runner,
 }
 
 

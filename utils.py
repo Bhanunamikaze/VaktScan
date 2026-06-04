@@ -429,6 +429,7 @@ def get_service_ports():
             953,                       # BIND control / dnsadmin
         ],
         "jenkins": [8080, 8090, 8443, 8888],
+        "testssl": [443, 8443, 465, 993, 995],
         "service_recon": [
             # FTP / SSH / SMTP / DNS / Kerberos / RPC / NTP
             21, 22, 25, 26, 53, 88, 111, 123, 135,
