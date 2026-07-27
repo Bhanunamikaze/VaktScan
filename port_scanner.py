@@ -118,6 +118,7 @@ async def check_port_with_progress(
     retries=DEFAULT_PORT_RETRIES,
     retry_backoff=DEFAULT_RETRY_BACKOFF,
     scan_stats=None,
+    host_pending=None,
 ):
     """
     Tries to connect to a single port on a given target with progress tracking.
@@ -138,6 +139,7 @@ async def check_port_with_progress(
     async with semaphore:
         result = None
         attempt = 0
+        probe_completed = False
         try:
             while True:
                 try:
@@ -177,11 +179,35 @@ async def check_port_with_progress(
                     if transient_error and scan_stats is not None:
                         scan_stats["transient_socket_failures"] += 1
                     break
+            # Reached only when the probe ran to a definite conclusion (open,
+            # refused, timed-out, or errored). A cancellation (Ctrl+C) raises
+            # out of an await above and skips this line, leaving the flag False.
+            probe_completed = True
         finally:
             completed_tasks[0] += 1
             # Update progress periodically
             if state_manager:
                 state_manager.update_port_scan_progress(completed_tasks[0])
+                # Per-host sweep completion (Phase 6): when this host's LAST
+                # port probe finishes, checkpoint the host as fully scanned so a
+                # resume skips it - even hosts with zero open ports. The
+                # decrement + check run synchronously (no await between), so the
+                # single-threaded event loop makes this atomic without a lock.
+                #
+                # ONLY count a probe that actually completed. On cancellation
+                # the finally still runs, but the port was never probed; if we
+                # decremented here an in-flight host could hit 0 and be marked
+                # fully scanned, so resume would skip its un-probed ports (and
+                # could lose an entire host whose probes were all in-flight).
+                # Skipping the decrement leaves the host un-marked, so resume
+                # re-scans it - re-probing done ports is wasteful but correct.
+                if probe_completed and host_pending is not None:
+                    remaining = host_pending.get(resolved_ip)
+                    if remaining is not None:
+                        remaining -= 1
+                        host_pending[resolved_ip] = remaining
+                        if remaining <= 0:
+                            state_manager.mark_ip_scanned(resolved_ip)
             from modules.dashboard import LiveDashboard
             dashboard = LiveDashboard()
             if dashboard.active:
@@ -240,7 +266,37 @@ async def scan_ports(
         "timeout_failures": 0,
         "transient_socket_failures": 0,
     }
-    
+
+    # Resume skip (Phase 6): drop hosts whose full sweep already completed on a
+    # prior run. scanned_ips now records hosts even when they had zero open
+    # ports, so a resume never re-scans a host merely because nothing was open.
+    # Skipped hosts keep their previously-found open ports in the results.
+    skipped_targets = []
+    if state_manager is not None:
+        already_scanned = set(state_manager.get_scanned_ips())
+        if already_scanned:
+            _remaining = []
+            for _t in targets:
+                _ip = _t.get('resolved_ip') or _t.get('scan_address')
+                if _ip in already_scanned:
+                    skipped_targets.append(_t)
+                else:
+                    _remaining.append(_t)
+            if skipped_targets:
+                print(f"{Colors.CYAN}[*] Resume: skipping {len(skipped_targets)} host(s) "
+                      f"already port-scanned; scanning {len(_remaining)} remaining.{Colors.RESET}")
+            targets = _remaining
+
+    # Per-host completion tracking (Phase 6): count the ports pending for each
+    # resolved IP so we can mark_ip_scanned() the instant a host's LAST port
+    # probe finishes - even mid-scan, so an interrupt checkpoints completed
+    # hosts. Populated only for the hosts actually being scanned this run.
+    host_pending = {}
+    for _t in targets:
+        _ip = _t.get('resolved_ip') or _t.get('scan_address')
+        if _ip:
+            host_pending[_ip] = host_pending.get(_ip, 0) + len(ports)
+
     total_tasks = len(targets) * len(ports)
     completed_tasks = [0]
     start_time = time.time()
@@ -277,6 +333,7 @@ async def scan_ports(
                     retries=retries,
                     retry_backoff=DEFAULT_RETRY_BACKOFF,
                     scan_stats=scan_stats,
+                    host_pending=host_pending,
                 )
             )
             tasks.append((target_obj, port, task))
@@ -287,14 +344,18 @@ async def scan_ports(
         # Wait for all scanning tasks to complete
         await asyncio.gather(*(task for _, _, task in tasks), return_exceptions=True)
         
-    except KeyboardInterrupt:
-        print(f"\n[!] Scan interrupted by user. Cleaning up...")
+    except asyncio.CancelledError:
+        # The outer main task was cancelled (first Ctrl+C). Cancel our child
+        # port-probe tasks, await their teardown, then RE-RAISE so the
+        # cancellation propagates to the orchestrator (which checkpoints state).
+        # Returning [] here would swallow the cancel and let the scan continue.
+        print(f"\n[!] Scan interrupted. Cleaning up port-probe tasks...")
         for _, _, task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*(task for _, _, task in tasks), return_exceptions=True)
-        return []
-        
+        raise
+
     finally:
         if progress_task and not progress_task.done():
             progress_task.cancel()
@@ -339,6 +400,14 @@ async def scan_ports(
     final_results = []
     for target_items, data in results_map.items():
         final_results.append((dict(target_items), data))
+
+    # Re-attach hosts skipped on resume (Phase 6) with their persisted open
+    # ports, so downstream service validation still sees them.
+    if skipped_targets and state_manager is not None:
+        saved_open = state_manager.get_open_ports()
+        for _t in skipped_targets:
+            _ip = _t.get('resolved_ip') or _t.get('scan_address')
+            final_results.append((_t, {'open_ports': list(saved_open.get(_ip, []))}))
 
     print(f"{Colors.GREEN}[+] Found {open_ports_found} open ports across {len([d for _, d in final_results if d['open_ports']])} targets{Colors.RESET}")
     return final_results

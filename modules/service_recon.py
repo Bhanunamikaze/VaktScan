@@ -24,6 +24,8 @@ import socket
 
 import httpx
 
+from modules import proc as proc_runner
+
 MODULE_NAME = 'ServiceRecon'
 
 
@@ -52,13 +54,10 @@ def _finding(status, severity, vulnerability, details, target, resolved_ip, port
 async def _run(cmd, timeout=30):
     """Run a command, return (stdout, stderr, returncode). None on exception."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return stdout.decode('utf-8', errors='replace'), stderr.decode('utf-8', errors='replace'), proc.returncode
+        result = await proc_runner.run_tool(cmd, timeout=timeout)
+        return (result.stdout.decode('utf-8', errors='replace'),
+                result.stderr.decode('utf-8', errors='replace'),
+                result.returncode)
     except Exception:
         return None, None, -1
 
@@ -390,14 +389,11 @@ async def check_postgresql(host, port, target, resolved_ip):
             env = os.environ.copy()
             env['PGPASSWORD'] = 'postgres'
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    'psql', '-h', host, '-p', str(port), '-U', 'postgres', '-c', r'\conninfo',
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env
-                )
-                stdout_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-                if proc.returncode == 0 and stdout_bytes:
+                result = await proc_runner.run_tool(
+                    ['psql', '-h', host, '-p', str(port), '-U', 'postgres', '-c', r'\conninfo'],
+                    timeout=10, env=env)
+                stdout_bytes = result.stdout
+                if result.returncode == 0 and stdout_bytes:
                     out.append(_finding('VULNERABLE', 'CRITICAL', 'PostgreSQL Default Credentials (postgres:postgres)',
                         'psql connected as postgres:postgres default credentials successfully.',
                         target, resolved_ip, port, url=f'postgresql://{host}:{port}'))

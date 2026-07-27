@@ -5,6 +5,8 @@ import uuid
 import re
 from datetime import datetime
 
+from modules import proc
+
 class NmapRunner:
     def __init__(self, output_base_dir="reports"):
         self.output_base_dir = output_base_dir
@@ -44,14 +46,10 @@ class NmapRunner:
         cmd = f"{self.binary} -sCV -Pn -p {ports_str} {ip} -oN {output_file}"
         
         try:
-            process = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
             # We await communication to ensure process finishes
-            stdout, stderr = await process.communicate()
-            
+            result = await proc.run_tool(cmd)
+            stdout, stderr = result.stdout, result.stderr
+
             if os.path.exists(output_file):
                 pass
             else:
@@ -135,13 +133,9 @@ class NmapRunner:
         cmd = f"{self.binary} -sV --script vuln,vulners -Pn -p {ports_str} {ip} -oX {xml_output} -oN {txt_output}"
         
         try:
-            process = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
-            
+            result = await proc.run_tool(cmd)
+            stdout, stderr = result.stdout, result.stderr
+
             if os.path.exists(xml_output):
                 return self.parse_nmap_xml(xml_output, hostname or ip, ip)
             else:

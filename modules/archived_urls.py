@@ -32,6 +32,7 @@ import re
 import shutil
 from urllib.parse import parse_qsl, urlparse
 
+from modules import proc
 from modules.httpx_runner import HTTPXRunner
 from modules.progress import DashboardProgress, heartbeat
 from modules.schema import normalize_finding
@@ -117,13 +118,8 @@ async def _run_uro(urls):
     if not uro_bin:
         return None
     try:
-        proc = await asyncio.create_subprocess_exec(
-            uro_bin,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _stderr = await proc.communicate(input="\n".join(urls).encode())
+        result = await proc.run_tool([uro_bin], input="\n".join(urls).encode())
+        stdout = result.stdout
     except Exception as exc:  # uro present but unusable - degrade gracefully
         print(f"{_C.GREY}[!] uro failed ({exc}); using internal dedup.{_C.RESET}")
         return None

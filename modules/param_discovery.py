@@ -48,6 +48,7 @@ import shutil
 from datetime import datetime
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from modules import proc as proc_runner
 from modules.progress import DashboardProgress, heartbeat
 from modules.schema import normalize_finding
 
@@ -213,13 +214,8 @@ async def _run_paramspider(binary, domain, params_dir, semaphore):
     urls = []
     try:
         async with semaphore:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=params_dir,
-            )
-            stdout, stderr = await proc.communicate()
+            result = await proc_runner.run_tool(cmd, cwd=params_dir)
+            stdout, stderr = result.stdout, result.stderr
     except Exception as exc:  # tool present but unusable - degrade, don't crash
         print(f"{_C.GREY}[!] paramspider failed for {domain}: {exc}{_C.RESET}")
         return []
@@ -255,12 +251,8 @@ async def _run_arjun(binary, urls, params_dir, concurrency):
 
     cmd = [binary, "-i", input_file, "-oJ", output_json, "-t", threads]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _stdout, stderr = await proc.communicate()
+        result = await proc_runner.run_tool(cmd)
+        _stdout, stderr = result.stdout, result.stderr
     except Exception as exc:
         print(f"{_C.GREY}[!] arjun failed: {exc}{_C.RESET}")
         _safe_remove(input_file)
@@ -292,14 +284,10 @@ async def _run_gf(binary, pattern, urls):
     if not urls:
         return []
     try:
-        proc = await asyncio.create_subprocess_exec(
-            binary,
-            pattern,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        result = await proc_runner.run_tool(
+            [binary, pattern], input="\n".join(urls).encode()
         )
-        stdout, _stderr = await proc.communicate(input="\n".join(urls).encode())
+        stdout, _stderr = result.stdout, result.stderr
     except Exception as exc:
         print(f"{_C.GREY}[!] gf ({pattern}) failed: {exc}{_C.RESET}")
         return []

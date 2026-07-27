@@ -5,6 +5,9 @@ import shutil
 import subprocess
 from datetime import datetime
 
+from modules import proc
+
+
 class NucleiRunner:
     def __init__(self, output_dir="reports"):
         self.output_dir = output_dir
@@ -130,45 +133,49 @@ class NucleiRunner:
         print(f"\033[90m[*] Nuclei targets file: {input_file}\033[0m")
 
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
+            # spawn_tool guarantees process-group teardown on normal exit,
+            # exception, or cancellation; the streaming logic below is unchanged
+            # inside the context.
+            stdout = b""
+            async with proc.spawn_tool(
+                cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+                stderr=asyncio.subprocess.PIPE,
+            ) as process:
 
-            # Stream stderr live so nuclei stats/progress appear in real time
-            async def _stream_stderr():
-                async for raw in process.stderr:
-                    line = raw.decode().strip()
-                    if line:
-                        if dashboard.active:
-                            clean_line = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', line)
-                            # Try parsing as JSON first
-                            try:
-                                stats = json.loads(clean_line)
-                                percent = stats.get("percent")
-                                progress_val = float(percent) if percent is not None else None
-                                reqs = stats.get("requests", 0)
-                                total_reqs = stats.get("total", 0)
-                                rps = stats.get("rps", 0)
-                                matched = stats.get("matched", 0)
-                                duration = stats.get("duration", "")
-                                clean_status = f"Progress: {percent}% | Reqs: {reqs}/{total_reqs} | RPS: {rps} | Matches: {matched} | Duration: {duration}"
-                                dashboard.update_task("nuclei", status=clean_status, progress=progress_val)
-                            except (json.JSONDecodeError, ValueError, TypeError):
-                                clean_line = clean_line.replace('[INF]', '').replace('[stats]', '').strip()
-                                pct_match = re.search(r'(\d+)%', clean_line)
-                                progress_val = None
-                                if pct_match:
-                                    progress_val = float(pct_match.group(1))
-                                dashboard.update_task("nuclei", status=clean_line, progress=progress_val)
-                        else:
-                            print(f"\033[90m[nuclei] {line}\033[0m", flush=True)
+                # Stream stderr live so nuclei stats/progress appear in real time
+                async def _stream_stderr():
+                    async for raw in process.stderr:
+                        line = raw.decode().strip()
+                        if line:
+                            if dashboard.active:
+                                clean_line = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', line)
+                                # Try parsing as JSON first
+                                try:
+                                    stats = json.loads(clean_line)
+                                    percent = stats.get("percent")
+                                    progress_val = float(percent) if percent is not None else None
+                                    reqs = stats.get("requests", 0)
+                                    total_reqs = stats.get("total", 0)
+                                    rps = stats.get("rps", 0)
+                                    matched = stats.get("matched", 0)
+                                    duration = stats.get("duration", "")
+                                    clean_status = f"Progress: {percent}% | Reqs: {reqs}/{total_reqs} | RPS: {rps} | Matches: {matched} | Duration: {duration}"
+                                    dashboard.update_task("nuclei", status=clean_status, progress=progress_val)
+                                except (json.JSONDecodeError, ValueError, TypeError):
+                                    clean_line = clean_line.replace('[INF]', '').replace('[stats]', '').strip()
+                                    pct_match = re.search(r'(\d+)%', clean_line)
+                                    progress_val = None
+                                    if pct_match:
+                                        progress_val = float(pct_match.group(1))
+                                    dashboard.update_task("nuclei", status=clean_line, progress=progress_val)
+                            else:
+                                print(f"\033[90m[nuclei] {line}\033[0m", flush=True)
 
-            stderr_task = asyncio.create_task(_stream_stderr())
-            stdout = await process.stdout.read()
-            await stderr_task
-            await process.wait()
+                stderr_task = asyncio.create_task(_stream_stderr())
+                stdout = await process.stdout.read()
+                await stderr_task
+                await process.wait()
 
             if process.returncode not in (0, None):
                 print(f"\033[93m[!] Nuclei exited with code {process.returncode}.\033[0m")

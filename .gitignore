@@ -3,6 +3,7 @@ __pycache__/
 modules/__pycache__/*
 scripts/__pycache__/
 scan_state_*
+.vaktscan/
 .codex
 recon_results/
 # Added by code-review-graph

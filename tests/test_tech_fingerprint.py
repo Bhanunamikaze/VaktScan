@@ -68,7 +68,7 @@ class FakeProc:
         self._stderr = stderr
         self.returncode = 0
 
-    async def communicate(self):
+    async def communicate(self, input=None):
         return (self._stdout, self._stderr)
 
 

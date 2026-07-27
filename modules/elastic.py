@@ -17,7 +17,7 @@ async def detect_protocol(scan_address, port, timeout=3):
                 response = await client.get(f"{protocol}://{scan_address}:{port}/")
                 if response.status_code in [200, 401, 403, 302, 404]:  # Any valid HTTP response
                     return protocol
-        except:
+        except Exception:
             continue
     return 'http'  # Default to HTTP if detection fails
 

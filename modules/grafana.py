@@ -17,7 +17,7 @@ async def detect_protocol(scan_address, port, timeout=3):
                 response = await client.get(f"{protocol}://{scan_address}:{port}/")
                 if response.status_code in [200, 401, 403, 302, 404]:  # Any valid HTTP response
                     return protocol
-        except:
+        except Exception:
             continue
     return 'http'  # Default to HTTP if detection fails
 
@@ -676,7 +676,7 @@ async def check_information_disclosure(target_url):
                         "target": f"{target_url}/metrics",
                         "details": "Grafana metrics endpoint is publicly accessible, potentially revealing system information."
                     })
-    except:
+    except Exception:
         pass
     
     # Check /api/frontend/settings for sensitive info
@@ -704,9 +704,9 @@ async def check_information_disclosure(target_url):
                         })
                 except:
                     pass
-    except:
+    except Exception:
         pass
-    
+
     return vulnerabilities
 
 async def check_additional_cves(target_url, version_info=None):
@@ -734,7 +734,7 @@ async def check_additional_cves(target_url, version_info=None):
                         "target": f"{target_url}/api/user/password/sent-reset-email",
                         "details": "User enumeration possible via password reset endpoint. Non-existent users return different responses."
                     })
-    except:
+    except Exception:
         pass
     
     # Test CVE-2021-43798 - Path traversal (enhanced payload)
@@ -760,10 +760,10 @@ async def check_additional_cves(target_url, version_info=None):
                                 "details": f"Path traversal successful. Sensitive file (/etc/passwd) accessed without authentication. Version {current_version} is vulnerable."
                             })
                             break
-        except:
+        except Exception:
             pass
-    
-    # Test CVE-2020-13379 - SSRF via avatar endpoint  
+
+    # Test CVE-2020-13379 - SSRF via avatar endpoint
     # Only affects versions >=3.0.1,<7.0.1
     if is_version_affected(current_version, [">=3.0.1,<7.0.1"]):
         try:
@@ -777,7 +777,7 @@ async def check_additional_cves(target_url, version_info=None):
                         "target": f"{target_url}{ssrf_payload}",
                         "details": f"SSRF vulnerability confirmed. Open redirect in avatar endpoint can be chained for SSRF attacks. Version {current_version} is vulnerable."
                     })
-        except:
+        except Exception:
             pass
     
     # Test CVE-2022-32276 - Unauthenticated snapshot access
@@ -803,7 +803,7 @@ async def check_additional_cves(target_url, version_info=None):
                                 "details": f"Unauthenticated access to dashboard snapshots via orgId=0 parameter. Version {current_version} is vulnerable."
                             })
                             break
-        except:
+        except Exception:
             pass
     
     # Test CVE-2021-41174 - AngularJS XSS in snapshot endpoints
@@ -822,9 +822,9 @@ async def check_additional_cves(target_url, version_info=None):
                             "target": f"{target_url}{xss_payload}",
                             "details": f"XSS vulnerability in dashboard snapshot endpoint via AngularJS template injection. Version {current_version} is vulnerable."
                         })
-        except:
+        except Exception:
             pass
-    
+
     return vulnerabilities
 
 async def run_scans(target_obj, port):

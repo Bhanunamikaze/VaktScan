@@ -10,11 +10,15 @@ Covers the two things the resume story hinges on:
   the URLs it had not reached yet (persisted ``completed_web_urls``), keep its
   hostname attribution, and be a first-class phase rather than being skipped.
 
+Post-Phase-4 the state identity is a stable ``scan_id`` derived from the
+normalized target set + scope config (see ``state_key.py``), and state files
+live under ``VAKT_STATE_DIR`` (``./.vaktscan/state`` by default) instead of a
+CWD ``scan_state_<hash>.json``. These tests seed against that scheme.
+
 Everything here is fully offline: network/subprocess collaborators are mocked.
 """
 
 import asyncio
-import hashlib
 import json
 import os
 import shutil
@@ -30,29 +34,45 @@ import main  # noqa: E402
 from scan_state import ScanStateManager  # noqa: E402
 
 
-def _quiet_manager(targets_file, concurrency):
+def _quiet_manager(scan_id, canonical_targets, scope):
     """A ScanStateManager with its background save timer disabled (tests don't
     want a lingering 2-minute daemon thread)."""
-    mgr = ScanStateManager(targets_file, concurrency)
+    mgr = ScanStateManager(scan_id, canonical_targets, scope)
     mgr._shutdown = True
     if mgr._save_timer:
         mgr._save_timer.cancel()
     return mgr
 
 
-def _state_file_for(targets_file, concurrency):
-    h = hashlib.md5(f"{targets_file}_{concurrency}".encode()).hexdigest()[:8]
-    return f"scan_state_{h}.json"
+class _StateDirMixin:
+    """Point state storage at an isolated temp dir via VAKT_STATE_DIR."""
+
+    def _init_state_dir(self):
+        self._prev_env = os.environ.get("VAKT_STATE_DIR")
+        self._state_dir = tempfile.mkdtemp(prefix="vaktscan_state_")
+        os.environ["VAKT_STATE_DIR"] = self._state_dir
+
+    def _restore_state_dir(self):
+        if self._prev_env is None:
+            os.environ.pop("VAKT_STATE_DIR", None)
+        else:
+            os.environ["VAKT_STATE_DIR"] = self._prev_env
+        shutil.rmtree(self._state_dir, ignore_errors=True)
+
+    def _state_path(self, scan_id):
+        return os.path.join(self._state_dir, f"{scan_id}.json")
 
 
-class _TempCwd(unittest.TestCase):
+class _TempCwd(_StateDirMixin, unittest.TestCase):
     def setUp(self):
         self._cwd = os.getcwd()
         self._tmp = tempfile.mkdtemp(prefix="vaktscan_resume_")
         os.chdir(self._tmp)
+        self._init_state_dir()
 
     def tearDown(self):
         os.chdir(self._cwd)
+        self._restore_state_dir()
         shutil.rmtree(self._tmp, ignore_errors=True)
 
 
@@ -60,23 +80,25 @@ class _TempCwd(unittest.TestCase):
 # Root cause: --resume must load persisted state
 # ---------------------------------------------------------------------------
 class DecideResumeTest(_TempCwd):
-    def _seed(self, targets_file="targets.txt", concurrency=100):
-        open(targets_file, "w").write("192.0.2.10\n")
-        seed = _quiet_manager(targets_file, concurrency)
+    SCAN_ID = "targets-deadbeefcafed00d"
+    CANON = ["192.0.2.10"]
+    SCOPE = "scope-sig-A"
+
+    def _seed(self):
+        seed = _quiet_manager(self.SCAN_ID, self.CANON, self.SCOPE)
         seed.state["phase"] = "vulnerability_scanning_complete"
         seed.state["open_ports"] = {"192.0.2.10": [80, 443]}
         seed.state["vulnerabilities"] = [{"vulnerability": "seeded", "target": "192.0.2.10"}]
         seed.save_state(force=True)
-        return targets_file, concurrency
 
     def test_resume_flag_still_loads_saved_state(self):
-        """The regression: --resume (flag=True) must restore the saved phase/ports,
-        not short-circuit past the load and start fresh."""
-        targets_file, concurrency = self._seed()
-        mgr = _quiet_manager(targets_file, concurrency)
+        """The regression: --resume ("require" mode) must restore the saved
+        phase/ports, not short-circuit past the load and start fresh."""
+        self._seed()
+        mgr = _quiet_manager(self.SCAN_ID, self.CANON, self.SCOPE)
         self.assertEqual(mgr.state["phase"], "initializing")  # fresh before load
 
-        is_resume = main._decide_resume(mgr, resume_flag=True)
+        is_resume = main._decide_resume(mgr, "require")
 
         self.assertTrue(is_resume)
         self.assertEqual(mgr.state["phase"], "vulnerability_scanning_complete")
@@ -84,19 +106,19 @@ class DecideResumeTest(_TempCwd):
         self.assertEqual(len(mgr.state["vulnerabilities"]), 1)
 
     def test_auto_detect_without_flag_also_resumes(self):
-        targets_file, concurrency = self._seed()
-        mgr = _quiet_manager(targets_file, concurrency)
-        is_resume = main._decide_resume(mgr, resume_flag=False)
+        self._seed()
+        mgr = _quiet_manager(self.SCAN_ID, self.CANON, self.SCOPE)
+        is_resume = main._decide_resume(mgr, "auto")
         self.assertTrue(is_resume)
         self.assertEqual(mgr.state["phase"], "vulnerability_scanning_complete")
 
     def test_no_state_file_starts_fresh(self):
-        open("targets.txt", "w").write("192.0.2.10\n")
-        mgr = _quiet_manager("targets.txt", 100)
-        self.assertFalse(main._decide_resume(mgr, resume_flag=False))
-        # A --resume with nothing to resume from is treated as resume-mode but
-        # simply has no saved state to restore (phase stays fresh).
-        self.assertTrue(main._decide_resume(mgr, resume_flag=True))
+        mgr = _quiet_manager(self.SCAN_ID, self.CANON, self.SCOPE)
+        # Auto-resume with nothing to resume from just starts fresh.
+        self.assertFalse(main._decide_resume(mgr, "auto"))
+        # --resume ("require") with nothing to resume MUST error out (Phase 5).
+        with self.assertRaises(SystemExit):
+            main._decide_resume(mgr, "require")
         self.assertEqual(mgr.state["phase"], "initializing")
 
 
@@ -105,51 +127,92 @@ class DecideResumeTest(_TempCwd):
 # silently masquerade as a valid resume.
 # ---------------------------------------------------------------------------
 class CorruptStateFailSafeTest(_TempCwd):
+    SCAN_ID = "targets-0011223344556677"
+    CANON = ["192.0.2.10"]
+    SCOPE = "scope-sig-A"
+
     def test_corrupt_json_starts_fresh(self):
-        open("targets.txt", "w").write("192.0.2.10\n")
-        with open(_state_file_for("targets.txt", 100), "w") as f:
+        with open(self._state_path(self.SCAN_ID), "w") as f:
             f.write("{ this is not valid json ")
-        mgr = _quiet_manager("targets.txt", 100)
+        mgr = _quiet_manager(self.SCAN_ID, self.CANON, self.SCOPE)
         # Must not raise, must report "fresh", must keep default state intact.
         self.assertFalse(mgr.load_existing_state())
         self.assertEqual(mgr.state["phase"], "initializing")
         self.assertEqual(mgr.state["open_ports"], {})
 
     def test_state_for_different_targets_is_ignored(self):
-        open("targets.txt", "w").write("192.0.2.10\n")
-        with open(_state_file_for("targets.txt", 100), "w") as f:
-            json.dump({"targets_file": "someone_elses.txt", "concurrency": 100,
+        # Same scan_id on disk but DIFFERENT canonical targets => collision:
+        # must NOT resume and must NOT clobber the stored state.
+        with open(self._state_path(self.SCAN_ID), "w") as f:
+            json.dump({"canonical_targets": ["203.0.113.9"], "scope": self.SCOPE,
                        "phase": "port_scanning_complete"}, f)
-        mgr = _quiet_manager("targets.txt", 100)
+        mgr = _quiet_manager(self.SCAN_ID, self.CANON, self.SCOPE)
+        self.assertFalse(mgr.load_existing_state())
+        self.assertEqual(mgr.state["phase"], "initializing")
+        # Writes were relocated to <id>-1.json so the old state is preserved.
+        self.assertTrue(mgr.state_file.endswith(f"{self.SCAN_ID}-1.json"))
+
+    def test_state_for_different_scope_is_ignored(self):
+        with open(self._state_path(self.SCAN_ID), "w") as f:
+            json.dump({"canonical_targets": self.CANON, "scope": "scope-sig-B",
+                       "phase": "port_scanning_complete"}, f)
+        mgr = _quiet_manager(self.SCAN_ID, self.CANON, self.SCOPE)
         self.assertFalse(mgr.load_existing_state())
         self.assertEqual(mgr.state["phase"], "initializing")
 
     def test_old_state_without_web_urls_key_loads(self):
-        """State files written before the web-probe checkpoint existed must still
-        load (backward compatibility)."""
-        open("targets.txt", "w").write("192.0.2.10\n")
-        with open(_state_file_for("targets.txt", 100), "w") as f:
-            json.dump({"targets_file": "targets.txt", "concurrency": 100,
+        """A state written before the web-probe checkpoint existed must still load
+        (backward compatibility) as long as its identity matches."""
+        with open(self._state_path(self.SCAN_ID), "w") as f:
+            json.dump({"canonical_targets": self.CANON, "scope": self.SCOPE,
                        "phase": "port_scanning_complete",
                        "open_ports": {"192.0.2.10": [80]}}, f)
-        mgr = _quiet_manager("targets.txt", 100)
+        mgr = _quiet_manager(self.SCAN_ID, self.CANON, self.SCOPE)
         self.assertTrue(mgr.load_existing_state())
         self.assertEqual(mgr.get_completed_web_urls(), set())
+
+
+# ---------------------------------------------------------------------------
+# Legacy migration shim: a lone pre-Phase-4 CWD scan_state_*.json is adopted.
+# ---------------------------------------------------------------------------
+class LegacyMigrationShimTest(_TempCwd):
+    def test_single_legacy_cwd_state_is_migrated(self):
+        # Pre-Phase-4 file in the CWD, keyed off the old md5 scheme.
+        with open("scan_state_deadbeef.json", "w") as f:
+            json.dump({"targets_file": "targets.txt", "concurrency": 100,
+                       "phase": "port_scanning_complete",
+                       "open_ports": {"192.0.2.10": [80]},
+                       "port_scan_progress": {"completed_combinations": 1},
+                       "total_combinations": 1, "vulnerabilities": []}, f)
+        mgr = _quiet_manager("targets-cafebabe0000ffff", ["192.0.2.10"], "scope-sig-A")
+        self.assertTrue(mgr.load_existing_state())
+        self.assertEqual(mgr.state["phase"], "port_scanning_complete")
+        self.assertEqual(mgr.state["open_ports"], {"192.0.2.10": [80]})
+
+    def test_ambiguous_legacy_states_not_guessed(self):
+        for h in ("aaaa", "bbbb"):
+            with open(f"scan_state_{h}.json", "w") as f:
+                json.dump({"phase": "port_scanning", "open_ports": {}}, f)
+        mgr = _quiet_manager("targets-cafebabe0000ffff", ["192.0.2.10"], "scope-sig-A")
+        self.assertFalse(mgr.load_existing_state())
 
 
 # ---------------------------------------------------------------------------
 # State manager: web-probe checkpoint round-trips through disk.
 # ---------------------------------------------------------------------------
 class WebUrlCheckpointStateTest(_TempCwd):
+    SCAN_ID = "targets-1234567890abcdef"
+    CANON = ["192.0.2.10"]
+    SCOPE = "scope-sig-A"
+
     def test_add_and_reload_completed_web_urls(self):
-        open("targets.txt", "w").write("192.0.2.10\n")
-        mgr = _quiet_manager("targets.txt", 100)
+        mgr = _quiet_manager(self.SCAN_ID, self.CANON, self.SCOPE)
         mgr.add_completed_web_urls(["http://a:80", "https://a:443"])
         mgr.add_completed_web_urls(["http://a:80", "http://b:80"])  # dedup
         self.assertEqual(mgr.get_completed_web_urls(),
                          {"http://a:80", "https://a:443", "http://b:80"})
         # Reload from disk in a fresh manager.
-        mgr2 = _quiet_manager("targets.txt", 100)
+        mgr2 = _quiet_manager(self.SCAN_ID, self.CANON, self.SCOPE)
         self.assertTrue(mgr2.load_existing_state())
         self.assertEqual(mgr2.get_completed_web_urls(),
                          {"http://a:80", "https://a:443", "http://b:80"})
@@ -252,14 +315,16 @@ async def _noop_async(*a, **k):
     return None
 
 
-class _MainTempCwd(unittest.TestCase):
+class _MainTempCwd(_StateDirMixin, unittest.TestCase):
     def setUp(self):
         self._cwd = os.getcwd()
         self._tmp = tempfile.mkdtemp(prefix="vaktscan_resume_main_")
         os.chdir(self._tmp)
+        self._init_state_dir()
 
     def tearDown(self):
         os.chdir(self._cwd)
+        self._restore_state_dir()
         shutil.rmtree(self._tmp, ignore_errors=True)
 
 
@@ -267,11 +332,12 @@ class ResumeDoesNotRescanTest(_MainTempCwd):
     def test_resume_skips_portscan_and_keeps_findings(self):
         targets_file, concurrency = "targets.txt", 100
         open(targets_file, "w").write("192.0.2.10\n")
+        scan_id, canon, scope = "targets-a1b2c3d4e5f60718", ["192.0.2.10"], "scope-sig-A"
         seeded = {"status": "VULNERABLE", "vulnerability": "seeded-cve",
                   "target": "192.0.2.10", "details": "d", "url": "http://192.0.2.10"}
-        with open(_state_file_for(targets_file, concurrency), "w") as f:
+        with open(self._state_path(scan_id), "w") as f:
             json.dump({
-                "targets_file": targets_file, "concurrency": concurrency,
+                "scan_id": scan_id, "canonical_targets": canon, "scope": scope,
                 "phase": "vulnerability_scanning_complete",
                 "total_ips": 1, "total_combinations": 1,
                 "port_scan_progress": {"completed_combinations": 1, "scanned_ips": []},
@@ -302,7 +368,8 @@ class ResumeDoesNotRescanTest(_MainTempCwd):
             es.enter_context(mock.patch.object(main, "process_targets", fake_process_targets))
             es.enter_context(mock.patch.object(main, "scan_ports", fake_scan_ports))
             es.enter_context(mock.patch.object(main, "_enrich_and_report", fake_enrich))
-            asyncio.run(main.main(targets_file, concurrency, resume=True))
+            asyncio.run(main.main(targets_file, concurrency, resume=True,
+                                  scan_id=scan_id, canonical_targets=canon, scope=scope))
 
         self.assertFalse(scan_ports_spy.called,
                          "resume must NOT re-run the port scan for an already-scanned state")
@@ -314,10 +381,11 @@ class ResumeWebProbePhaseTest(_MainTempCwd):
     def test_resume_web_probe_skips_completed_and_keeps_hostname(self):
         targets_file, concurrency = "targets.txt", 100
         open(targets_file, "w").write("host.example.com\n")
+        scan_id, canon, scope = "targets-b2c3d4e5f6071829", ["host.example.com"], "scope-sig-A"
         already_done = "http://host.example.com:80"
-        with open(_state_file_for(targets_file, concurrency), "w") as f:
+        with open(self._state_path(scan_id), "w") as f:
             json.dump({
-                "targets_file": targets_file, "concurrency": concurrency,
+                "scan_id": scan_id, "canonical_targets": canon, "scope": scope,
                 "phase": "web_probing",
                 "total_ips": 1, "total_combinations": 1,
                 "port_scan_progress": {"completed_combinations": 1, "scanned_ips": []},
@@ -339,10 +407,11 @@ class ResumeWebProbePhaseTest(_MainTempCwd):
 
         async def fake_probe(urls, output_dir, label, concurrency,
                              completed_urls=None, record_completed=None, batch_size=None,
-                             enable_js_cve=True):
+                             enable_js_cve=True, record_findings=None):
             capture["urls"] = urls
             capture["completed_urls"] = completed_urls
             capture["record_completed"] = record_completed
+            capture["record_findings"] = record_findings
             return []
 
         async def fake_validate(*a, **k):
@@ -356,7 +425,8 @@ class ResumeWebProbePhaseTest(_MainTempCwd):
             es.enter_context(mock.patch.object(main, "validate_service", fake_validate))
             es.enter_context(mock.patch.object(main, "_probe_web_urls", fake_probe))
             es.enter_context(mock.patch.object(main, "_enrich_and_report", _noop_async))
-            asyncio.run(main.main(targets_file, concurrency, resume=True))
+            asyncio.run(main.main(targets_file, concurrency, resume=True,
+                                  scan_id=scan_id, canonical_targets=canon, scope=scope))
 
         # Hostname attribution preserved on resume: URLs use the hostname, not the IP.
         self.assertIn("urls", capture)

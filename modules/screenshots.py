@@ -27,6 +27,7 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 
+from modules import proc as proc_runner
 from modules.progress import heartbeat
 from modules.schema import normalize_finding
 
@@ -164,15 +165,9 @@ def _map_urls_to_images(urls, images):
 # Tool drivers
 # --------------------------------------------------------------------------- #
 async def _run_cmd(cmd, stdin_data=None, timeout=600):
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE if stdin_data is not None else None,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
     payload = stdin_data.encode() if stdin_data is not None else None
-    stdout, stderr = await asyncio.wait_for(proc.communicate(input=payload), timeout=timeout)
-    return proc.returncode, stdout, stderr
+    result = await proc_runner.run_tool(cmd, input=payload, timeout=timeout)
+    return result.returncode, result.stdout, result.stderr
 
 
 def _gowitness_variants(binary, urls_file, shots_dir, concurrency):

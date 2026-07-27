@@ -9,6 +9,7 @@ import subprocess
 from datetime import datetime
 from urllib.parse import urlparse
 
+from modules import proc
 from modules.progress import DashboardProgress
 
 
@@ -116,12 +117,8 @@ class DirEnumerator:
 
         print(f"{Colors.CYAN}[*] Running ffuf for active vhost fuzzing (DirEnumerator)...{Colors.RESET}")
         try:
-            process = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            _, stderr = await process.communicate()
+            result = await proc.run_tool(cmd)
+            stderr = result.stderr
         except Exception as exc:
             print(f"{Colors.RED}[!] Error starting ffuf: {exc}{Colors.RESET}")
             return []
@@ -171,13 +168,13 @@ class DirEnumerator:
             # stdout entirely and capture stderr only for the genuine-failure
             # diagnostics below. This stops dirsearch's noise from leaking onto
             # the LiveDashboard terminal on every URL.
-            process = await asyncio.create_subprocess_shell(
+            result = await proc.run_tool(
                 cmd,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
-                env=current_env.copy()
+                env=current_env.copy(),
             )
-            _, stderr = await process.communicate()
+            stderr = result.stderr
 
             err_text = stderr.decode().strip() if stderr else ""
             output_exists = os.path.exists(output_file)
@@ -188,7 +185,7 @@ class DirEnumerator:
             # counts as success on any exit code too. Success is silent so the
             # dashboard is not redrawn once per URL. Results are read afterward
             # from the output file (via reports_dir), never from stdout.
-            if process.returncode in (0, 1) or output_has_content:
+            if result.returncode in (0, 1) or output_has_content:
                 return output_file
 
             if attempt == 0:
@@ -219,7 +216,7 @@ class DirEnumerator:
             if os.environ.get("VAKT_DEBUG") or not _dashboard_active():
                 if err_text:
                     print(err_text)
-                print(f"{Colors.RED}[!] dirsearch failed for {url} with exit code {process.returncode}.{Colors.RESET}")
+                print(f"{Colors.RED}[!] dirsearch failed for {url} with exit code {result.returncode}.{Colors.RESET}")
             return None
 
         return None

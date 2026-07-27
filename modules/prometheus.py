@@ -17,7 +17,7 @@ async def detect_protocol(scan_address, port, timeout=3):
                 response = await client.get(f"{protocol}://{scan_address}:{port}/")
                 if response.status_code in [200, 401, 403, 302, 404]:  # Any valid HTTP response
                     return protocol
-        except:
+        except Exception:
             continue
     return 'http'  # Default to HTTP if detection fails
 
@@ -138,7 +138,7 @@ async def check_metrics_exposure(target_url):
                             "target": f"{target_url}{endpoint}",
                             "details": details
                         })
-        except:
+        except Exception:
             continue
     
     return vulnerabilities
@@ -162,7 +162,7 @@ async def check_cve_vulnerabilities(target_url):
                         "target": f"{target_url}/graph",
                         "details": "Prometheus graph interface is vulnerable to stored XSS attacks through query parameters."
                     })
-    except:
+    except Exception:
         pass
     
     # CVE-2021-29622 - Open Redirect vulnerability  
@@ -180,7 +180,7 @@ async def check_cve_vulnerabilities(target_url):
                         "target": redirect_payload,
                         "details": "Prometheus redirect functionality can be abused to redirect users to malicious sites."
                     })
-    except:
+    except Exception:
         pass
     
     # Query injection testing (PromQL injection)
@@ -198,7 +198,7 @@ async def check_cve_vulnerabilities(target_url):
                         "target": f"{target_url}/api/v1/query",
                         "details": "PromQL injection vulnerability allows unauthorized file system access."
                     })
-    except:
+    except Exception:
         pass
     
     # ReDoS in metric name validation
@@ -224,7 +224,7 @@ async def check_cve_vulnerabilities(target_url):
                     "target": f"{target_url}/api/v1/query",
                     "details": "Query processing timed out due to ReDoS attack, indicating vulnerability."
                 })
-    except:
+    except Exception:
         pass
     
     return vulnerabilities
@@ -257,7 +257,7 @@ async def check_pprof_endpoints(target_url):
                             "target": f"{target_url}{endpoint}",
                             "details": f"Debug endpoint {endpoint} is publicly accessible and can be used for DoS attacks by consuming server resources."
                         })
-        except:
+        except Exception:
             continue
     
     return vulnerabilities
@@ -299,7 +299,7 @@ async def check_api_endpoints(target_url):
                         sensitive_apis.append(f"{endpoint} ({name})")
                 elif response.status_code in [400, 422]:  # Bad request but endpoint exists
                     exposed_apis.append(f"{endpoint} ({name})")
-        except:
+        except Exception:
             continue
     
     if exposed_apis:
@@ -339,9 +339,9 @@ async def get_prometheus_version(target_url):
                         return version_info
                 except:
                     pass
-    except:
+    except Exception:
         pass
-    
+
     # Try to extract from main page
     try:
         async with httpx.AsyncClient(timeout=10, verify=False) as client:
@@ -352,9 +352,9 @@ async def get_prometheus_version(target_url):
                 if version_match:
                     version_info['version'] = version_match.group(1)
                     return version_info
-    except:
+    except Exception:
         pass
-    
+
     return version_info
 
 def parse_version(version_str):
@@ -530,7 +530,7 @@ async def check_node_exporter_metrics(scan_address, port=9100):
                             pprof_response = await client.get(f"{target_url}{endpoint}", timeout=3)
                             if pprof_response.status_code == 200:
                                 accessible_endpoints.append(endpoint)
-                        except:
+                        except Exception:
                             continue
                     
                     if accessible_endpoints:

@@ -65,6 +65,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from modules import proc as proc_runner
 from modules.progress import DashboardProgress
 from modules.schema import normalize_finding
 
@@ -287,14 +288,8 @@ async def _run_webanalyze(binary: str, url: str, sem: asyncio.Semaphore,
         cmd += ["-apps", apps]
     try:
         async with sem:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=_WEBANALYZE_TIMEOUT
-            )
+            result = await proc_runner.run_tool(cmd, timeout=_WEBANALYZE_TIMEOUT)
+            stdout, _stderr = result.stdout, result.stderr
     except Exception:
         return []
 

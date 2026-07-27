@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 
+from modules import proc
 from modules.progress import heartbeat
 from modules.schema import normalize_finding
 
@@ -268,19 +269,13 @@ async def _run_capture(cmd, stdin_bytes=None):
     output so a single tool failure cannot take down the whole expansion.
     """
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE if stdin_bytes is not None else None,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await process.communicate(input=stdin_bytes)
+        result = await proc.run_tool(cmd, input=stdin_bytes)
     except (OSError, ValueError) as exc:
         _skip(f"{cmd[0]} failed to run: {exc}")
         return "", ""
     return (
-        (stdout or b"").decode(errors="replace"),
-        (stderr or b"").decode(errors="replace"),
+        result.stdout.decode(errors="replace"),
+        result.stderr.decode(errors="replace"),
     )
 
 

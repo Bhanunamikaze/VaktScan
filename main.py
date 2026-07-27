@@ -90,6 +90,7 @@ from modules import (
     default_creds,
     notify,
     asset_classifier,
+    proc,
 )
 
 # Exceptions that indicate a programming bug rather than an environmental,
@@ -690,7 +691,7 @@ WEB_PROBE_CHECKPOINT_BATCH = 50
 
 async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
                           completed_urls=None, record_completed=None, batch_size=None,
-                          enable_js_cve=True):
+                          enable_js_cve=True, record_findings=None):
     """httpx-probe the given URLs, then run nuclei + web_checks + dirsearch + JS
     path extraction on the alive ones. Returns the collected findings (dirsearch
     writes its own reports). Shared by the normal scan and (opt-in) streaming mode.
@@ -700,6 +701,15 @@ async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
     ``record_completed(batch)`` is invoked so an interrupted web-probe resumes
     from the URLs it had not reached yet. When no checkpoint hooks are supplied
     the whole set is probed as one batch (unchanged behavior).
+
+    ``record_findings`` (optional): when supplied, each batch's findings are
+    persisted via this callback *before* the batch's URLs are marked completed,
+    and are NOT included in the returned list (the caller must not re-add them).
+    Because no ``await`` runs between persisting a batch's findings and marking
+    its URLs done, a cancellation (only injected at await points) can never land
+    between the two - so a batch's findings and its completed-URL checkpoint are
+    written atomically w.r.t. interrupt, preventing the loss of findings whose
+    URLs would otherwise be skipped on resume.
     """
     findings = []
     if not web_probe_urls:
@@ -725,8 +735,20 @@ async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
         batches = [web_probe_urls]
 
     for batch in batches:
-        findings.extend(await _run_web_probe_batch(
-            batch, output_dir, domain_label, concurrency, enable_js_cve=enable_js_cve))
+        batch_findings = await _run_web_probe_batch(
+            batch, output_dir, domain_label, concurrency, enable_js_cve=enable_js_cve)
+        # Persist this batch's findings BEFORE marking its URLs complete. No
+        # await separates these two synchronous steps, so an interrupt (injected
+        # only at await points) cannot land between them: the batch's findings
+        # and its completed-URL checkpoint are written together w.r.t. cancel.
+        # Without this, batch 1's URLs get checkpointed (and skipped on resume)
+        # while its findings - buffered for a bulk add after the whole call -
+        # are discarded when a later batch is interrupted, losing them forever.
+        if record_findings is not None:
+            for _f in batch_findings:
+                record_findings(_f)
+        else:
+            findings.extend(batch_findings)
         if record_completed is not None:
             # Mark the batch done only after its full pipeline finished.
             record_completed(batch)
@@ -941,23 +963,68 @@ async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_ou
     return final_vulnerabilities
 
 
-def _decide_resume(state_manager, resume_flag):
-    """Decide whether this run is a resume, ALWAYS loading persisted state first.
+def _decide_resume(state_manager, resume_mode="auto"):
+    """Decide whether this run resumes persisted state, per the Phase-5 UX.
 
-    ``load_existing_state()`` restores saved progress (phase, open ports, findings)
-    as a side effect, so it MUST run even when ``--resume`` is passed. The previous
-    ``resume or state_manager.load_existing_state()`` short-circuited when the flag
-    was set, so the documented way to resume (``--resume``) silently skipped the
-    load and restarted the scan from scratch.
+    ``resume_mode`` is one of:
+
+    * ``"auto"`` (default) - recompute the scan id and resume IF a matching,
+      non-completed state exists; a finished scan is reset to a clean start.
+    * ``"fresh"`` (``--fresh`` / ``--no-resume``) - ignore & overwrite any
+      existing state; never load.
+    * ``"require"`` (``--resume``) - a resumable state MUST exist; error out
+      (``SystemExit``) if none is found.
+    * ``"id"`` (``--resume-id``) - like ``require`` but the id was forced; a
+      stored targets/scope mismatch is refused (point the user at ``--fresh``).
+
+    ``load_existing_state()`` restores saved progress (phase, open ports,
+    findings) as a side effect, so it MUST run for every resuming mode.
     """
-    loaded = state_manager.load_existing_state()
-    return bool(resume_flag or loaded)
+    if resume_mode == "fresh":
+        # Overwrite: don't load anything; the default state is already clean.
+        state_manager.reset_to_fresh()
+        return False
+
+    strict = (resume_mode == "id")
+    loaded = state_manager.load_existing_state(strict=strict)
+
+    if resume_mode == "auto":
+        if loaded and state_manager.state.get("completed"):
+            # A completed scan is not resumable - start fresh instead.
+            print(f"{Colors.CYAN}[*] Matching scan already completed; starting fresh.{Colors.RESET}")
+            state_manager.reset_to_fresh()
+            return False
+        if loaded:
+            print(f"{Colors.CYAN}[*] Found resumable state '{state_manager.scan_id}' "
+                  f"(phase: {state_manager.state.get('phase')}); auto-resuming. "
+                  f"Use --fresh to start over.{Colors.RESET}")
+        return loaded
+
+    # require / id: a resumable state is mandatory.
+    if not loaded:
+        if strict and getattr(state_manager, "identity_mismatch", False):
+            print(f"{Colors.RED}[!] --resume-id '{state_manager.scan_id}': the stored scan's "
+                  f"targets/scope differ from this command. Refusing to resume a scope "
+                  f"mismatch.{Colors.RESET}")
+            print(f"{Colors.YELLOW}    Re-run with the original target/flags, or use --fresh "
+                  f"to start a new scan.{Colors.RESET}")
+        else:
+            which = "--resume-id" if strict else "--resume"
+            print(f"{Colors.RED}[!] {which}: no resumable state found for this scan.{Colors.RESET}")
+            print(f"{Colors.YELLOW}    Use 'scan --list-resumable' to see resumable scans, "
+                  f"or omit {which} to start fresh.{Colors.RESET}")
+        sys.exit(1)
+    return loaded
 
 
 async def main(
     targets_file,
     concurrency,
     resume=False,
+    fresh=False,
+    resume_id=None,
+    primary_target=None,
+    non_scope_config=None,
     module_filter=None,
     custom_ports=None,
     chunk_size=30000,
@@ -991,6 +1058,9 @@ async def main(
     include_only_patterns=None,
     company_only=False,
     shared_ip_threshold=10,
+    scan_id=None,
+    canonical_targets=None,
+    scope=None,
 ):
     """
     Main orchestrator for the scanning tool.
@@ -1000,16 +1070,11 @@ async def main(
     _is_excluded = build_exclusion_matcher(exclude_patterns)
     # Predicate: host -> True when it matches an --include-only allowlist pattern.
     _include_only = build_exclusion_matcher(include_only_patterns) if include_only_patterns else None
-    # Set up signal handlers
-    def signal_handler():
-        print(f"\n[!] Received interrupt signal. Shutting down gracefully...")
-        raise KeyboardInterrupt
-    
-    if sys.platform != 'win32':
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, signal_handler)
-    
+    # Signal handling is installed by run_command() in __main__ (single top-level
+    # runner that cancels the main task on the first Ctrl+C and force-quits on the
+    # second). The old per-scan add_signal_handler that raised KeyboardInterrupt
+    # inside a loop callback did not propagate into awaiting coroutines.
+
     print_logo()
     
     # Auto-sync Nuclei templates on scan start
@@ -1022,11 +1087,9 @@ async def main(
     nuclei_vulns_found = False
     recon_targets_file = None
     recon_targets_count = 0
-    # Findings discovered during the reconnaissance phase are buffered here and
-    # flushed into `state_manager` once it exists. The recon block runs before
-    # `state_manager` is created (it is built from the recon-derived targets
-    # file), so it must not reference `state_manager` directly.
-    recon_phase_findings = []
+    # Recon findings are persisted straight into state_manager.add_vulnerability
+    # (force-saves) as they are discovered - state_manager is now built BEFORE
+    # the recon block (Phase 6), so an interrupt mid-recon still checkpoints.
     # Set once the recon phase has already run the full web pipeline
     # (httpx→dirsearch→nuclei→web_checks→js→nmap) via run_recon_followups, so the
     # main scan can skip re-probing the identical hosts (avoids ~2x work).
@@ -1357,26 +1420,119 @@ async def main(
                 print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
         return
 
+    # ------------------------------------------------------------------
+    # Durable state manager - constructed EARLY (Phase 6), before the
+    # reconnaissance block, so recon findings persist as they are discovered
+    # (add_vulnerability force-saves) and an interrupt mid-recon still leaves a
+    # resumable checkpoint. The old design built state_manager only after recon,
+    # buffering findings in a volatile list that Ctrl+C during enumeration lost.
+    #
+    # cmd_scan precomputes scan_id / canonical_targets / scope from the ORIGINAL
+    # target + scope config (independent of the recon-derived temp targets file),
+    # so resume works for every target type; fall back to deriving them from
+    # targets_file for any direct main() caller that does not supply them.
+    if scan_id is None:
+        from state_key import (
+            canonical_targets as _ct,
+            scope_signature as _ss,
+            compute_scan_id as _cid,
+        )
+        try:
+            canonical_targets = _ct('file', targets_file, parse_targets_file)
+        except Exception:
+            # A malformed/unreadable targets file must not abort scan_id
+            # derivation; degrade to a path-based identity (still deterministic).
+            canonical_targets = [os.path.abspath(targets_file)] if targets_file else ["recon"]
+        scope = _ss({
+            "module_filter": module_filter,
+            "ports": custom_ports,
+            "no_subdomain_enum": recon_domains is None,
+            "dns_permute": dns_permute,
+            "dns_hygiene": dns_hygiene,
+            "dns_takeover": dns_takeover,
+            "company_only": company_only,
+            "shared_ip_threshold": shared_ip_threshold,
+            "horizontal": enable_horizontal,
+            "archived_scan": archived_scan,
+            "stream_web_probe": stream_web_probe,
+            "extra_scans": list(extra_scans) if extra_scans else [],
+            "nmap": nmap_enabled,
+            "no_dork": no_dork,
+            "exclude": exclude_patterns,
+            "include_only": include_only_patterns,
+        })
+        _id_label = (os.path.splitext(os.path.basename(targets_file))[0] if targets_file
+                     else (recon_domains[0] if recon_domains else "recon"))
+        scan_id = _cid(_id_label, canonical_targets, scope)
+
+    # Phase-5 resume UX. A forced --resume-id overrides the target-derived id so
+    # a specific saved scan can be resumed; the load stays strict (a stored
+    # targets/scope mismatch is refused rather than silently forked).
+    if resume_id:
+        scan_id = resume_id
+    if fresh:
+        resume_mode = "fresh"
+    elif resume_id:
+        resume_mode = "id"
+    elif resume:
+        resume_mode = "require"
+    else:
+        resume_mode = "auto"
+
+    # Non-scope settings ride along in the state so a change on resume can warn
+    # and adopt the new value (never changes the scan identity).
+    if non_scope_config is None:
+        non_scope_config = {
+            "concurrency": concurrency,
+            "connect_timeout": connect_timeout,
+            "port_retries": port_retries,
+            "recon_concurrency": recon_concurrency,
+            "chunk_size": chunk_size,
+            "js_timeout": js_timeout,
+        }
+    if primary_target is None:
+        primary_target = (canonical_targets[0] if canonical_targets
+                          else os.path.splitext(os.path.basename(targets_file or "recon"))[0])
+    state_manager = ScanStateManager(scan_id, canonical_targets, scope,
+                                     non_scope_config=non_scope_config,
+                                     primary_target=primary_target)
+
+    # Load persisted state (or reset for --fresh) BEFORE recon runs, so recon
+    # findings/phase writes build on the resumed state instead of being clobbered
+    # by a later load - and a genuinely fresh run does not mistake its own
+    # in-progress recon writes for a resumable scan.
+    is_resume = _decide_resume(state_manager, resume_mode)
+    if is_resume:
+        print(f"{Colors.CYAN}[*] Resuming VaktScan...{Colors.RESET}")
+    else:
+        print(f"{Colors.CYAN}[*] Starting VaktScan - Nordic Security Scanner...{Colors.RESET}")
+
     # --- RECONNAISSANCE MODE (-m recon or --sub-domains WITH a recon domain) ---
     recon_targets_label = None
     if recon_domains:
+        # Recon is its own resumable phase now (state_manager already exists).
+        # Advance to "recon" only from a clean start so a resume that is already
+        # past recon is never regressed to an earlier phase.
+        if state_manager.state.get("phase") == "initializing":
+            state_manager.update_phase("recon")
+
         def _persist_orphan_recon_findings():
-            """Persist passive-recon findings that were buffered before
-            state_manager exists, when main() is about to return early (e.g. no
-            subdomains discovered). Without this, findings like subdomain
-            takeovers, exposed buckets, or CT alerts would be silently dropped
-            on the 'no usable targets' path."""
-            if not recon_phase_findings:
+            """On an early return (e.g. no subdomains discovered), also drop the
+            recon findings - already persisted in state_manager - into a CSV so
+            takeovers/exposed buckets/CT alerts remain visible even though the
+            main scan never runs. Findings live in state now (add_vulnerability
+            force-saves), so this reads them from there rather than a buffer."""
+            _found = state_manager.get_vulnerabilities()
+            if not _found:
                 return
             passive_dir = os.path.join("reports", "passive_recon")
             os.makedirs(passive_dir, exist_ok=True)
             csv_file = save_results_to_csv(
-                list(recon_phase_findings),
+                list(_found),
                 filename=os.path.join(passive_dir, f"passive_findings_{time.strftime('%Y%m%d_%H%M%S')}.csv"),
             )
             if csv_file:
                 print(f"{Colors.GREEN}[+] Passive recon findings saved: {csv_file}{Colors.RESET}")
-            recon_phase_findings.clear()
 
         normalized_domains = []
         seen_domains = set()
@@ -1418,25 +1574,35 @@ async def main(
             except OSError as exc:
                 print(f"{Colors.RED}[!] Failed to write normalized subdomain file: {exc}{Colors.RESET}")
                 return
-            print(f"{Colors.GRAY}[*] Using provided subdomain list '{subdomains_file}'. Skipping passive recon and starting with HTTP probing.{Colors.RESET}")
-            recon_findings = await run_recon_followups(
-                unique_subdomains,
-                recon_domain,
-                domain_output_dir,
-                concurrency,
-                nmap_enabled,
-                wordlist,
-                connect_timeout,
-                port_retries,
-                enable_archived=archived_scan,
-                enable_screenshots=enable_screenshots,
-                extra_scans=extra_scans,
-                enable_js_cve=js_cve_scan,
-            )
-            if recon_findings:
-                print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {recon_domain}{Colors.RESET}")
-                for _f in recon_findings:
-                    recon_phase_findings.append(_f)
+            # Resume skip (Phase 6): if this domain's HTTP-probe pipeline already
+            # completed on a prior run, do NOT re-run it - that would re-add all
+            # its findings (add_vulnerability does not dedup). The subdomain set
+            # is the user-provided file (unchanged), so we reuse dedup_file.
+            if recon_domain in state_manager.get_completed_recon_domains():
+                print(f"{Colors.CYAN}[*] Resume: recon for {recon_domain} already complete; "
+                      f"skipping HTTP-probe pipeline ({len(unique_subdomains)} subdomain(s)).{Colors.RESET}")
+            else:
+                print(f"{Colors.GRAY}[*] Using provided subdomain list '{subdomains_file}'. Skipping passive recon and starting with HTTP probing.{Colors.RESET}")
+                recon_findings = await run_recon_followups(
+                    unique_subdomains,
+                    recon_domain,
+                    domain_output_dir,
+                    concurrency,
+                    nmap_enabled,
+                    wordlist,
+                    connect_timeout,
+                    port_retries,
+                    enable_archived=archived_scan,
+                    enable_screenshots=enable_screenshots,
+                    extra_scans=extra_scans,
+                    enable_js_cve=js_cve_scan,
+                )
+                if recon_findings:
+                    print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {recon_domain}{Colors.RESET}")
+                    for _f in recon_findings:
+                        state_manager.add_vulnerability(_f)
+                # Checkpoint so a resume skips this domain's pipeline (Phase 6).
+                state_manager.mark_recon_domain_done(recon_domain, unique_subdomains)
             recon_web_probed = True  # run_recon_followups already probed these hosts
             recon_targets_file = dedup_file
             recon_targets_count = len(unique_subdomains)
@@ -1452,6 +1618,28 @@ async def main(
                       f"(set VAKT_RECON_TOOL_LIMIT to adjust).{Colors.RESET}")
 
             async def handle_domain(domain):
+                # Resume skip (Phase 6): if this domain's recon pipeline already
+                # completed on a prior run, do NOT re-run it. Re-running re-adds
+                # every recon finding (add_vulnerability does not dedup), so each
+                # resume would duplicate findings and inflate the count. Rebuild
+                # the downstream target set from the checkpointed subdomains.
+                if domain in state_manager.get_completed_recon_domains():
+                    _subs = state_manager.get_recon_subdomains(domain)
+                    _safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in domain.lower())
+                    _dir = os.path.join("reports", _safe or "domain")
+                    os.makedirs(_dir, exist_ok=True)
+                    _f = os.path.join(_dir, f"resumed_subdomains_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+                    try:
+                        with open(_f, "w", encoding="utf-8") as _h:
+                            for _s in _subs:
+                                _h.write(f"{_s}\n")
+                    except OSError:
+                        pass
+                    print(f"{Colors.CYAN}[*] Resume: recon for {domain} already complete; "
+                          f"skipping pipeline ({len(_subs)} subdomain(s) from checkpoint).{Colors.RESET}")
+                    if not _subs:
+                        return None
+                    return {"domain": domain, "file": _f, "count": len(_subs), "subdomains": _subs}
                 if not dashboard.active:
                     print(f"{Colors.CYAN}[*] Enumerating subdomains for {domain}...{Colors.RESET}")
                 is_detailed = (len(normalized_domains) == 1)
@@ -1483,12 +1671,12 @@ async def main(
                 if isinstance(dork_findings, list) and dork_findings:
                     print(f"{Colors.GREEN}[+] Google Dork: {len(dork_findings)} finding(s) for {domain}{Colors.RESET}")
                     for _df in dork_findings:
-                        recon_phase_findings.append(_df)
+                        state_manager.add_vulnerability(_df)
                 elif isinstance(dork_findings, Exception):
                     print(f"{Colors.YELLOW}[!] Google Dork error for {domain}: {dork_findings}{Colors.RESET}")
 
                 for _f in dns_findings + cloud_findings + ct_findings:
-                    recon_phase_findings.append(_f)
+                    state_manager.add_vulnerability(_f)
                 if dns_findings:
                     print(f"{Colors.GREEN}[+] DNS recon: {len(dns_findings)} finding(s) for {domain}{Colors.RESET}")
                 if cloud_findings:
@@ -1544,7 +1732,7 @@ async def main(
                         shared_ip_threshold=shared_ip_threshold, concurrency=concurrency,
                     )
                     for _cf in _cls.get("findings", []):
-                        recon_phase_findings.append(_cf)
+                        state_manager.add_vulnerability(_cf)
                     if _cls.get("customer"):
                         subdomains = _cls["company"]
                         if not subdomains:
@@ -1557,7 +1745,7 @@ async def main(
                 if enable_horizontal:
                     _expansion = await horizontal_expand.expand_horizontal([domain], domain_output_dir)
                     for _hf in _expansion.get("findings", []):
-                        recon_phase_findings.append(_hf)
+                        state_manager.add_vulnerability(_hf)
                     _rh, _rd = len(_expansion.get("reverse_hosts", [])), len(_expansion.get("related_domains", []))
                     if _rh or _rd:
                         print(f"{Colors.GREEN}[+] Horizontal expansion: {_rd} related domain(s), "
@@ -1572,7 +1760,7 @@ async def main(
                         subdomains, [domain], domain_output_dir, concurrency, permute=dns_permute
                     )
                     for _f in _dns.get("findings", []):
-                        recon_phase_findings.append(_f)
+                        state_manager.add_vulnerability(_f)
                     if _dns.get("resolved"):
                         _before = len(subdomains)
                         subdomains = _dns["resolved"]
@@ -1585,7 +1773,7 @@ async def main(
                 if dns_takeover and subdomains:
                     _dangling = await dns_recon.check_dangling_cnames(subdomains, concurrency=concurrency)
                     for _df in _dangling:
-                        recon_phase_findings.append(_df)
+                        state_manager.add_vulnerability(_df)
 
                 if scan_found:
                     recon_findings = await run_recon_followups(
@@ -1605,9 +1793,13 @@ async def main(
                     if recon_findings:
                         print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {domain}{Colors.RESET}")
                         for _f in recon_findings:
-                            recon_phase_findings.append(_f)
+                            state_manager.add_vulnerability(_f)
                 else:
                     print(f"{Colors.GRAY}[*] Recon ({domain}) complete. Use --scan-found to automatically probe recon targets (httpx → dirsearch → nuclei).{Colors.RESET}")
+                # Checkpoint this domain's recon as finished (Phase 6), storing
+                # the final subdomain set so a resume can skip re-running the
+                # pipeline yet still rebuild this domain's target list.
+                state_manager.mark_recon_domain_done(domain, subdomains)
                 return {
                     "domain": domain,
                     "file": results_file,
@@ -1685,6 +1877,10 @@ async def main(
             f"{Colors.CYAN}[*] Continuing with full service scanning for {recon_targets_count} recon target(s) "
             f"from {recon_targets_label}.{Colors.RESET}"
         )
+        # Recon finished and yielded scannable targets (Phase 6). Advance only
+        # from recon/initializing so a resume already past recon is not regressed.
+        if state_manager.state.get("phase") in ("initializing", "recon"):
+            state_manager.update_phase("recon_complete")
 
     # --- MAIN SCANNING LOGIC ---
     if not targets_file:
@@ -1692,29 +1888,15 @@ async def main(
         print("Usage: python main.py <targets_file> OR python main.py --recon <domain>")
         return
 
-    # Initialize state manager
-    state_manager = ScanStateManager(targets_file, concurrency)
-
-    # Flush any findings buffered during the reconnaissance phase (which runs
-    # before state_manager exists) into the now-initialized state manager.
-    if recon_phase_findings:
-        for _rf in recon_phase_findings:
-            state_manager.add_vulnerability(_rf)
-        recon_phase_findings.clear()
+    # state_manager was constructed and state loaded EARLY (before the recon
+    # block, Phase 6) so recon findings persist immediately; scan_id /
+    # canonical_targets / scope / resume_mode / is_resume are already resolved.
 
     # Inventory: initialise DB and open a new scan run
     inventory.init_db()
     run_id = inventory.start_scan_run(targets_file or 'recon')
 
     try:
-        # Load existing state or start fresh
-        is_resume = _decide_resume(state_manager, resume)
-        
-        if is_resume:
-            print(f"{Colors.CYAN}[*] Resuming VaktScan...{Colors.RESET}")
-        else:
-            print(f"{Colors.CYAN}[*] Starting VaktScan - Nordic Security Scanner...{Colors.RESET}")
-
         # 1. Process targets - use robust parser (handles schemas, comments,
         #    inline comments, commas, tabs, BOM, encoding issues, etc.)
         raw_targets = parse_targets_file(targets_file)
@@ -1835,7 +2017,8 @@ async def main(
         domain_label = os.path.splitext(os.path.basename(targets_file))[0]
 
         # --- STANDARD PORT SCAN LOGIC ---
-        if state_manager.state["phase"] in ["initializing", "target_processing_complete", "port_scanning"]:
+        if state_manager.state["phase"] in ["initializing", "recon", "recon_complete",
+                                             "target_processing_complete", "port_scanning"]:
             # process_targets emits both a hostname object and a bare-IP object per
             # host (both connect to the same resolved IP), which doubles the port
             # scan AND every downstream per-service module run. De-duplicate by
@@ -1952,6 +2135,11 @@ async def main(
                 record_completed=state_manager.add_completed_web_urls,
                 batch_size=WEB_PROBE_CHECKPOINT_BATCH,
                 enable_js_cve=js_cve_scan,
+                # Persist each batch's findings atomically with its completed-URL
+                # checkpoint (see _probe_web_urls) so an interrupt can't lose the
+                # findings of an already-checkpointed batch. With this hook the
+                # returned list is empty, so there is nothing to re-add below.
+                record_findings=state_manager.add_vulnerability,
             )
             for _wf in web_findings:
                 state_manager.add_vulnerability(_wf)
@@ -1960,16 +2148,24 @@ async def main(
             print(f"{Colors.GRAY}[*] Skipping web re-probe - recon already ran "
                   f"httpx/nuclei/web-checks/dirsearch/JS on these hosts.{Colors.RESET}")
 
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # First Ctrl+C cancels the main task -> CancelledError unwinds here.
+        # Force-save the checkpoint, then RE-RAISE so the top-level run_command
+        # runner observes the cancellation and tears down child process groups.
         print(f"\n[!] Scan interrupted. Saving final state...")
-        state_manager.flush_pending_saves()
+        state_manager.save_state(force=True)
         print(f"[+] State saved to {state_manager.state_file}")
         print("[!] Use --resume to continue this scan later.")
-        return
+        raise
+    finally:
+        # Durable checkpoint independent of the 2-minute timer / atexit hook,
+        # on cancellation, error, or normal completion of the phase body.
+        state_manager.save_state(force=True)
 
     # 3. Validate services and create tasks for service-specific scanners
     if state_manager.state["phase"] in ["port_scanning_complete", "web_probing_complete",
-                                        "full_port_scanning", "service_validation"]:
+                                        "full_port_scanning", "service_validation",
+                                        "vulnerability_scanning"]:
         validation_tasks = []
         service_mapping = []
         
@@ -2023,7 +2219,13 @@ async def main(
             validated_services = 0
             scan_tasks = []
 
-            async def scan_with_state_saving(scan_func, target_obj, port, adjacent_open_ports=None):
+            # Already-completed {ip}:{port}:{service} scans (Phase 6): on a resume
+            # of an interrupted vulnerability_scanning phase, skip the service
+            # scanners that already ran to completion instead of redoing them.
+            _done_service_scans = state_manager.get_completed_service_scans()
+            _skipped_service_scans = 0
+
+            async def scan_with_state_saving(scan_func, target_obj, port, service, adjacent_open_ports=None):
                 try:
                     if adjacent_open_ports is not None:
                         results = await scan_func(target_obj, port, adjacent_open_ports=adjacent_open_ports)
@@ -2031,6 +2233,10 @@ async def main(
                         results = await scan_func(target_obj, port)
                     for result in results:
                         state_manager.add_vulnerability(result)
+                    # Checkpoint this service scan as done (Phase 6) so a resume
+                    # after an interrupt does not run it again.
+                    state_manager.mark_service_scan_done(
+                        target_obj.get('resolved_ip') or target_obj.get('scan_address'), port, service)
                     return results
                 except Exception as e:
                     # Keep tolerating per-scanner runtime failures, but never a bug.
@@ -2049,14 +2255,23 @@ async def main(
                               f"{target_obj.get('scan_address', '?')}:{port} - {is_valid}{Colors.RESET}")
                     continue
                 if isinstance(is_valid, bool) and is_valid:
+                    _svc_ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
+                    if f"{_svc_ip}:{port}:{service}" in _done_service_scans:
+                        _skipped_service_scans += 1
+                        validated_services += 1
+                        continue
                     display_url = target_obj['scan_address']
                     if not display_url.startswith(('http://', 'https://')):
                         display_url = f"http://{display_url}:{port}"
                     print(f"  -> Running {service.capitalize()} scans on {display_url} [Port: {port}]")
                     state_manager.add_validated_service(target_obj['resolved_ip'], port, service)
                     adj = target_open_ports if service == 'cpanel' else None
-                    scan_tasks.append(scan_with_state_saving(scanner_func, target_obj, port, adjacent_open_ports=adj))
+                    scan_tasks.append(scan_with_state_saving(scanner_func, target_obj, port, service, adjacent_open_ports=adj))
                     validated_services += 1
+
+            if _skipped_service_scans:
+                print(f"{Colors.CYAN}[*] Resume: skipping {_skipped_service_scans} service scan(s) "
+                      f"already completed.{Colors.RESET}")
             
             if validated_services == 0 and not nuclei_vulns_found and not nmap_enabled:
                 print("\n[*] No validated services found on the provided targets.")
@@ -2268,7 +2483,14 @@ async def process_streaming_scan(
             
             print(f"{Colors.GREEN}[+] Chunk {chunk_count}/{total_chunks} completed.{Colors.RESET}")
 
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # On POSIX a single Ctrl+C now surfaces as CancelledError (not
+        # KeyboardInterrupt); catch both so the chunk loop stops and the partial
+        # CSV/report finalization below still runs. Per-chunk state was already
+        # force-saved (save_state + add_vulnerability), and the in-flight
+        # subprocess groups already tore down as the cancel unwound their
+        # run_tool/spawn_tool contexts on the way here, so finalizing (rather
+        # than re-raising) simply salvages the results gathered so far.
         print(f"\n[!] Streaming scan interrupted.")
 
     if all_port_scan_results:
@@ -2363,6 +2585,18 @@ async def cmd_scan(args):
     import ipaddress
     import tempfile
 
+    # --list-resumable: print the resumable-scan index and exit (no target
+    # needed). Handled first so it never touches the dashboard or a target.
+    if getattr(args, "list_resumable", False):
+        from scan_state import format_resumable_table
+        print(format_resumable_table())
+        return
+
+    if not getattr(args, "target", None):
+        print(f"{Colors.RED}[!] scan requires a target (domain, IP, CIDR, or file), "
+              f"or use --list-resumable.{Colors.RESET}")
+        sys.exit(1)
+
     from modules.dashboard import LiveDashboard
     dashboard = LiveDashboard()
     if not getattr(args, 'no_dashboard', False):
@@ -2420,6 +2654,63 @@ async def cmd_scan(args):
         except ValueError:
             pass
 
+    # Phase 4: compute the stable state identity BEFORE writing the throwaway
+    # temp targets file, so the scan_id derives from the ORIGINAL target + scope
+    # config (not the random temp path). This is what makes ad-hoc
+    # `scan <ip|domain|cidr>` runs resumable.
+    from state_key import (
+        canonical_targets as _canonical_targets,
+        scope_signature as _scope_signature,
+        compute_scan_id as _compute_scan_id,
+    )
+    _exclude_loaded = load_exclusion_patterns(
+        getattr(args, 'exclude', None), getattr(args, 'exclude_file', None)
+    )
+    _include_only_loaded = load_exclusion_patterns(
+        getattr(args, 'include_only', None), getattr(args, 'include_only_file', None)
+    )
+    _scope_cfg = {
+        "module_filter": args.module,
+        "ports": args.ports,
+        "no_subdomain_enum": bool(getattr(args, 'no_subdomain_enum', False)),
+        "dns_permute": bool(getattr(args, 'dns_permute', False)),
+        "dns_hygiene": bool(getattr(args, 'dns_hygiene', True)),
+        "dns_takeover": bool(getattr(args, 'dns_takeover', True)),
+        "company_only": bool(getattr(args, 'company_only', False)),
+        "shared_ip_threshold": getattr(args, 'shared_ip_threshold', 10),
+        "horizontal": bool(getattr(args, 'horizontal', False)),
+        "archived_scan": bool(getattr(args, 'archived_scan', True)),
+        "stream_web_probe": bool(getattr(args, 'stream_web_probe', False)),
+        "extra_scans": [
+            name for name, on in (
+                ("params", getattr(args, 'params', False)),
+                ("favicon", getattr(args, 'favicon', False)),
+                ("tech", getattr(args, 'tech', False)),
+                ("default_creds", getattr(args, 'default_creds', False)),
+            ) if on
+        ],
+        "nmap": bool(getattr(args, 'nmap', False)),
+        "no_dork": bool(getattr(args, 'no_dork', False)),
+        "exclude": _exclude_loaded,
+        "include_only": _include_only_loaded,
+    }
+    _scan_scope = _scope_signature(_scope_cfg)
+    _canon_targets = _canonical_targets(target_type, args.target, parse_targets_file)
+    _primary_label = (
+        os.path.splitext(os.path.basename(args.target))[0]
+        if target_type == 'file' else args.target
+    )
+    _scan_id = _compute_scan_id(_primary_label, _canon_targets, _scan_scope)
+    # Non-scope settings tracked in state so a change on resume warns + adopts
+    # (never affects the scan id).
+    _non_scope_config = {
+        "concurrency": args.concurrency,
+        "connect_timeout": args.connect_timeout,
+        "port_retries": args.port_retries,
+        "recon_concurrency": args.recon_concurrency,
+        "chunk_size": args.chunk_size,
+    }
+
     # main() expects a targets file path - write single targets to a temp file
     # Name it after the target so domain_label / output dirs are readable
     _tmp_file = None
@@ -2440,6 +2731,10 @@ async def cmd_scan(args):
             targets_file=targets_file,
             concurrency=args.concurrency,
             resume=args.resume,
+            fresh=getattr(args, 'fresh', False),
+            resume_id=getattr(args, 'resume_id', None),
+            primary_target=_primary_label,
+            non_scope_config=_non_scope_config,
             module_filter=args.module,
             custom_ports=args.ports,
             chunk_size=args.chunk_size,
@@ -2479,22 +2774,21 @@ async def cmd_scan(args):
             dns_hygiene=getattr(args, 'dns_hygiene', True),
             dns_permute=getattr(args, 'dns_permute', False),
             dns_takeover=getattr(args, 'dns_takeover', True),
-            exclude_patterns=load_exclusion_patterns(
-                getattr(args, 'exclude', None), getattr(args, 'exclude_file', None)
-            ),
-            include_only_patterns=load_exclusion_patterns(
-                getattr(args, 'include_only', None), getattr(args, 'include_only_file', None)
-            ),
+            exclude_patterns=_exclude_loaded,
+            include_only_patterns=_include_only_loaded,
             company_only=getattr(args, 'company_only', False),
             shared_ip_threshold=getattr(args, 'shared_ip_threshold', 10),
+            scan_id=_scan_id,
+            canonical_targets=_canon_targets,
+            scope=_scan_scope,
         )
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         if _partial_findings:
             ts = time.strftime("%Y%m%d_%H%M%S")
             partial_path = f"scan_results_{ts}_PARTIAL.csv"
             save_results_to_csv(_partial_findings, partial_path)
             print(f"\n{Colors.YELLOW}[!] Partial results ({len(_partial_findings)} findings) saved to: {partial_path}{Colors.RESET}")
-        raise  # re-raise so the outer try/except in __main__ handles sys.exit
+        raise  # re-raise so run_command()/the outer __main__ handler sees the cancel
     finally:
         if not getattr(args, 'no_dashboard', False):
             dashboard.stop()
@@ -2655,6 +2949,45 @@ async def cmd_google_dork(args):
         print(f"{Colors.GREEN}[*] Google Dork complete. No findings.{Colors.RESET}")
 
 
+def run_command(coro):
+    """Single top-level runner for every subcommand coroutine.
+
+    Installs SIGINT/SIGTERM handlers on the running loop (POSIX only). The first
+    signal requests a graceful cancel of the main task -- coroutines unwind,
+    `except asyncio.CancelledError` handlers checkpoint state, and child process
+    groups are torn down. A second signal force-kills every live child group and
+    exits 130. `kill_all_process_groups()` in the `finally` is an orphan safety
+    net for any spawn site whose own cleanup was bypassed.
+    """
+    async def _runner():
+        loop = asyncio.get_running_loop()
+        main_task = asyncio.current_task()
+        hits = {"n": 0}
+
+        def _on_signal():
+            hits["n"] += 1
+            if hits["n"] == 1:
+                print("\n[!] Interrupt - cancelling scan, cleaning up child "
+                      "processes... (Ctrl+C again to force-quit)")
+                main_task.cancel()
+            else:
+                print("\n[!] Second interrupt - force-killing children.")
+                proc.kill_all_process_groups()
+                os._exit(130)
+
+        if sys.platform != "win32":
+            for s in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(s, _on_signal)
+        try:
+            return await coro
+        except asyncio.CancelledError:
+            print("[!] Scan cancelled. State checkpointed; use --resume to continue.")
+        finally:
+            proc.kill_all_process_groups()   # safety net for orphaned child groups
+
+    return asyncio.run(_runner())
+
+
 if __name__ == "__main__":
     print_logo()
 
@@ -2668,11 +3001,24 @@ if __name__ == "__main__":
 
     # ---- scan subcommand ----
     sp_scan = subparsers.add_parser("scan", help="Full attack surface scan")
-    sp_scan.add_argument("target", help="Domain, IP, CIDR, or targets file")
+    sp_scan.add_argument("target", nargs="?", default=None,
+                         help="Domain, IP, CIDR, or targets file (optional with --list-resumable)")
     sp_scan.add_argument("-c", "--concurrency", type=int, default=100)
     sp_scan.add_argument("--connect-timeout", type=float, default=DEFAULT_CONNECT_TIMEOUT)
     sp_scan.add_argument("--port-retries", type=int, default=DEFAULT_PORT_RETRIES)
-    sp_scan.add_argument("-r", "--resume", action="store_true")
+    # Resume UX (Phase 5). Default is AUTO-RESUME: the scan id is recomputed from
+    # the target + scope and a matching, non-completed state is resumed with a
+    # notice. --resume REQUIRES such a state (errors if none); --fresh ignores &
+    # overwrites it; --resume-id resumes a specific saved scan; --list-resumable
+    # prints the index and exits.
+    sp_scan.add_argument("-r", "--resume", action="store_true",
+                         help="Require and resume an existing state (error if none exists)")
+    sp_scan.add_argument("--fresh", "--no-resume", action="store_true", dest="fresh",
+                         help="Ignore and overwrite any existing resumable state for this target")
+    sp_scan.add_argument("--resume-id", metavar="SCAN_ID", dest="resume_id", default=None,
+                         help="Resume a specific saved scan by id (see --list-resumable)")
+    sp_scan.add_argument("--list-resumable", action="store_true", dest="list_resumable",
+                         help="List resumable scans (id, target, phase, progress, age) and exit")
     sp_scan.add_argument("--format",
         choices=["csv", "json", "sarif", "all"],
         default=None,
@@ -2828,19 +3174,19 @@ if __name__ == "__main__":
 
     try:
         if args.subcommand == "scan":
-            asyncio.run(cmd_scan(args))
+            run_command(cmd_scan(args))
         elif args.subcommand == "enum":
-            asyncio.run(cmd_enum(args))
+            run_command(cmd_enum(args))
         elif args.subcommand == "probe":
-            asyncio.run(cmd_probe(args))
+            run_command(cmd_probe(args))
         elif args.subcommand == "dns":
-            asyncio.run(cmd_dns(args))
+            run_command(cmd_dns(args))
         elif args.subcommand == "cloud":
-            asyncio.run(cmd_cloud(args))
+            run_command(cmd_cloud(args))
         elif args.subcommand == "js-paths":
-            asyncio.run(cmd_js_paths(args))
+            run_command(cmd_js_paths(args))
         elif args.subcommand == "google-dork":
-            asyncio.run(cmd_google_dork(args))
+            run_command(cmd_google_dork(args))
     except KeyboardInterrupt:
         print("\n[*] Scanner terminated by user.")
         sys.exit(0)

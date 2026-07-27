@@ -4,6 +4,7 @@ import re
 import shutil
 from datetime import datetime
 
+from modules import proc
 from modules.progress import DashboardProgress
 
 
@@ -86,12 +87,8 @@ class GAURunner:
         cmd = [self.binary, "--subs", domain]
         print(f"\033[96m[*] gau → {domain}\033[0m")
         async with semaphore:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
+            result = await proc.run_tool(cmd)
+            stdout, stderr = result.stdout, result.stderr
 
         if stderr:
             err_text = stderr.decode().strip()

@@ -18,7 +18,7 @@ async def detect_protocol(scan_address, port, timeout=3):
                 response = await client.get(f"{protocol}://{scan_address}:{port}/")
                 if response.status_code < 500:  # Any reachable response
                     return protocol
-        except:
+        except Exception:
             continue
     return 'http'
 
@@ -191,7 +191,7 @@ async def run_scans(target_obj, port):
     try:
         async with httpx.AsyncClient(timeout=5, verify=False) as client:
             await client.get(target_url)
-    except:
+    except Exception:
         return []
         
     # 1. Run Safe Check first

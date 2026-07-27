@@ -10,6 +10,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from modules import proc as proc_runner
+
 # Color codes (matching main.py)
 class Colors:
     RED = '\033[91m'
@@ -105,14 +107,10 @@ class ReconScanner:
         if not dashboard.active:
             print(f"{Colors.CYAN}[*] [{self.domain}] Running {tool_name}...{Colors.RESET}")
         try:
-            process = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode == 0:
+            result = await proc_runner.run_tool(cmd)
+            stdout, stderr = result.stdout, result.stderr
+
+            if result.returncode == 0:
                 if not dashboard.active:
                     print(f"{Colors.GREEN}[+] [{self.domain}] {tool_name} completed successfully.{Colors.RESET}")
                 return stdout.decode().strip().split('\n')

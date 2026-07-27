@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 
 import httpx as python_httpx
 
+from modules import proc
+
 
 def _print_httpx_progress(completed, total, alive, step):
     if completed % step == 0 or completed == total:
@@ -184,12 +186,60 @@ class HTTPXRunner:
             except asyncio.CancelledError:
                 pass
 
+        stderr_chunks = []
+
+        # spawn_tool guarantees process-group teardown on normal exit,
+        # exception, or cancellation; the streaming/heartbeat logic below is
+        # unchanged inside the context.
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
+            async with proc.spawn_tool(
+                cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-            )
+            ) as process:
+
+                async def _drain_stderr():
+                    # Drain stderr concurrently so a full stderr pipe can't
+                    # deadlock the stdout streaming loop below.
+                    try:
+                        async for chunk in process.stderr:
+                            stderr_chunks.append(chunk)
+                    except asyncio.CancelledError:
+                        pass
+
+                heartbeat_task = asyncio.create_task(_heartbeat())
+                stderr_task = asyncio.create_task(_drain_stderr())
+                try:
+                    async for raw_line in process.stdout:
+                        line = raw_line.decode("utf-8", "ignore").strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        results.append(data)
+                        if dashboard.active:
+                            dashboard.update_task("httpx", status=_status())
+                    await process.wait()
+                except Exception as e:
+                    print(f"\033[91m[!] Error running httpx: {e}\033[0m")
+                finally:
+                    # Cancel BOTH helper tasks before awaiting them. On
+                    # cancellation the stdout loop above is interrupted and
+                    # nobody drains httpx's stdout pipe; if we awaited the
+                    # still-running stderr drain without cancelling it, the
+                    # httpx child would block writing stdout (~64 KB pipe),
+                    # stop emitting stderr, and this await would deadlock -
+                    # the spawn_tool teardown never runs. Cancelling first
+                    # guarantees prompt group teardown on a single Ctrl+C.
+                    heartbeat_task.cancel()
+                    stderr_task.cancel()
+                    for _t in (heartbeat_task, stderr_task):
+                        try:
+                            await _t
+                        except (asyncio.CancelledError, Exception):
+                            pass
         except Exception as e:
             print(f"\033[91m[!] Error running httpx: {e}\033[0m")
             try:
@@ -197,42 +247,6 @@ class HTTPXRunner:
             except OSError:
                 pass
             return []
-
-        stderr_chunks = []
-
-        async def _drain_stderr():
-            # Drain stderr concurrently so a full stderr pipe can't deadlock the
-            # stdout streaming loop below.
-            try:
-                async for chunk in process.stderr:
-                    stderr_chunks.append(chunk)
-            except asyncio.CancelledError:
-                pass
-
-        heartbeat_task = asyncio.create_task(_heartbeat())
-        stderr_task = asyncio.create_task(_drain_stderr())
-        try:
-            async for raw_line in process.stdout:
-                line = raw_line.decode("utf-8", "ignore").strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                results.append(data)
-                if dashboard.active:
-                    dashboard.update_task("httpx", status=_status())
-            await process.wait()
-        except Exception as e:
-            print(f"\033[91m[!] Error running httpx: {e}\033[0m")
-        finally:
-            heartbeat_task.cancel()
-            for _t in (heartbeat_task, stderr_task):
-                try:
-                    await _t
-                except (asyncio.CancelledError, Exception):
-                    pass
 
         # Fallback: if nothing streamed to stdout (httpx build differences), parse
         # the -o file that httpx also wrote to.

@@ -35,6 +35,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from modules import proc
 from modules.progress import DashboardProgress
 from modules.schema import normalize_finding
 
@@ -185,12 +186,8 @@ async def _jarm_via_cli(binary: str, host: str, port) -> str | None:
     """Run the JARM CLI (``<binary> <host> -p <port>``) and parse its output."""
     cmd = [binary, host, '-p', str(port)]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _stderr = await proc.communicate()
+        result = await proc.run_tool(cmd)
+        stdout = result.stdout
     except Exception:
         return None
     return _parse_jarm_output(stdout.decode(errors='ignore'))

@@ -11,6 +11,7 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 
+from modules import proc as proc_runner
 from modules.schema import validate_finding
 
 MODULE_NAME = "testssl"
@@ -183,15 +184,9 @@ async def run_scans(target_obj, port, **_):
             f"{host}:{port}"
         ]
 
-        # Start the process asynchronously
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        # Await communication to let the scan finish (with timeout)
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300) # 5 minutes timeout per host
+        # Run the scan (buffered) with a per-host timeout of 5 minutes
+        result = await proc_runner.run_tool(cmd, timeout=300)
+        stdout, stderr = result.stdout, result.stderr
         
         if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
             with open(temp_path, "r", encoding="utf-8", errors="replace") as f:
