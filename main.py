@@ -38,6 +38,8 @@ from utils import (
     collect_domain_hosts,
     get_service_ports,
     normalize_host_value,
+    build_exclusion_matcher,
+    load_exclusion_patterns,
     parse_targets_file,
     process_targets,
     process_targets_streaming,
@@ -812,10 +814,14 @@ async def main(
     dns_hygiene=True,
     dns_permute=False,
     dns_takeover=True,
+    exclude_patterns=None,
 ):
     """
     Main orchestrator for the scanning tool.
     """
+    # Predicate: host -> True when it must be EXCLUDED from scanning (still listed
+    # in the enumerated subdomain output, just never scanned).
+    _is_excluded = build_exclusion_matcher(exclude_patterns)
     # Set up signal handlers
     def signal_handler():
         print(f"\n[!] Received interrupt signal. Shutting down gracefully...")
@@ -1318,6 +1324,26 @@ async def main(
                     return None
                 domain_output_dir = os.path.dirname(results_file)
 
+                # Exclusion patterns (--exclude / --exclude-file): matched subdomains
+                # STAY in the enumerated list (results_file) but are removed from
+                # everything downstream — never resolved, probed, or scanned.
+                if exclude_patterns:
+                    _excluded = [s for s in subdomains if _is_excluded(s)]
+                    if _excluded:
+                        subdomains = [s for s in subdomains if not _is_excluded(s)]
+                        try:
+                            _ex_path = os.path.join(domain_output_dir, "excluded_subdomains.txt")
+                            with open(_ex_path, "w", encoding="utf-8") as _eh:
+                                for _s in sorted(set(_excluded)):
+                                    _eh.write(f"{_s}\n")
+                            print(f"{Colors.YELLOW}[*] Excluded {len(_excluded)} subdomain(s) from scanning "
+                                  f"(matched exclusion pattern); listed in {_ex_path}.{Colors.RESET}")
+                        except OSError:
+                            print(f"{Colors.YELLOW}[*] Excluded {len(_excluded)} subdomain(s) from scanning (matched exclusion pattern).{Colors.RESET}")
+                        if not subdomains:
+                            print(f"{Colors.YELLOW}[!] All discovered subdomains for {domain} were excluded — nothing to scan.{Colors.RESET}")
+                            return None
+
                 # Horizontal / infrastructure expansion (opt-in via --horizontal):
                 # asnmap → CIDRs, reverse-DNS sweep, amass intel → related domains.
                 # Gracefully skips when the tools aren't installed.
@@ -1542,6 +1568,19 @@ async def main(
         if not targets:
             print("[!] No valid targets to scan. Exiting.")
             return
+
+        # Exclusion patterns apply to the final scan set too (belt-and-suspenders for
+        # file/IP scans and any recon fall-through): drop excluded hosts by hostname.
+        if exclude_patterns:
+            _kept = [t for t in targets
+                     if not _is_excluded(t.get('display_target') or t.get('scan_address', ''))]
+            if len(_kept) < len(targets):
+                print(f"{Colors.YELLOW}[*] Exclusion patterns removed {len(targets) - len(_kept)} "
+                      f"target(s) from scanning.{Colors.RESET}")
+                targets = _kept
+            if not targets:
+                print("[!] All targets were excluded. Exiting.")
+                return
 
         # 2. Define service ports (only modules that have scanners)
         full_service_ports = get_service_ports()
@@ -2197,6 +2236,9 @@ async def cmd_scan(args):
             dns_hygiene=getattr(args, 'dns_hygiene', True),
             dns_permute=getattr(args, 'dns_permute', False),
             dns_takeover=getattr(args, 'dns_takeover', True),
+            exclude_patterns=load_exclusion_patterns(
+                getattr(args, 'exclude', None), getattr(args, 'exclude_file', None)
+            ),
         )
     except KeyboardInterrupt:
         if _partial_findings:
@@ -2426,6 +2468,12 @@ if __name__ == "__main__":
     sp_scan.add_argument("--no-dns-takeover", action="store_false", dest="dns_takeover", default=True,
                          help="Disable the per-subdomain DNS-level takeover check (dangling CNAME -> "
                               "NXDOMAIN across all discovered subdomains). On by default.")
+    sp_scan.add_argument("--exclude", action="append", metavar="PATTERN", dest="exclude",
+                         help="Exclude hosts matching this glob (e.g. 'customer1*.homestead.com') from "
+                              "scanning — they stay in the enumerated subdomain list but are never "
+                              "resolved/probed/scanned. Repeatable; prefix 're:' for a regex.")
+    sp_scan.add_argument("--exclude-file", metavar="FILE", dest="exclude_file",
+                         help="File of exclusion patterns, one per line (# comments allowed). See --exclude.")
     sp_scan.add_argument("--wordlist")
     # --scan-found removed: the scan subcommand always probes discovered subdomains
     sp_scan.add_argument("--nmap", action="store_true")

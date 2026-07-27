@@ -1,6 +1,8 @@
 import asyncio
 import socket
 import ipaddress
+import fnmatch
+import os
 import re
 import urllib.parse
 
@@ -395,6 +397,62 @@ def build_scan_targets_from_mappings(raw_targets, host_to_ip):
         processed_ips.add(resolved_ip)
 
     return scan_targets
+
+def build_exclusion_matcher(patterns):
+    """Return a predicate ``host -> bool`` that is True when the host should be
+    EXCLUDED from scanning.
+
+    Each pattern is a case-insensitive glob by default (e.g. ``customer1*.example.com``,
+    ``*.internal.example.com``, ``customer?.example.com``). Prefix a pattern with
+    ``re:`` to treat the remainder as a regular expression instead. Returns a
+    predicate that is always False when there are no (valid) patterns.
+    """
+    globs, regexes = [], []
+    for p in patterns or []:
+        p = (p or "").strip()
+        if not p:
+            continue
+        if p.lower().startswith("re:"):
+            try:
+                regexes.append(re.compile(p[3:], re.IGNORECASE))
+            except re.error:
+                continue
+        else:
+            globs.append(p.lower())
+
+    if not globs and not regexes:
+        return lambda host: False
+
+    def _excluded(host):
+        h = (host or "").strip().lower()
+        if not h:
+            return False
+        for g in globs:
+            if fnmatch.fnmatch(h, g):
+                return True
+        for rx in regexes:
+            if rx.search(host or ""):
+                return True
+        return False
+
+    return _excluded
+
+
+def load_exclusion_patterns(items=None, file_path=None):
+    """Collect exclusion patterns from repeated ``--exclude`` values and/or a
+    ``--exclude-file`` (one pattern per line, ``#`` comments and blanks ignored)."""
+    patterns = [p for p in (items or []) if p and p.strip()]
+    if file_path and os.path.isfile(file_path):
+        try:
+            with open(file_path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        patterns.append(line)
+        except OSError:
+            pass
+    return patterns
+
 
 def get_service_ports():
     """Returns a dictionary of services and their common ports."""
