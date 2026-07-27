@@ -1,5 +1,5 @@
 """
-web_checks.py — Web-layer security checks for VaktScan.
+web_checks.py - Web-layer security checks for VaktScan.
 
 Entry point:
     async def run_checks(alive_urls: list[str], concurrency: int = 20) -> list[dict]
@@ -95,7 +95,7 @@ def _is_error_page(body: str, status: int) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 1 — HTTP Security Headers
+# Check 1 - HTTP Security Headers
 # ──────────────────────────────────────────────────────────────────────────────
 
 _VERSION_RE = re.compile(r"[\d]+\.[\d]+", re.I)
@@ -205,7 +205,7 @@ async def check_security_headers(url: str, client: httpx.AsyncClient) -> list[di
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 2 — Exposed Sensitive Files
+# Check 2 - Exposed Sensitive Files
 # ──────────────────────────────────────────────────────────────────────────────
 
 # (path, severity_if_found, label)
@@ -267,7 +267,7 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
         cl = str(len(resp.content))
         http_status = str(status_code)
 
-        # robots.txt — INFO regardless, enumerate disallowed
+        # robots.txt - INFO regardless, enumerate disallowed
         if path == "/robots.txt":
             if status_code == 200 and len(body) > 10:
                 # Require it actually looks like robots.txt, not a catch-all HTML page
@@ -293,7 +293,7 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
                 ))
             return
 
-        # security.txt — INFO, parse contact
+        # security.txt - INFO, parse contact
         if path == "/.well-known/security.txt":
             if status_code == 200 and len(body) > 10:
                 contact = re.findall(r"(?im)^contact:\s*(.+)$", body)
@@ -313,7 +313,7 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
                 ))
             return
 
-        # crossdomain.xml — check for wildcard
+        # crossdomain.xml - check for wildcard
         if path == "/crossdomain.xml":
             if status_code == 200 and len(body) > 10:
                 # Only fire if body actually contains a cross-domain policy element
@@ -324,7 +324,7 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
                 sev = "MEDIUM"
                 st = "VULNERABLE"
                 if wildcard:
-                    details += " WILDCARD allow-access-from detected — any domain can read responses via Flash/legacy cross-domain requests."
+                    details += " WILDCARD allow-access-from detected - any domain can read responses via Flash/legacy cross-domain requests."
                     sev = "HIGH"
                 else:
                     details += " No wildcard detected; review allowed domains manually."
@@ -343,29 +343,29 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
                 ))
             return
 
-        # Generic sensitive file — only fire if 200 and not an error page
+        # Generic sensitive file - only fire if 200 and not an error page
         if status_code == 200 and not _is_error_page(body, status_code):
 
             # ── Content validation to eliminate catch-all false positives ──────
 
-            # .git/HEAD — require canonical git HEAD content
+            # .git/HEAD - require canonical git HEAD content
             if path == "/.git/HEAD":
                 if len(body) < 10:
                     return
                 if not re.search(r"ref: refs/", body):
                     return
 
-            # .git/config — require [core] section typical of git config
+            # .git/config - require [core] section typical of git config
             if path == "/.git/config":
                 if "[core]" not in body and "[remote" not in body:
                     return
 
-            # .env variants — require at least one KEY=VALUE line
+            # .env variants - require at least one KEY=VALUE line
             if path in ("/.env", "/.env.local", "/.env.production", "/.env.backup"):
                 if not re.search(r"^[A-Z_][A-Z0-9_]*=.+", body, re.MULTILINE):
                     return
 
-            # Backup / archive files — require binary content type or substantial size
+            # Backup / archive files - require binary content type or substantial size
             _backup_exts = (".zip", ".tar.gz", ".bak", ".old")
             if any(path.endswith(ext) for ext in _backup_exts):
                 content_type = resp.headers.get("content-type", "").lower()
@@ -381,17 +381,17 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
                 if "text/html" in content_type or "<html" in body.lower():
                     return
 
-            # phpinfo.php / info.php — require PHP output markers
+            # phpinfo.php / info.php - require PHP output markers
             if path in ("/phpinfo.php", "/info.php"):
                 if "PHP Version" not in body and "phpinfo()" not in body:
                     return
 
-            # wp-config.php — require WordPress config constants
+            # wp-config.php - require WordPress config constants
             if path == "/wp-config.php":
                 if not any(k in body for k in ("DB_NAME", "DB_PASSWORD", "table_prefix")):
                     return
 
-            # adminer — require Adminer UI markers
+            # adminer - require Adminer UI markers
             if path in ("/adminer.php", "/adminer"):
                 if not any(k in body for k in ("adminer", "Adminer", "Login")):
                     return
@@ -437,7 +437,7 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 3 — GraphQL Introspection
+# Check 3 - GraphQL Introspection
 # ──────────────────────────────────────────────────────────────────────────────
 
 _GRAPHQL_PATHS = ["/graphql", "/api/graphql", "/graphql/v1", "/v1/graphql"]
@@ -468,8 +468,8 @@ async def check_graphql(url: str, client: httpx.AsyncClient) -> list[dict]:
                 severity="HIGH",
                 details=(
                     f"GraphQL introspection is enabled at '{probe_url}'. An attacker can query "
-                    "__schema to enumerate the full API schema — all types, fields, queries, "
-                    "and mutations — enabling highly targeted attacks against the API surface."
+                    "__schema to enumerate the full API schema - all types, fields, queries, "
+                    "and mutations - enabling highly targeted attacks against the API surface."
                 ),
                 http_status=str(resp.status_code),
                 content_length=str(len(resp.content)),
@@ -480,7 +480,7 @@ async def check_graphql(url: str, client: httpx.AsyncClient) -> list[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 4 — Swagger / OpenAPI Spec Exposed
+# Check 4 - Swagger / OpenAPI Spec Exposed
 # ──────────────────────────────────────────────────────────────────────────────
 
 _SWAGGER_PATHS = [
@@ -532,7 +532,7 @@ async def check_swagger(url: str, client: httpx.AsyncClient) -> list[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 5 — SSL Certificate Expiry
+# Check 5 - SSL Certificate Expiry
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _get_cert_info(hostname: str, port: int) -> dict | None:
@@ -631,7 +631,7 @@ async def check_ssl_expiry(url: str, client: httpx.AsyncClient) -> list[dict]:  
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 6 — Admin Panel Detection
+# Check 6 - Admin Panel Detection
 # ──────────────────────────────────────────────────────────────────────────────
 
 _ADMIN_PATHS = [
@@ -685,7 +685,7 @@ async def check_admin_panels(url: str, client: httpx.AsyncClient) -> list[dict]:
                 ),
             ))
         elif sc == 200:
-            # Accessible path but no login form — low noise finding only
+            # Accessible path but no login form - low noise finding only
             findings.append(_make_finding(
                 **base,
                 vulnerability=f"Admin Path Accessible: {path}",
@@ -717,7 +717,7 @@ async def check_admin_panels(url: str, client: httpx.AsyncClient) -> list[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 7 — Directory Listing Enabled
+# Check 7 - Directory Listing Enabled
 # ──────────────────────────────────────────────────────────────────────────────
 
 _DIR_LISTING_PATHS = [
@@ -777,7 +777,7 @@ async def check_directory_listing(url: str, client: httpx.AsyncClient) -> list[d
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 8 — Default Credentials
+# Check 8 - Default Credentials
 # ──────────────────────────────────────────────────────────────────────────────
 
 _WP_CREDS = [("admin", "admin"), ("admin", "password"), ("admin", "123456")]
@@ -979,7 +979,7 @@ async def check_default_creds(url: str, client: httpx.AsyncClient) -> list[dict]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 9 — Web Application Firewall (WAF) Detection
+# Check 9 - Web Application Firewall (WAF) Detection
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def check_waf(url: str, client: httpx.AsyncClient) -> list[dict]:
@@ -1069,7 +1069,7 @@ async def check_waf(url: str, client: httpx.AsyncClient) -> list[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 10 — Cookie Security Flags
+# Check 10 - Cookie Security Flags
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def check_cookie_flags(url: str, client: httpx.AsyncClient) -> list[dict]:
@@ -1123,7 +1123,7 @@ async def check_cookie_flags(url: str, client: httpx.AsyncClient) -> list[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 11 — Software End-of-Life (EOL)
+# Check 11 - Software End-of-Life (EOL)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _check_eol_version(software: str, version_str: str) -> str | None:
@@ -1210,7 +1210,7 @@ async def check_software_eol(url: str, client: httpx.AsyncClient) -> list[dict]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 12 — CORS Misconfiguration
+# Check 12 - CORS Misconfiguration
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def check_cors(url: str, client: httpx.AsyncClient) -> list[dict]:
@@ -1258,6 +1258,204 @@ async def check_cors(url: str, client: httpx.AsyncClient) -> list[dict]:
     return findings
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Check 13 - Exposed Status / Info-Disclosure Endpoints (content-oracle gated)
+#
+# Oracles adapted from runcommand.py (per-finding retest tool). Each endpoint is
+# confirmed VULNERABLE only via a POSITIVE body oracle, never a bare status code,
+# and is guarded by a soft-404 / catch-all negative control: if the server also
+# returns 200 with the same oracle string for a random nonexistent path, the
+# check is suppressed.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Random, near-certainly-nonexistent path used as the catch-all negative control.
+_CATCHALL_PROBE = "/vaktscan-nonexistent-8f2c1a9d4e/"
+
+# Matches `api_key = "..."` / `api_key: "..."` style assignments (not bare prose).
+_API_KEY_ASSIGN_RE = re.compile(r"api_key\s*[:=]\s*['\"]?\S", re.I)
+
+
+async def check_status_endpoints(url: str, client: httpx.AsyncClient) -> list[dict]:
+    findings: list[dict] = []
+    origin = _origin(url)
+
+    # ── Negative control: does the server 200-and-echo everything? ──────────────
+    catchall_200 = False
+    catchall_body = ""
+    try:
+        nc = await client.get(origin + _CATCHALL_PROBE)
+        catchall_200 = nc.status_code == 200
+        catchall_body = nc.text[:8192].lower()
+    except Exception:
+        pass
+
+    def _catchall_has(marker: str) -> bool:
+        return catchall_200 and marker.lower() in catchall_body
+
+    async def _get(path: str):
+        try:
+            return await client.get(origin + path)
+        except Exception:
+            return None
+
+    def _emit(*, path, vulnerability, status, severity, details, resp):
+        findings.append(_make_finding(
+            url=url,
+            payload_url=origin + path,
+            vulnerability=vulnerability,
+            status=status,
+            severity=severity,
+            details=details,
+            http_status=str(resp.status_code),
+            page_title=_extract_title(resp.text),
+            content_length=str(len(resp.content)),
+        ))
+
+    # ── Apache mod_status (/server-status) ──────────────────────────────────────
+    for path in ("/server-status", "/server-status/"):
+        r = await _get(path)
+        if r is None or r.status_code != 200:
+            continue
+        bl = r.text.lower()
+        oracle = ("apache server status" in bl) or ("apache status" in bl and "server version" in bl)
+        if oracle and not _catchall_has("apache server status"):
+            _emit(
+                path=path,
+                vulnerability="Apache mod_status Page Exposed (/server-status)",
+                status="VULNERABLE",
+                severity="MEDIUM",
+                details=(
+                    f"The Apache mod_status page is publicly accessible at '{origin + path}'. "
+                    "It discloses server internals - active requests, client IPs, requested URLs, "
+                    "worker state, and uptime - aiding reconnaissance and session hijacking."
+                ),
+                resp=r,
+            )
+            break
+
+    # ── mod_jk load-balancer status (/jkstatus) ─────────────────────────────────
+    for path in ("/jkstatus", "/jkstatus/"):
+        r = await _get(path)
+        if r is None or r.status_code != 200:
+            continue
+        bl = r.text.lower()
+        oracle = "load balancer manager" in bl or "jk status manager" in bl
+        if oracle and not _catchall_has("load balancer manager"):
+            _emit(
+                path=path,
+                vulnerability="Apache mod_jk Status Manager Exposed (/jkstatus)",
+                status="VULNERABLE",
+                severity="MEDIUM",
+                details=(
+                    f"The mod_jk (Tomcat connector) status manager is publicly accessible at "
+                    f"'{origin + path}'. It exposes worker/load-balancer configuration and backend "
+                    "topology, and may allow tampering with worker state."
+                ),
+                resp=r,
+            )
+            break
+
+    # ── Graylog config.js embedded API key (/config.js) ─────────────────────────
+    r = await _get("/config.js")
+    if r is not None and r.status_code == 200:
+        body = r.text
+        ct = r.headers.get("content-type", "").lower()
+        is_js = "javascript" in ct or "<html" not in body[:2048].lower()
+        if is_js and _API_KEY_ASSIGN_RE.search(body) and not _catchall_has("api_key"):
+            bl = body.lower()
+            graylog = any(m in bl for m in ("graylog", "gl2serverurl", "gl2server", "roottimezone"))
+            _emit(
+                path="/config.js",
+                vulnerability=(
+                    "Graylog config.js Exposes Embedded API Key"
+                    if graylog else
+                    "JavaScript Config File Exposes Embedded API Key (config.js)"
+                ),
+                status="VULNERABLE",
+                severity="HIGH",
+                details=(
+                    f"The client-side configuration file '{origin}/config.js' embeds an api_key "
+                    "assignment retrievable without authentication. Exposed API keys can be replayed "
+                    "against the backend to access data or functionality."
+                ),
+                resp=r,
+            )
+
+    # ── Elasticsearch unauthenticated node stats (/_nodes/stats) ────────────────
+    r = await _get("/_nodes/stats")
+    if r is not None and r.status_code == 200:
+        body = r.text
+        bl = body.lower()
+        es_oracle = '"cluster_name"' in bl or ('"nodes"' in bl and '"indices"' in bl)
+        looks_json = body.lstrip()[:1] in ("{", "[")
+        if es_oracle and looks_json and not _catchall_has('"cluster_name"'):
+            _emit(
+                path="/_nodes/stats",
+                vulnerability="Elasticsearch Unauthenticated Access (/_nodes/stats)",
+                status="VULNERABLE",
+                severity="HIGH",
+                details=(
+                    f"The Elasticsearch node-stats API at '{origin}/_nodes/stats' is reachable without "
+                    "authentication. Unauthenticated Elasticsearch exposes cluster metadata and, typically, "
+                    "full read/write access to indexed data via the REST API."
+                ),
+                resp=r,
+            )
+
+    # ── S3 credential disclosure via /@ (environment dump) ──────────────────────
+    r = await _get("/@")
+    if r is not None and r.status_code == 200:
+        if "AWS_SECRET_ACCESS_KEY" in r.text and not _catchall_has("aws_secret_access_key"):
+            _emit(
+                path="/@",
+                vulnerability="AWS Credential Disclosure via Environment Dump (/@)",
+                status="CRITICAL",
+                severity="CRITICAL",
+                details=(
+                    f"The path '{origin}/@' returns content containing AWS_SECRET_ACCESS_KEY - an "
+                    "environment/credential dump is publicly exposed. Leaked AWS secret keys enable "
+                    "direct cloud-account compromise."
+                ),
+                resp=r,
+            )
+
+    return findings
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Check 14 - HTTP TRACE Method Enabled (Cross-Site Tracing)
+# ──────────────────────────────────────────────────────────────────────────────
+
+async def check_http_trace(url: str, client: httpx.AsyncClient) -> list[dict]:
+    findings: list[dict] = []
+    try:
+        resp = await client.request("TRACE", url)
+    except Exception:
+        return findings
+
+    # Positive oracle: server echoes the TRACE request back with the canonical
+    # message/http content type (mirrors runcommand.py's TRACE check).
+    ct = resp.headers.get("content-type", "").lower()
+    body = resp.text
+    if resp.status_code == 200 and "message/http" in ct and "TRACE " in body:
+        findings.append(_make_finding(
+            url=url,
+            payload_url=url,
+            vulnerability="HTTP TRACE Method Enabled (Cross-Site Tracing)",
+            status="VULNERABLE",
+            severity="MEDIUM",
+            details=(
+                "The server responded to an HTTP TRACE request by echoing the request "
+                "(Content-Type: message/http). TRACE enables Cross-Site Tracing (XST), which can be "
+                "abused to read otherwise protected headers such as cookies and Authorization values."
+            ),
+            http_status=str(resp.status_code),
+            page_title=_extract_title(body),
+            content_length=str(len(resp.content)),
+        ))
+    return findings
+
+
 # All check functions, keyed for dedup tracking
 _ALL_CHECKS = [
     check_security_headers,
@@ -1272,6 +1470,8 @@ _ALL_CHECKS = [
     check_cookie_flags,
     check_software_eol,
     check_cors,
+    check_status_endpoints,
+    check_http_trace,
 ]
 
 

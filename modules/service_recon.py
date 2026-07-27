@@ -1,7 +1,7 @@
 """
 VaktScan Service Recon Module
 Port-specific recon and vulnerability checks drawn directly from AutoRecon methodology.
-Each check mirrors the exact tool invocations from AutoRecon.sh — tested logic, same tools.
+Each check mirrors the exact tool invocations from AutoRecon.sh - tested logic, same tools.
 
 Covers: FTP, SSH, SMTP, DNS, Kerberos, RPC, NTP, SMB, SNMP, LDAP, MySQL, PostgreSQL,
         Redis, MongoDB, CouchDB, Memcached, Docker API, Kubernetes, Jenkins,
@@ -117,6 +117,25 @@ async def check_ssh(host, port, target, resolved_ip):
                 out.append(_finding('POTENTIAL', 'MEDIUM', 'SSH Weak Configuration Detected',
                     'ssh-audit findings:\n' + '\n'.join(issues[:10]),
                     target, resolved_ip, port, url=f'ssh://{host}:{port}'))
+
+    # Weak SSH MAC algorithms via nmap ssh2-enum-algos.
+    # Oracle (from runcommand.py): the offered MAC list contains hmac-md5 or
+    # hmac-sha1 (MD5/SHA-1 based). hmac-* tokens only appear as MAC algorithms in
+    # this script's output, so a token scan is unambiguous. Skips gracefully when
+    # nmap is absent.
+    if _bin('nmap'):
+        stdout, _, _ = await _run(
+            ['nmap', '-Pn', '-p', str(port), '--script', 'ssh2-enum-algos', host],
+            timeout=60)
+        if stdout and 'ssh2-enum-algos' in stdout:
+            algos = set(re.findall(r'hmac-[a-z0-9@.\-]+', stdout.lower()))
+            weak = sorted(a for a in algos
+                          if a.startswith('hmac-md5') or a.startswith('hmac-sha1'))
+            if weak:
+                out.append(_finding('VULNERABLE', 'MEDIUM', 'SSH Weak MAC Algorithms Supported',
+                    'nmap ssh2-enum-algos reported weak (MD5/SHA-1 based) MAC algorithms: '
+                    + ', '.join(weak),
+                    target, resolved_ip, port, url=f'ssh://{host}:{port}'))
     return out
 
 
@@ -136,7 +155,7 @@ async def check_smtp(host, port, target, resolved_ip):
             target, resolved_ip, port, url=f'smtp://{host}:{port}'))
         if vrfy.startswith('2'):
             out.append(_finding('VULNERABLE', 'MEDIUM', 'SMTP VRFY User Enumeration Enabled',
-                f'VRFY root response: {vrfy[:120]} — user enumeration possible.',
+                f'VRFY root response: {vrfy[:120]} - user enumeration possible.',
                 target, resolved_ip, port, url=f'smtp://{host}:{port}'))
     except Exception:
         pass
@@ -187,7 +206,7 @@ async def check_kerberos(host, port, target, resolved_ip):
         _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=5)
         writer.close()
         out.append(_finding('INFO', 'INFO', 'Kerberos KDC Detected',
-            f'Kerberos port {port} open on {host} — likely Active Directory environment.',
+            f'Kerberos port {port} open on {host} - likely Active Directory environment.',
             target, resolved_ip, port, url=f'kerberos://{host}:{port}'))
     except Exception:
         pass
@@ -598,7 +617,7 @@ async def check_kubernetes(host, port, target, resolved_ip):
                         timeout=10)
                     if rc2 == 0 and stdout2:
                         out.append(_finding('VULNERABLE', 'CRITICAL', 'etcd Kubernetes Secrets Exposed',
-                            f'etcd get /registry/secrets/ succeeded — K8s secrets readable.',
+                            f'etcd get /registry/secrets/ succeeded - K8s secrets readable.',
                             target, resolved_ip, port, url=f'http://{host}:{port}'))
     return out
 
@@ -620,7 +639,7 @@ async def check_jenkins(host, port, target, resolved_ip):
             r2 = await client.get(f'http://{host}:{port}/script')
             if r2.status_code == 200 and 'groovy' in r2.text.lower():
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Jenkins Script Console Exposed',
-                    'Jenkins Groovy script console accessible without auth — RCE possible.',
+                    'Jenkins Groovy script console accessible without auth - RCE possible.',
                     target, resolved_ip, port, url=f'http://{host}:{port}/script',
                     http_status=r2.status_code))
 
@@ -677,7 +696,7 @@ async def check_jolokia(host, port, target, resolved_ip):
 
 async def check_ajp(host, port, target, resolved_ip):
     out = []
-    # Probe AJP13 via TCP magic bytes — if it responds the port is live
+    # Probe AJP13 via TCP magic bytes - if it responds the port is live
     try:
         reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=5)
         writer.write(b'\x12\x34\x00\x01\x0a')
@@ -686,7 +705,7 @@ async def check_ajp(host, port, target, resolved_ip):
         writer.close()
         if resp and len(resp) > 2:
             out.append(_finding('VULNERABLE', 'HIGH', 'AJP Connector Exposed (CVE-2020-1938 Ghostcat)',
-                f'AJP13 port {port} responding — potential Ghostcat (file read/inclusion) risk.',
+                f'AJP13 port {port} responding - potential Ghostcat (file read/inclusion) risk.',
                 target, resolved_ip, port, url=f'ajp://{host}:{port}'))
     except Exception:
         pass
@@ -925,12 +944,12 @@ async def check_spring_actuator(host, port, target, resolved_ip):
         except Exception:
             return out
 
-        # /actuator/env — contains environment variables, secrets, passwords
+        # /actuator/env - contains environment variables, secrets, passwords
         try:
             r = await client.get(f'{scheme}://{host}:{port}/actuator/env')
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Spring Boot Actuator /env Exposed',
-                    'Spring Boot /actuator/env accessible without auth — '
+                    'Spring Boot /actuator/env accessible without auth - '
                     'may expose passwords, API keys, and environment secrets.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/actuator/env',
@@ -938,12 +957,12 @@ async def check_spring_actuator(host, port, target, resolved_ip):
         except Exception:
             pass
 
-        # /actuator/heapdump — binary heap dump that contains credentials in memory
+        # /actuator/heapdump - binary heap dump that contains credentials in memory
         try:
             r = await client.get(f'{scheme}://{host}:{port}/actuator/heapdump')
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Spring Boot Actuator /heapdump Exposed',
-                    'Spring Boot /actuator/heapdump accessible without auth — '
+                    'Spring Boot /actuator/heapdump accessible without auth - '
                     'heap dump download possible, may contain plaintext credentials.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/actuator/heapdump',
@@ -974,12 +993,12 @@ async def check_spring_actuator(host, port, target, resolved_ip):
 async def check_jupyter(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /api/kernels — unauthenticated access means direct RCE
+        # /api/kernels - unauthenticated access means direct RCE
         try:
             r = await client.get(f'http://{host}:{port}/api/kernels')
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Jupyter Notebook /api/kernels Unauthenticated',
-                    'Jupyter /api/kernels accessible without auth — '
+                    'Jupyter /api/kernels accessible without auth - '
                     'kernel management possible, leading to direct RCE.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/api/kernels',
@@ -987,12 +1006,12 @@ async def check_jupyter(host, port, target, resolved_ip):
         except Exception:
             pass
 
-        # /api/contents — filesystem browsing without auth
+        # /api/contents - filesystem browsing without auth
         try:
             r = await client.get(f'http://{host}:{port}/api/contents')
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Jupyter Notebook /api/contents Unauthenticated',
-                    'Jupyter /api/contents accessible without auth — '
+                    'Jupyter /api/contents accessible without auth - '
                     'full filesystem read/write possible.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/api/contents',
@@ -1000,7 +1019,7 @@ async def check_jupyter(host, port, target, resolved_ip):
         except Exception:
             pass
 
-        # /tree — notebook browser UI
+        # /tree - notebook browser UI
         try:
             r = await client.get(f'http://{host}:{port}/tree')
             if r.status_code == 200 and any(w in r.text.lower() for w in ('jupyter', 'notebook', 'tree')):
@@ -1023,7 +1042,7 @@ async def check_hadoop_yarn(host, port, target, resolved_ip):
             r = await client.get(f'http://{host}:{port}/ws/v1/cluster/info')
             if r.status_code == 200 and any(w in r.text.lower() for w in ('hadoop', 'yarn', 'clusterinfo')):
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Hadoop YARN ResourceManager Unauthenticated',
-                    'Hadoop YARN /ws/v1/cluster/info accessible without auth — '
+                    'Hadoop YARN /ws/v1/cluster/info accessible without auth - '
                     'unauthenticated app submission leads to RCE.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/ws/v1/cluster/info',
@@ -1032,7 +1051,7 @@ async def check_hadoop_yarn(host, port, target, resolved_ip):
                 r2 = await client.get(f'http://{host}:{port}/ws/v1/cluster/apps')
                 if r2.status_code == 200:
                     out.append(_finding('VULNERABLE', 'CRITICAL', 'Hadoop YARN Application List Exposed',
-                        'Hadoop YARN /ws/v1/cluster/apps accessible — '
+                        'Hadoop YARN /ws/v1/cluster/apps accessible - '
                         'full application listing and submission API exposed.',
                         target, resolved_ip, port,
                         url=f'http://{host}:{port}/ws/v1/cluster/apps',
@@ -1051,7 +1070,7 @@ async def check_hadoop_hdfs(host, port, target, resolved_ip):
             r = await client.get(f'http://{host}:{port}/jmx?qry=Hadoop:*')
             if r.status_code == 200 and 'hadoop' in r.text.lower():
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Hadoop HDFS NameNode JMX Exposed',
-                    'Hadoop HDFS /jmx?qry=Hadoop:* accessible without auth — '
+                    'Hadoop HDFS /jmx?qry=Hadoop:* accessible without auth - '
                     'cluster metadata and configuration exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/jmx?qry=Hadoop:*',
@@ -1063,7 +1082,7 @@ async def check_hadoop_hdfs(host, port, target, resolved_ip):
             r = await client.get(f'http://{host}:{port}/listPaths/')
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Hadoop HDFS /listPaths Exposed',
-                    'Hadoop HDFS /listPaths/ accessible without auth — filesystem listing possible.',
+                    'Hadoop HDFS /listPaths/ accessible without auth - filesystem listing possible.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/listPaths/',
                     http_status=r.status_code))
@@ -1074,7 +1093,7 @@ async def check_hadoop_hdfs(host, port, target, resolved_ip):
             r = await client.get(f'http://{host}:{port}/logs/')
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Hadoop HDFS /logs Exposed',
-                    'Hadoop HDFS /logs/ accessible without auth — log files may contain credentials.',
+                    'Hadoop HDFS /logs/ accessible without auth - log files may contain credentials.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/logs/',
                     http_status=r.status_code))
@@ -1132,12 +1151,12 @@ async def check_consul(host, port, target, resolved_ip):
     out = []
     scheme = 'https' if port == 8501 else 'http'
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /v1/agent/self — full agent configuration, tokens, datacenter info
+        # /v1/agent/self - full agent configuration, tokens, datacenter info
         try:
             r = await client.get(f'{scheme}://{host}:{port}/v1/agent/self')
             if r.status_code == 200 and any(w in r.text.lower() for w in ('config', 'datacenter', 'consul')):
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'HashiCorp Consul Agent API Unauthenticated',
-                    'Consul /v1/agent/self accessible without ACL token — '
+                    'Consul /v1/agent/self accessible without ACL token - '
                     'full agent config including tokens may be exposed.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/v1/agent/self',
@@ -1145,12 +1164,12 @@ async def check_consul(host, port, target, resolved_ip):
         except Exception:
             pass
 
-        # /v1/kv/?keys — KV store key listing
+        # /v1/kv/?keys - KV store key listing
         try:
             r = await client.get(f'{scheme}://{host}:{port}/v1/kv/?keys')
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'HashiCorp Consul KV Store Readable',
-                    'Consul /v1/kv/?keys accessible without ACL token — '
+                    'Consul /v1/kv/?keys accessible without ACL token - '
                     'KV store key listing possible, may contain secrets.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/v1/kv/?keys',
@@ -1158,7 +1177,7 @@ async def check_consul(host, port, target, resolved_ip):
         except Exception:
             pass
 
-        # /v1/catalog/services — service registry listing
+        # /v1/catalog/services - service registry listing
         try:
             r = await client.get(f'{scheme}://{host}:{port}/v1/catalog/services')
             # Confirm Consul's specific response: a dict where values are arrays (service tags)
@@ -1174,7 +1193,7 @@ async def check_consul(host, port, target, resolved_ip):
                     pass
             if is_consul_catalog:
                 out.append(_finding('VULNERABLE', 'HIGH', 'HashiCorp Consul Service Catalog Exposed',
-                    'Consul /v1/catalog/services accessible without ACL token — '
+                    'Consul /v1/catalog/services accessible without ACL token - '
                     'full service registry exposed.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/v1/catalog/services',
@@ -1189,7 +1208,7 @@ async def check_consul(host, port, target, resolved_ip):
 async def check_vault(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /v1/sys/health — initialization and seal status
+        # /v1/sys/health - initialization and seal status
         try:
             r = await client.get(f'http://{host}:{port}/v1/sys/health')
             if r.status_code in (200, 429, 472, 473, 501, 503):
@@ -1218,12 +1237,12 @@ async def check_vault(host, port, target, resolved_ip):
         except Exception:
             pass
 
-        # /v1/sys/mounts — lists secret engines; should require auth
+        # /v1/sys/mounts - lists secret engines; should require auth
         try:
             r = await client.get(f'http://{host}:{port}/v1/sys/mounts')
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'HashiCorp Vault /sys/mounts Unauthenticated',
-                    'Vault /v1/sys/mounts accessible without token — '
+                    'Vault /v1/sys/mounts accessible without token - '
                     'secret engine listing possible without authentication.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/v1/sys/mounts',
@@ -1295,12 +1314,12 @@ async def check_minio(host, port, target, resolved_ip):
 async def check_solr(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /solr/admin/cores?action=STATUS — core listing
+        # /solr/admin/cores?action=STATUS - core listing
         try:
             r = await client.get(f'http://{host}:{port}/solr/admin/cores?action=STATUS')
             if r.status_code == 200 and any(w in r.text.lower() for w in ('status', 'solr', 'core')):
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Apache Solr Admin Cores Exposed',
-                    'Solr /solr/admin/cores?action=STATUS accessible without auth — '
+                    'Solr /solr/admin/cores?action=STATUS accessible without auth - '
                     'all core names and configuration exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/solr/admin/cores?action=STATUS',
@@ -1308,19 +1327,19 @@ async def check_solr(host, port, target, resolved_ip):
         except Exception:
             pass
 
-        # /solr/admin/info/system — version disclosure
+        # /solr/admin/info/system - version disclosure
         try:
             r = await client.get(f'http://{host}:{port}/solr/admin/info/system')
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'HIGH', 'Apache Solr System Info Exposed',
-                    'Solr /solr/admin/info/system accessible — version and JVM info disclosed.',
+                    'Solr /solr/admin/info/system accessible - version and JVM info disclosed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/solr/admin/info/system',
                     http_status=r.status_code))
         except Exception:
             pass
 
-        # /solr/#/ — admin UI
+        # /solr/#/ - admin UI
         try:
             r = await client.get(f'http://{host}:{port}/solr/#/')
             if r.status_code == 200 and 'solr' in r.text.lower():
@@ -1364,14 +1383,14 @@ async def check_tomcat(host, port, target, resolved_ip):
         except Exception:
             return out
 
-        # /manager/html — unauthenticated access
+        # /manager/html - unauthenticated access
         try:
             r = await client.get(f'{scheme}://{host}:{port}/manager/html')
             if r.status_code == 200 and any(
                 w in r.text.lower() for w in ('tomcat', 'manager', 'application manager')
             ):
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Apache Tomcat Manager Unauthenticated',
-                    'Tomcat /manager/html accessible without credentials — WAR deployment possible.',
+                    'Tomcat /manager/html accessible without credentials - WAR deployment possible.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/manager/html',
                     http_status=r.status_code))
@@ -1390,7 +1409,7 @@ async def check_tomcat(host, port, target, resolved_ip):
                 ):
                     out.append(_finding('VULNERABLE', 'CRITICAL',
                         f'Apache Tomcat Manager Default Credentials ({user}:{passwd})',
-                        f'Tomcat /manager/html accessible with {user}:{passwd} — WAR deployment possible.',
+                        f'Tomcat /manager/html accessible with {user}:{passwd} - WAR deployment possible.',
                         target, resolved_ip, port,
                         url=f'{scheme}://{host}:{port}/manager/html',
                         http_status=r.status_code))
@@ -1418,7 +1437,7 @@ async def check_weblogic(host, port, target, resolved_ip):
     out = []
     scheme = 'https' if port == 7002 else 'http'
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /console — admin console
+        # /console - admin console
         try:
             r = await client.get(f'{scheme}://{host}:{port}/console')
             if r.status_code in (200, 301, 302) and any(
@@ -1432,7 +1451,7 @@ async def check_weblogic(host, port, target, resolved_ip):
         except Exception:
             pass
 
-        # CVE-2020-14882 — authentication bypass via URL encoding
+        # CVE-2020-14882 - authentication bypass via URL encoding
         try:
             r = await client.get(
                 f'{scheme}://{host}:{port}/console/css/%252E%252E%252Fconsole.portal')
@@ -1441,7 +1460,7 @@ async def check_weblogic(host, port, target, resolved_ip):
             ):
                 out.append(_finding('VULNERABLE', 'CRITICAL',
                     'WebLogic CVE-2020-14882 Authentication Bypass',
-                    'WebLogic Console auth bypass via %252E%252E%252F path traversal succeeded — '
+                    'WebLogic Console auth bypass via %252E%252E%252F path traversal succeeded - '
                     'CVE-2020-14882.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/console/css/%252E%252E%252Fconsole.portal',
@@ -1457,14 +1476,14 @@ async def check_weblogic(host, port, target, resolved_ip):
 async def check_jboss(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /management — REST management API
+        # /management - REST management API
         try:
             r = await client.get(f'http://{host}:{port}/management')
             if r.status_code == 200 and any(
                 w in r.text.lower() for w in ('wildfly', 'jboss', 'management', 'server-state')
             ):
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'JBoss/WildFly Management API Unauthenticated',
-                    'JBoss /management API accessible without credentials — '
+                    'JBoss /management API accessible without credentials - '
                     'full server management including deployment is exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/management',
@@ -1488,7 +1507,7 @@ async def check_jboss(host, port, target, resolved_ip):
         except Exception:
             pass
 
-        # /console — web admin console
+        # /console - web admin console
         try:
             r = await client.get(f'http://{host}:{port}/console')
             if r.status_code in (200, 301, 302) and any(
@@ -1509,7 +1528,7 @@ async def check_jboss(host, port, target, resolved_ip):
 async def check_glassfish(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /management/domain — REST management API
+        # /management/domain - REST management API
         try:
             r = await client.get(f'https://{host}:{port}/management/domain')
             if r.status_code == 200 and any(
@@ -1558,10 +1577,10 @@ async def check_alertmanager(host, port, target, resolved_ip):
 
         try:
             r = await client.get(f'http://{host}:{port}/api/v2/alerts')
-            # Alertmanager always returns a JSON array — confirm body starts with '['
+            # Alertmanager always returns a JSON array - confirm body starts with '['
             if r.status_code == 200 and r.text.strip().startswith('['):
                 out.append(_finding('VULNERABLE', 'HIGH', 'Alertmanager API /alerts Unauthenticated',
-                    'Alertmanager /api/v2/alerts accessible without auth — '
+                    'Alertmanager /api/v2/alerts accessible without auth - '
                     'active alerts can be read and silenced.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/api/v2/alerts',
@@ -1573,7 +1592,7 @@ async def check_alertmanager(host, port, target, resolved_ip):
             r = await client.get(f'http://{host}:{port}/api/v2/receivers')
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'HIGH', 'Alertmanager API /receivers Unauthenticated',
-                    'Alertmanager /api/v2/receivers accessible without auth — '
+                    'Alertmanager /api/v2/receivers accessible without auth - '
                     'notification receiver configuration exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/api/v2/receivers',
@@ -1608,7 +1627,7 @@ async def check_loki(host, port, target, resolved_ip):
                 w in r.text.lower() for w in ('streams', 'result')
             ):
                 out.append(_finding('VULNERABLE', 'HIGH', 'Loki Unauthenticated Log Query',
-                    'Loki /loki/api/v1/query accessible without auth — '
+                    'Loki /loki/api/v1/query accessible without auth - '
                     'arbitrary log queries possible.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/loki/api/v1/query?query=%7Bjob%3D%22%22%7D',
@@ -1636,7 +1655,7 @@ async def check_jaeger(host, port, target, resolved_ip):
                     pass
             if is_jaeger:
                 out.append(_finding('VULNERABLE', 'HIGH', 'Jaeger API /services Unauthenticated',
-                    'Jaeger /api/services accessible without auth — '
+                    'Jaeger /api/services accessible without auth - '
                     'full service list from distributed tracing exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/api/services',
@@ -1657,7 +1676,7 @@ async def check_jaeger(host, port, target, resolved_ip):
                     pass
             if is_jaeger_traces:
                 out.append(_finding('VULNERABLE', 'HIGH', 'Jaeger API /traces Unauthenticated',
-                    'Jaeger /api/traces accessible without auth — '
+                    'Jaeger /api/traces accessible without auth - '
                     'distributed trace data exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/api/traces?service=vaktscan-probe',
@@ -1674,7 +1693,7 @@ async def check_zipkin(host, port, target, resolved_ip):
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
         try:
             r = await client.get(f'http://{host}:{port}/api/v2/services')
-            # Zipkin returns a JSON array of service name strings — confirm structure
+            # Zipkin returns a JSON array of service name strings - confirm structure
             is_zipkin = False
             if r.status_code == 200:
                 try:
@@ -1687,7 +1706,7 @@ async def check_zipkin(host, port, target, resolved_ip):
                         is_zipkin = True
             if is_zipkin:
                 out.append(_finding('VULNERABLE', 'HIGH', 'Zipkin API /services Unauthenticated',
-                    'Zipkin /api/v2/services accessible without auth — '
+                    'Zipkin /api/v2/services accessible without auth - '
                     'service topology from distributed tracing exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/api/v2/services',
@@ -1715,7 +1734,7 @@ async def check_splunk(host, port, target, resolved_ip):
             except Exception:
                 pass
 
-        # REST API on 8089 — try default admin:changeme
+        # REST API on 8089 - try default admin:changeme
         if port == 8089:
             try:
                 r = await client.post(
@@ -1724,7 +1743,7 @@ async def check_splunk(host, port, target, resolved_ip):
                 if r.status_code == 200 and 'sessionkey' in r.text.lower():
                     out.append(_finding('VULNERABLE', 'CRITICAL',
                         'Splunk Default Credentials (admin:changeme)',
-                        'Splunk REST API /services/auth/login succeeded with admin:changeme — '
+                        'Splunk REST API /services/auth/login succeeded with admin:changeme - '
                         'full Splunk management access.',
                         target, resolved_ip, port,
                         url=f'https://{host}:{port}/services/auth/login',
@@ -1751,7 +1770,7 @@ async def check_traefik(host, port, target, resolved_ip):
             )
             if r.status_code == 200 and is_traefik:
                 out.append(_finding('VULNERABLE', 'HIGH', 'Traefik Dashboard Unauthenticated',
-                    'Traefik /dashboard/ accessible without auth — '
+                    'Traefik /dashboard/ accessible without auth - '
                     'routing configuration and backend services exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/dashboard/',
@@ -1767,7 +1786,7 @@ async def check_traefik(host, port, target, resolved_ip):
             )
             if r.status_code == 200 and has_routing_data:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Traefik /api/rawdata Unauthenticated',
-                    'Traefik /api/rawdata accessible without auth — '
+                    'Traefik /api/rawdata accessible without auth - '
                     'full routing table with all backends and middleware exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/api/rawdata',
@@ -1817,7 +1836,7 @@ async def check_portainer(host, port, target, resolved_ip):
                 if r.status_code == 200 and 'jwt' in r.text.lower():
                     out.append(_finding('VULNERABLE', 'CRITICAL',
                         f'Portainer Default Credentials ({user}:{passwd})',
-                        f'Portainer /api/auth succeeded with {user}:{passwd} — '
+                        f'Portainer /api/auth succeeded with {user}:{passwd} - '
                         'full Docker/container management access.',
                         target, resolved_ip, port,
                         url=f'{scheme}://{host}:{port}/api/auth',
@@ -1842,7 +1861,7 @@ async def check_rabbitmq(host, port, target, resolved_ip):
             ):
                 out.append(_finding('VULNERABLE', 'CRITICAL',
                     'RabbitMQ Management Default Credentials (guest:guest)',
-                    'RabbitMQ /api/overview accessible with guest:guest — '
+                    'RabbitMQ /api/overview accessible with guest:guest - '
                     'full broker management access including message queues.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/api/overview',
@@ -1871,7 +1890,7 @@ async def check_ipmi(host, port, target, resolved_ip):
     )
 
     def _udp_probe(h, p):
-        """Blocking UDP send/recv — runs in executor thread."""
+        """Blocking UDP send/recv - runs in executor thread."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(2)
         try:
@@ -1887,9 +1906,9 @@ async def check_ipmi(host, port, target, resolved_ip):
     response = await loop.run_in_executor(None, _udp_probe, host, port)
 
     if response:
-        # Port is open and responded — flag exposure
+        # Port is open and responded - flag exposure
         out.append(_finding('INFO', 'INFO', 'IPMI Port Exposed',
-            f'IPMI UDP port {port} responded to an RMCP+ probe — '
+            f'IPMI UDP port {port} responded to an RMCP+ probe - '
             'IPMI management interface is network-accessible. '
             'Check for cipher suite 0 bypass (CVE-2013-4786).',
             target, resolved_ip, port,
@@ -1903,7 +1922,7 @@ async def check_ipmi(host, port, target, resolved_ip):
             out.append(_finding('VULNERABLE', 'HIGH',
                 'IPMI Cipher Suite 0 Authentication Bypass',
                 'IPMI response advertises "None" authentication type (bit 0 of '
-                'auth-support byte set) — cipher suite 0 bypass likely possible. '
+                'auth-support byte set) - cipher suite 0 bypass likely possible. '
                 'CVE-2013-4786 / IPMI 2.0 RAKP allows offline hash capture.',
                 target, resolved_ip, port,
                 url=f'ipmi://{host}:{port}'))
@@ -1916,7 +1935,7 @@ async def check_ipmi(host, port, target, resolved_ip):
             timeout=15)
         if rc == 0 and stdout and any(w in stdout.lower() for w in ('id', 'name', 'user')):
             out.append(_finding('VULNERABLE', 'CRITICAL', 'IPMI Cipher 0 Authentication Bypass',
-                'ipmitool cipher 0 (no auth) user list succeeded — '
+                'ipmitool cipher 0 (no auth) user list succeeded - '
                 'CVE-2013-4786 / IPMI 2.0 RAKP authentication bypass.',
                 target, resolved_ip, port,
                 url=f'ipmi://{host}:{port}'))
@@ -1929,7 +1948,7 @@ async def check_ipmi(host, port, target, resolved_ip):
             timeout=15)
         if rc == 0 and stdout and any(w in stdout.lower() for w in ('id', 'name', 'user')):
             out.append(_finding('VULNERABLE', 'CRITICAL', 'IPMI Empty Credentials Accepted',
-                'ipmitool empty username/password user list succeeded — '
+                'ipmitool empty username/password user list succeeded - '
                 'IPMI management interface accessible without credentials.',
                 target, resolved_ip, port,
                 url=f'ipmi://{host}:{port}'))
@@ -1942,14 +1961,14 @@ async def check_ipmi(host, port, target, resolved_ip):
 async def check_nexus(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /service/rest/v1/repositories — unauthenticated repository listing
+        # /service/rest/v1/repositories - unauthenticated repository listing
         try:
             r = await client.get(f'http://{host}:{port}/service/rest/v1/repositories')
             if r.status_code == 200 and any(
                 w in r.text.lower() for w in ('name', 'format', 'type', 'url')
             ):
                 out.append(_finding('VULNERABLE', 'HIGH', 'Nexus Repository List Unauthenticated',
-                    'Nexus /service/rest/v1/repositories accessible without auth — '
+                    'Nexus /service/rest/v1/repositories accessible without auth - '
                     'full repository list exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/service/rest/v1/repositories',
@@ -1979,7 +1998,7 @@ async def check_nexus(host, port, target, resolved_ip):
 async def check_artifactory(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /artifactory/api/system/ping — detect service
+        # /artifactory/api/system/ping - detect service
         try:
             r = await client.get(f'http://{host}:{port}/artifactory/api/system/ping')
             if r.status_code == 200 and 'ok' in r.text.lower():
@@ -1993,7 +2012,7 @@ async def check_artifactory(host, port, target, resolved_ip):
         except Exception:
             return out
 
-        # /artifactory/api/repositories — unauthenticated repo listing
+        # /artifactory/api/repositories - unauthenticated repo listing
         try:
             r = await client.get(f'http://{host}:{port}/artifactory/api/repositories')
             if r.status_code == 200:
@@ -2027,14 +2046,14 @@ async def check_artifactory(host, port, target, resolved_ip):
 async def check_teamcity(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /app/rest/server — version and build info
+        # /app/rest/server - version and build info
         try:
             r = await client.get(f'http://{host}:{port}/app/rest/server')
             if r.status_code == 200 and any(
                 w in r.text.lower() for w in ('teamcity', 'version', 'buildnumber')
             ):
                 out.append(_finding('VULNERABLE', 'HIGH', 'TeamCity REST API Unauthenticated',
-                    'TeamCity /app/rest/server accessible without auth — '
+                    'TeamCity /app/rest/server accessible without auth - '
                     'version and build configuration info exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/app/rest/server',
@@ -2044,11 +2063,11 @@ async def check_teamcity(host, port, target, resolved_ip):
         except Exception:
             return out
 
-        # CVE-2024-27198 — authentication bypass to /app/rest/users
+        # CVE-2024-27198 - authentication bypass to /app/rest/users
         try:
             r = await client.get(f'http://{host}:{port}/app/rest/users')
             body_lower = r.text.lower()
-            # Require 'user' AND ('username' or 'href') — TeamCity's user list structure
+            # Require 'user' AND ('username' or 'href') - TeamCity's user list structure
             is_tc_users = (
                 r.status_code == 200
                 and 'user' in body_lower
@@ -2056,7 +2075,7 @@ async def check_teamcity(host, port, target, resolved_ip):
             )
             if is_tc_users:
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'TeamCity CVE-2024-27198 Auth Bypass',
-                    'TeamCity /app/rest/users accessible without auth — '
+                    'TeamCity /app/rest/users accessible without auth - '
                     'CVE-2024-27198 authentication bypass, full user listing exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/app/rest/users',
@@ -2072,7 +2091,7 @@ async def check_teamcity(host, port, target, resolved_ip):
 async def check_sonarqube(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /api/system/status — service detection and version
+        # /api/system/status - service detection and version
         try:
             r = await client.get(f'http://{host}:{port}/api/system/status')
             # Require 'sonarqube' or the specific '"status"' JSON key to confirm service identity
@@ -2090,10 +2109,10 @@ async def check_sonarqube(host, port, target, resolved_ip):
         except Exception:
             return out
 
-        # /api/projects/search — project source code disclosure
+        # /api/projects/search - project source code disclosure
         try:
             r = await client.get(f'http://{host}:{port}/api/projects/search')
-            # Require both 'components' and 'paging' keys — Consul's specific response structure
+            # Require both 'components' and 'paging' keys - Consul's specific response structure
             is_sonar_projects = False
             if r.status_code == 200:
                 body_lower = r.text.lower()
@@ -2101,7 +2120,7 @@ async def check_sonarqube(host, port, target, resolved_ip):
                     is_sonar_projects = True
             if is_sonar_projects:
                 out.append(_finding('VULNERABLE', 'HIGH', 'SonarQube Projects Unauthenticated',
-                    'SonarQube /api/projects/search accessible without auth — '
+                    'SonarQube /api/projects/search accessible without auth - '
                     'project source and analysis data exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/api/projects/search',
@@ -2131,14 +2150,14 @@ async def check_sonarqube(host, port, target, resolved_ip):
 async def check_envoy_admin(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # /config_dump — full mesh configuration
+        # /config_dump - full mesh configuration
         try:
             r = await client.get(f'http://{host}:{port}/config_dump')
             if r.status_code == 200 and any(
                 w in r.text.lower() for w in ('static_resources', 'dynamic_resources', 'configs')
             ):
                 out.append(_finding('VULNERABLE', 'CRITICAL', 'Istio/Envoy Admin /config_dump Exposed',
-                    'Envoy admin /config_dump accessible without auth — '
+                    'Envoy admin /config_dump accessible without auth - '
                     'full service mesh configuration including TLS certificates and routes exposed.',
                     target, resolved_ip, port,
                     url=f'http://{host}:{port}/config_dump',
@@ -2187,7 +2206,7 @@ async def check_jira(host, port, target, resolved_ip):
         except Exception:
             return out
 
-        # CVE-2022-0540 — Seraph auth filter bypass
+        # CVE-2022-0540 - Seraph auth filter bypass
         try:
             r = await client.get(
                 f'{scheme}://{host}:{port}/rest/api/2/issue/NADA-1',
@@ -2196,7 +2215,7 @@ async def check_jira(host, port, target, resolved_ip):
                 out.append(_finding('VULNERABLE', 'CRITICAL',
                     'CVE-2022-0540 Jira Auth Filter Bypass',
                     'Jira /rest/api/2/issue/NADA-1 returned HTTP '
-                    f'{r.status_code} with X-Atlassian-Token: no-check header — '
+                    f'{r.status_code} with X-Atlassian-Token: no-check header - '
                     'Seraph authentication filter bypass (CVE-2022-0540).',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/rest/api/2/issue/NADA-1',
@@ -2225,7 +2244,7 @@ async def check_jira(host, port, target, resolved_ip):
             if r.status_code == 200 and r.text.strip().startswith('['):
                 out.append(_finding('VULNERABLE', 'HIGH',
                     'Jira Project Listing Unauthenticated',
-                    'Jira /rest/api/2/project returned a JSON array without auth — '
+                    'Jira /rest/api/2/project returned a JSON array without auth - '
                     'full project list exposed.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/rest/api/2/project',
@@ -2257,7 +2276,7 @@ async def check_confluence(host, port, target, resolved_ip):
         except Exception:
             return out
 
-        # CVE-2022-26134 — OGNL RCE (unauthenticated)
+        # CVE-2022-26134 - OGNL RCE (unauthenticated)
         ognl_path = '/%24%7B%40java.lang.Runtime%40getRuntime%28%29.exec%28%27id%27%29%7D/index.action'
         try:
             baseline = await client.get(f'{scheme}://{host}:{port}/index.action')
@@ -2269,7 +2288,7 @@ async def check_confluence(host, port, target, resolved_ip):
             if is_vuln:
                 out.append(_finding('VULNERABLE', 'CRITICAL',
                     'CVE-2022-26134 Confluence OGNL Injection (Unauth RCE)',
-                    'Confluence OGNL injection endpoint responded to payload path — '
+                    'Confluence OGNL injection endpoint responded to payload path - '
                     'potential unauthenticated RCE (CVE-2022-26134). '
                     f'HTTP {r.status_code}.',
                     target, resolved_ip, port,
@@ -2279,7 +2298,7 @@ async def check_confluence(host, port, target, resolved_ip):
         except Exception:
             pass
 
-        # CVE-2023-22518 — improper authorization via setup-restore
+        # CVE-2023-22518 - improper authorization via setup-restore
         try:
             r = await client.post(
                 f'{scheme}://{host}:{port}/json/setup-restore.action',
@@ -2288,7 +2307,7 @@ async def check_confluence(host, port, target, resolved_ip):
                 out.append(_finding('VULNERABLE', 'CRITICAL',
                     'CVE-2023-22518 Confluence Improper Authorization',
                     'Confluence /json/setup-restore.action returned HTTP '
-                    f'{r.status_code} without authentication — '
+                    f'{r.status_code} without authentication - '
                     'CVE-2023-22518 improper authorization.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/json/setup-restore.action',
@@ -2322,7 +2341,7 @@ async def check_confluence(host, port, target, resolved_ip):
 async def check_jenkins_cves(host, port, target, resolved_ip):
     out = []
     async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
-        # CVE-2024-23897 — Jenkins CLI arbitrary file read
+        # CVE-2024-23897 - Jenkins CLI arbitrary file read
         # Check if CLI endpoint is reachable and exposes Jenkins-specific headers
         for cli_path in ('/cli', '/jenkins/cli'):
             try:
@@ -2346,7 +2365,7 @@ async def check_jenkins_cves(host, port, target, resolved_ip):
             except Exception:
                 continue
 
-        # CVE-2024-23897 — probe CLI remoting endpoint with Jenkins protocol header
+        # CVE-2024-23897 - probe CLI remoting endpoint with Jenkins protocol header
         try:
             r = await client.post(
                 f'http://{host}:{port}/cli?remoting=false',
@@ -2366,7 +2385,7 @@ async def check_jenkins_cves(host, port, target, resolved_ip):
                     out.append(_finding('POTENTIAL', 'CRITICAL',
                         'CVE-2024-23897 Jenkins CLI Remoting Endpoint Reachable',
                         'Jenkins /cli?remoting=false responded to Jenkins remoting '
-                        'protocol probe with Jenkins-specific headers — '
+                        'protocol probe with Jenkins-specific headers - '
                         'arbitrary file read via CLI may be possible (CVE-2024-23897).',
                         target, resolved_ip, port,
                         url=f'http://{host}:{port}/cli?remoting=false',
@@ -2467,7 +2486,7 @@ async def check_gitlab(host, port, target, resolved_ip):
             r = await client.get(f'{scheme}://{host}:{port}/users/sign_in')
             if r.status_code == 200 and 'register' in r.text.lower():
                 out.append(_finding('INFO', 'INFO', 'GitLab Registration Enabled',
-                    'GitLab sign-in page contains a registration link — '
+                    'GitLab sign-in page contains a registration link - '
                     'open registration may be enabled.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/users/sign_in',
@@ -2547,7 +2566,7 @@ async def check_argocd(host, port, target, resolved_ip):
         except Exception:
             return out
 
-        # CVE-2022-29165 — authentication bypass via empty password
+        # CVE-2022-29165 - authentication bypass via empty password
         try:
             r = await client.post(
                 f'{scheme}://{host}:{port}/api/v1/session',
@@ -2555,7 +2574,7 @@ async def check_argocd(host, port, target, resolved_ip):
             if r.status_code == 200 and 'token' in r.text.lower():
                 out.append(_finding('VULNERABLE', 'CRITICAL',
                     'CVE-2022-29165 ArgoCD Authentication Bypass',
-                    'ArgoCD /api/v1/session returned a token with admin:(blank password) — '
+                    'ArgoCD /api/v1/session returned a token with admin:(blank password) - '
                     'CVE-2022-29165 authentication bypass.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/api/v1/session',
@@ -2570,7 +2589,7 @@ async def check_argocd(host, port, target, resolved_ip):
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'CRITICAL',
                     'ArgoCD Cluster List Exposed (unauth)',
-                    'ArgoCD /api/v1/clusters accessible without authentication — '
+                    'ArgoCD /api/v1/clusters accessible without authentication - '
                     'managed cluster credentials may be exposed.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/api/v1/clusters',
@@ -2584,7 +2603,7 @@ async def check_argocd(host, port, target, resolved_ip):
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'HIGH',
                     'ArgoCD Repository List Exposed (unauth)',
-                    'ArgoCD /api/v1/repositories accessible without authentication — '
+                    'ArgoCD /api/v1/repositories accessible without authentication - '
                     'Git repository URLs and credentials may be exposed.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/api/v1/repositories',
@@ -2648,7 +2667,7 @@ async def check_rancher(host, port, target, resolved_ip):
             if r.status_code == 200:
                 out.append(_finding('VULNERABLE', 'CRITICAL',
                     'Rancher Cluster List Exposed (unauth)',
-                    'Rancher /v3/clusters accessible without authentication — '
+                    'Rancher /v3/clusters accessible without authentication - '
                     'full managed cluster inventory exposed.',
                     target, resolved_ip, port,
                     url=f'{scheme}://{host}:{port}/v3/clusters',
@@ -2693,7 +2712,7 @@ async def check_rancher(host, port, target, resolved_ip):
 async def check_opentelemetry(host, port, target, resolved_ip):
     out = []
 
-    # Port 4318 — HTTP receiver
+    # Port 4318 - HTTP receiver
     if port == 4318:
         async with httpx.AsyncClient(timeout=8, verify=False) as client:
             try:
@@ -2703,7 +2722,7 @@ async def check_opentelemetry(host, port, target, resolved_ip):
                     out.append(_finding('VULNERABLE', 'HIGH',
                         'OpenTelemetry HTTP Receiver Exposed',
                         f'OpenTelemetry HTTP receiver at /v1/traces responded HTTP {r.status_code} '
-                        '(endpoint exists and accepts POST) — allows injecting arbitrary telemetry '
+                        '(endpoint exists and accepts POST) - allows injecting arbitrary telemetry '
                         'or reading trace data.',
                         target, resolved_ip, port,
                         url=f'http://{host}:{port}/v1/traces',
@@ -2712,7 +2731,7 @@ async def check_opentelemetry(host, port, target, resolved_ip):
                 pass
         return out
 
-    # Port 55679 — zPages debug interface
+    # Port 55679 - zPages debug interface
     if port == 55679:
         async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
             detected = False
@@ -2728,7 +2747,7 @@ async def check_opentelemetry(host, port, target, resolved_ip):
                         detected = True
                         out.append(_finding('VULNERABLE', 'HIGH',
                             'OpenTelemetry zPages Debug Interface Exposed',
-                            f'OpenTelemetry zPages {label} at {path} accessible without auth — '
+                            f'OpenTelemetry zPages {label} at {path} accessible without auth - '
                             'exposes internal pipeline, service, and trace debug data.',
                             target, resolved_ip, port,
                             url=f'http://{host}:{port}{path}',
@@ -2739,14 +2758,14 @@ async def check_opentelemetry(host, port, target, resolved_ip):
                 pass
         return out
 
-    # Port 4317 — gRPC receiver (TCP banner check)
+    # Port 4317 - gRPC receiver (TCP banner check)
     if port == 4317:
         try:
             _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=5)
             writer.close()
             out.append(_finding('INFO', 'INFO',
                 'OpenTelemetry gRPC Receiver Exposed',
-                f'OpenTelemetry gRPC receiver port {port} is accepting connections — '
+                f'OpenTelemetry gRPC receiver port {port} is accepting connections - '
                 'allows injecting arbitrary telemetry spans and metrics.',
                 target, resolved_ip, port,
                 url=f'grpc://{host}:{port}'))
@@ -2762,7 +2781,7 @@ async def check_opentelemetry(host, port, target, resolved_ip):
 async def check_nagios_zabbix(host, port, target, resolved_ip):
     out = []
 
-    # Port 10051 — Zabbix server TCP banner
+    # Port 10051 - Zabbix server TCP banner
     if port == 10051:
         try:
             _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=5)
@@ -2814,13 +2833,13 @@ async def check_nagios_zabbix(host, port, target, resolved_ip):
                 except Exception:
                     pass
 
-            # Nagios CGI status — unauthenticated
+            # Nagios CGI status - unauthenticated
             try:
                 r = await client.get(f'{scheme}://{host}:{port}/nagios/cgi-bin/status.cgi')
                 if r.status_code == 200:
                     out.append(_finding('VULNERABLE', 'HIGH',
                         'Nagios Status CGI Accessible (unauth)',
-                        'Nagios /nagios/cgi-bin/status.cgi accessible without authentication — '
+                        'Nagios /nagios/cgi-bin/status.cgi accessible without authentication - '
                         'host and service status exposed.',
                         target, resolved_ip, port,
                         url=f'{scheme}://{host}:{port}/nagios/cgi-bin/status.cgi',
@@ -2853,7 +2872,7 @@ async def check_nagios_zabbix(host, port, target, resolved_ip):
                 if r.status_code == 200 and 'zabbix' in r.text.lower() and 'sign in' not in r.text.lower():
                     out.append(_finding('VULNERABLE', 'CRITICAL',
                         'Zabbix Default Credentials (Admin:zabbix)',
-                        'Zabbix login form accepted Admin:zabbix — '
+                        'Zabbix login form accepted Admin:zabbix - '
                         'full monitoring system access.',
                         target, resolved_ip, port,
                         url=f'{scheme}://{host}:{port}/zabbix/index.php',
@@ -2861,7 +2880,7 @@ async def check_nagios_zabbix(host, port, target, resolved_ip):
             except Exception:
                 pass
 
-        # Zabbix JSON-RPC API — try default credentials
+        # Zabbix JSON-RPC API - try default credentials
         try:
             r = await client.post(
                 f'{scheme}://{host}:{port}/zabbix/api_jsonrpc.php',
@@ -2881,7 +2900,7 @@ async def check_nagios_zabbix(host, port, target, resolved_ip):
                 if has_result:
                     out.append(_finding('VULNERABLE', 'CRITICAL',
                         'Zabbix Default Credentials (Admin:zabbix)',
-                        'Zabbix JSON-RPC API user.login succeeded with Admin:zabbix — '
+                        'Zabbix JSON-RPC API user.login succeeded with Admin:zabbix - '
                         'full API access granted.',
                         target, resolved_ip, port,
                         url=f'{scheme}://{host}:{port}/zabbix/api_jsonrpc.php',
@@ -3045,7 +3064,7 @@ PORT_DISPATCH = {
 }
 
 
-# Ports where multiple services compete — fingerprint before running checks
+# Ports where multiple services compete - fingerprint before running checks
 SHARED_PORTS = {80, 443, 8080, 8081, 8082, 8083, 8090, 8443, 9000, 9001, 9443}  # ports with multiple competing checks
 
 # Map check function → required fingerprint tag (None = always run)
@@ -3104,7 +3123,7 @@ async def run_scans(target_obj, port, **_kwargs):
         try:
             findings = await check_fn(scan_address, port, display, resolved_ip)
         except Exception as e:
-            print(f"  [!] service_recon error on {scan_address}:{port} ({check_fn.__name__}) — {e}")
+            print(f"  [!] service_recon error on {scan_address}:{port} ({check_fn.__name__}) - {e}")
             continue
         all_findings.extend(findings)
 
