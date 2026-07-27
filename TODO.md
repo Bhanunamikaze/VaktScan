@@ -1,4 +1,4 @@
-# VaktScan — Open Backlog
+# VaktScan - Open Backlog
 
 Current pipeline: subcommand CLI (scan / enum / probe / dns / cloud / js-paths / google-dork)
 → subdomain enum → scope filter (`--exclude` → `--include-only` → `--company-only`)
@@ -17,7 +17,7 @@ scope control, asset classifier) is shipped. Only the items below are still open
 - [ ] Add a screenshot / GIF of a real scan run to README.
 
 ## Progress-feedback follow-ups (deferred from the frozen-dashboard fix)
-- [ ] Per-tool heartbeats in the recon phase — ffuf vhost fuzz, `testssl` (300s silent/host),
+- [ ] Per-tool heartbeats in the recon phase - ffuf vhost fuzz, `testssl` (300s silent/host),
       and `service_recon` shell-outs still run without a live task update. Needs `main.py` task
       wiring (these are silent-but-working, not frozen-dashboard bugs).
 
@@ -26,8 +26,11 @@ scope control, asset classifier) is shipped. Only the items below are still open
       SMTP open-relay test, BIMI record check.
 
 ## Resume
-- [ ] Make an *interrupted* web-probe itself resumable — needs a new resumable phase.
-      (Hostname attribution on resume is already fixed; this is the remaining sub-item of B8.)
+- [x] Make an *interrupted* web-probe itself resumable - DONE. The web-probe is now a
+      first-class checkpointed phase (`web_probing` → `web_probing_complete`): completed
+      URLs are persisted (`completed_web_urls`) and skipped on resume, so an interrupt
+      continues from the not-yet-probed URLs instead of restarting or being skipped
+      entirely. Hostname attribution on resume was already fixed. (Closes B8.)
 
 ## Horizontal expansion follow-up
 - [ ] Feed `reverse_hosts` / `related_domains` from `horizontal_expand` back into the live-host

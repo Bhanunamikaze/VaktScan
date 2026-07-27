@@ -9,7 +9,7 @@ import signal
 import time
 import traceback
 
-# Load .env if present (optional dependency — silently skipped if not installed)
+# Load .env if present (optional dependency - silently skipped if not installed)
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -333,7 +333,7 @@ async def run_recon_followups(
 
     alive_urls = sorted(set(alive_urls))
     
-    # Run domain scanner, dirsearch, nuclei, web checks, and JS paths concurrently —
+    # Run domain scanner, dirsearch, nuclei, web checks, and JS paths concurrently -
     # all are read-only against alive_urls and write to their own files in output_dir.
     if alive_urls:
         print(f"{Colors.CYAN}[*] Running domain scanner, dirsearch, nuclei, web checks, and JS paths in parallel on {len(alive_urls)} URL(s)...{Colors.RESET}")
@@ -453,7 +453,7 @@ async def run_recon_followups(
                 print(f"{Colors.GREEN}[+] Screenshots: {len(_shot_findings)} finding(s).{Colors.RESET}")
                 all_findings.extend(_shot_findings)
 
-        # Optional alive-URL analyses (opt-in — each can be heavy at recon scale;
+        # Optional alive-URL analyses (opt-in - each can be heavy at recon scale;
         # all gracefully skip when their external tool isn't installed).
         if "params" in extra_scans:
             _pf = await param_discovery.discover_parameters(alive_urls, output_dir, concurrency)
@@ -528,7 +528,7 @@ def load_subdomains_file(file_path):
         if not entries:
             print(f"{Colors.YELLOW}[!] File '{file_path}' contained no usable targets after normalization.{Colors.RESET}")
         return entries
-    # Not a file path — try to parse as a direct target (URL, domain, or IP)
+    # Not a file path - try to parse as a direct target (URL, domain, or IP)
     import ipaddress as _ipa
     host = normalize_host_value(file_path)
     if host:
@@ -636,11 +636,59 @@ def _registrable_domain(host):
     return ".".join(labels[-2:])
 
 
-async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency):
+# Number of URLs to fully probe before persisting a web-probe checkpoint. Sized
+# so ordinary scans (a handful of web URLs) still run as a SINGLE batch -
+# byte-for-byte the pre-checkpoint behavior - while large URL sets get periodic
+# checkpoints a resume can continue from.
+WEB_PROBE_CHECKPOINT_BATCH = 50
+
+
+async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
+                          completed_urls=None, record_completed=None, batch_size=None):
     """httpx-probe the given URLs, then run nuclei + web_checks + dirsearch + JS
     path extraction on the alive ones. Returns the collected findings (dirsearch
     writes its own reports). Shared by the normal scan and (opt-in) streaming mode.
+
+    Resumable checkpointing (optional): URLs already in ``completed_urls`` are
+    skipped, and after each batch of ``batch_size`` URLs is fully probed,
+    ``record_completed(batch)`` is invoked so an interrupted web-probe resumes
+    from the URLs it had not reached yet. When no checkpoint hooks are supplied
+    the whole set is probed as one batch (unchanged behavior).
     """
+    findings = []
+    if not web_probe_urls:
+        return findings
+
+    if completed_urls:
+        completed_set = set(completed_urls)
+        remaining = [u for u in web_probe_urls if u not in completed_set]
+        skipped = len(web_probe_urls) - len(remaining)
+        if skipped:
+            print(f"{Colors.GRAY}[*] Resuming web probe - skipping {skipped} "
+                  f"already-probed URL(s).{Colors.RESET}")
+        web_probe_urls = remaining
+        if not web_probe_urls:
+            return findings
+
+    # Split into checkpointed batches only when a recorder is supplied and there
+    # is more than one batch's worth of work; otherwise probe everything at once.
+    if record_completed is not None and batch_size and len(web_probe_urls) > batch_size:
+        batches = [web_probe_urls[i:i + batch_size]
+                   for i in range(0, len(web_probe_urls), batch_size)]
+    else:
+        batches = [web_probe_urls]
+
+    for batch in batches:
+        findings.extend(await _run_web_probe_batch(batch, output_dir, domain_label, concurrency))
+        if record_completed is not None:
+            # Mark the batch done only after its full pipeline finished.
+            record_completed(batch)
+    return findings
+
+
+async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurrency):
+    """Run the full web-probe pipeline (httpx→nuclei→web_checks→dirsearch→JS) on
+    one batch of URLs and return the collected findings."""
     findings = []
     if not web_probe_urls:
         return findings
@@ -729,7 +777,7 @@ async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_ou
     _added_cve_count = 0
     for _batch in nvd_results_list:
         for _f in _batch:
-            _cve_id = _f.get("vulnerability", "").split(" — ")[0].strip()
+            _cve_id = _f.get("vulnerability", "").split(" - ")[0].strip()
             _key = (_f.get("target", "N/A"), _f.get("port", "N/A"), _cve_id)
             if _cve_id and _key not in _seen_cve_keys:
                 _seen_cve_keys.add(_key)
@@ -781,6 +829,19 @@ async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_ou
         write_sarif_output(final_vulnerabilities, sarif_path)
 
     return final_vulnerabilities
+
+
+def _decide_resume(state_manager, resume_flag):
+    """Decide whether this run is a resume, ALWAYS loading persisted state first.
+
+    ``load_existing_state()`` restores saved progress (phase, open ports, findings)
+    as a side effect, so it MUST run even when ``--resume`` is passed. The previous
+    ``resume or state_manager.load_existing_state()`` short-circuited when the flag
+    was set, so the documented way to resume (``--resume``) silently skipped the
+    load and restarted the scan from scratch.
+    """
+    loaded = state_manager.load_existing_state()
+    return bool(resume_flag or loaded)
 
 
 async def main(
@@ -923,7 +984,7 @@ async def main(
             try:
                 import ipaddress as _ipa
                 _ipa.ip_network(t, strict=False)
-                # It's an IP/CIDR — skip for cloud enum
+                # It's an IP/CIDR - skip for cloud enum
                 continue
             except ValueError:
                 pass
@@ -956,7 +1017,7 @@ async def main(
                 }.get(f.get('severity', 'INFO'), Colors.WHITE)
                 print(
                     f"{sev_color}[{f['severity']}]{Colors.RESET} "
-                    f"{f['vulnerability']} — {Colors.UNDERLINE}{f['url']}{Colors.RESET}"
+                    f"{f['vulnerability']} - {Colors.UNDERLINE}{f['url']}{Colors.RESET}"
                 )
                 print(f"    {Colors.GRAY}{f['details']}{Colors.RESET}")
             csv_file = save_results_to_csv(all_cloud_findings)
@@ -1332,7 +1393,7 @@ async def main(
 
                 # Exclusion patterns (--exclude / --exclude-file): matched subdomains
                 # STAY in the enumerated list (results_file) but are removed from
-                # everything downstream — never resolved, probed, or scanned.
+                # everything downstream - never resolved, probed, or scanned.
                 if exclude_patterns:
                     _excluded = [s for s in subdomains if _is_excluded(s)]
                     if _excluded:
@@ -1347,7 +1408,7 @@ async def main(
                         except OSError:
                             print(f"{Colors.YELLOW}[*] Excluded {len(_excluded)} subdomain(s) from scanning (matched exclusion pattern).{Colors.RESET}")
                         if not subdomains:
-                            print(f"{Colors.YELLOW}[!] All discovered subdomains for {domain} were excluded — nothing to scan.{Colors.RESET}")
+                            print(f"{Colors.YELLOW}[!] All discovered subdomains for {domain} were excluded - nothing to scan.{Colors.RESET}")
                             return None
 
                 # --include-only (allowlist): keep ONLY hosts matching the patterns.
@@ -1357,7 +1418,7 @@ async def main(
                     subdomains = [s for s in subdomains if _include_only(s)]
                     print(f"{Colors.YELLOW}[*] --include-only kept {len(subdomains)}/{_before} host(s).{Colors.RESET}")
                     if not subdomains:
-                        print(f"{Colors.YELLOW}[!] No subdomains matched --include-only for {domain} — nothing to scan.{Colors.RESET}")
+                        print(f"{Colors.YELLOW}[!] No subdomains matched --include-only for {domain} - nothing to scan.{Colors.RESET}")
                         return None
 
                 # --company-only: resolve + map IPs, then drop customer/shared-hosting
@@ -1374,7 +1435,7 @@ async def main(
                     if _cls.get("customer"):
                         subdomains = _cls["company"]
                         if not subdomains:
-                            print(f"{Colors.YELLOW}[!] All hosts classified as customer/shared-hosting for {domain} — nothing to scan.{Colors.RESET}")
+                            print(f"{Colors.YELLOW}[!] All hosts classified as customer/shared-hosting for {domain} - nothing to scan.{Colors.RESET}")
                             return None
 
                 # Horizontal / infrastructure expansion (opt-in via --horizontal):
@@ -1455,7 +1516,7 @@ async def main(
                     successes.append(result)
                 elif isinstance(result, Exception):
                     # A programming bug (e.g. NameError/UnboundLocalError) must
-                    # never be swallowed here — that is exactly what once turned
+                    # never be swallowed here - that is exactly what once turned
                     # a code crash into a misleading "no usable targets".
                     _reraise_if_bug(result)
                     print(f"{Colors.RED}[!] Recon error: {result}{Colors.RESET}")
@@ -1471,7 +1532,7 @@ async def main(
             # each domain iff scan_found; if so, the main scan must not re-probe.
             recon_web_probed = scan_found
             # Passive recon (_run_parallel_passive) already ran cloud enum on each
-            # apex domain — record them so phase 3b doesn't repeat the work.
+            # apex domain - record them so phase 3b doesn't repeat the work.
             cloud_enumerated_domains.update(_registrable_domain(d) for d in normalized_domains)
 
             if len(successes) == 1:
@@ -1533,18 +1594,18 @@ async def main(
 
     try:
         # Load existing state or start fresh
-        is_resume = resume or state_manager.load_existing_state()
+        is_resume = _decide_resume(state_manager, resume)
         
         if is_resume:
             print(f"{Colors.CYAN}[*] Resuming VaktScan...{Colors.RESET}")
         else:
             print(f"{Colors.CYAN}[*] Starting VaktScan - Nordic Security Scanner...{Colors.RESET}")
 
-        # 1. Process targets — use robust parser (handles schemas, comments,
+        # 1. Process targets - use robust parser (handles schemas, comments,
         #    inline comments, commas, tabs, BOM, encoding issues, etc.)
         raw_targets = parse_targets_file(targets_file)
 
-        # Decide streaming on the EXPANDED host count, not the raw line count — a
+        # Decide streaming on the EXPANDED host count, not the raw line count - a
         # single large CIDR is one line but can be millions of hosts, and the
         # non-streaming path hard-caps at 50,000 (silently dropping the rest).
         def _expanded_target_count(lines):
@@ -1654,6 +1715,9 @@ async def main(
         
         # Output dir shared by all artifacts from this scan (port CSV, httpx, nuclei, results CSV)
         web_output_dir = None
+        # Defined up front so the resumable web-probe phase below has a label even
+        # on a resume that skips the fresh port-scan branch.
+        domain_label = os.path.splitext(os.path.basename(targets_file))[0]
 
         # --- STANDARD PORT SCAN LOGIC ---
         if state_manager.state["phase"] in ["initializing", "target_processing_complete", "port_scanning"]:
@@ -1689,7 +1753,6 @@ async def main(
             )
             print(f"{Colors.GREEN}[+] Port scanning complete.{Colors.RESET}")
             state_manager.update_phase("port_scanning_complete")
-            domain_label = os.path.splitext(os.path.basename(targets_file))[0]
 
             # Create a single output directory for all artifacts from this scan
             timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -1725,30 +1788,6 @@ async def main(
                         print(f"{Colors.GREEN}[+] Nmap CVE Scan: {len(nmap_cve_findings)} finding(s).{Colors.RESET}")
                         for v in nmap_cve_findings:
                             state_manager.add_vulnerability(v)
-
-            # Run httpx + nuclei on any open web ports found (80, 443, 8080, etc.).
-            # These ports have no specific service module — probe them directly.
-            # Skip entirely when the recon phase already probed these exact hosts
-            # (httpx→nuclei→web_checks→dirsearch→JS) to avoid ~2x work and request volume.
-            web_probe_urls = []
-            if recon_web_probed:
-                print(f"{Colors.GRAY}[*] Skipping web re-probe — recon already ran "
-                      f"httpx/nuclei/web-checks/dirsearch/JS on these hosts.{Colors.RESET}")
-            else:
-                # Probe the standard web ports plus any custom HTTP ports the user supplied.
-                web_port_set = _web_port_set(full_service_ports, custom_ports)
-                for target_obj, data in open_ports_results:
-                    for port in data.get("open_ports", []):
-                        if port in web_port_set:
-                            host = target_obj.get("display_target") or target_obj.get("scan_address")
-                            for scheme in ("http", "https"):
-                                from utils import format_url
-                                web_probe_urls.append(format_url(scheme, host, port))
-                web_probe_urls = sorted(set(web_probe_urls))
-
-            web_findings = await _probe_web_urls(web_probe_urls, web_output_dir, domain_label, concurrency)
-            for _wf in web_findings:
-                state_manager.add_vulnerability(_wf)
         else:
             print(f"[*] Using previously scanned port results...")
             # Rebuild as (target_obj, data) tuples from `targets` (which retains the
@@ -1765,7 +1804,46 @@ async def main(
                 open_ports_results.append(
                     (target, {'open_ports': state_manager.state["open_ports"].get(resolved_ip, [])})
                 )
-    
+
+        # --- WEB-PROBE PHASE (resumable) ---
+        # httpx→nuclei→web_checks→dirsearch→JS on any open web ports. This is a
+        # first-class checkpointed phase: an interrupt here resumes from the URLs
+        # not yet probed (completed URLs are persisted and skipped) instead of
+        # restarting the probe or - worse - skipping it entirely on resume. It runs
+        # in BOTH the fresh and resume branches because `open_ports_results` is now
+        # populated either way. Skipped only when recon already probed these hosts.
+        if not recon_web_probed and state_manager.state["phase"] in ("port_scanning_complete", "web_probing"):
+            state_manager.update_phase("web_probing")
+            # A resume that skipped the fresh branch has no output dir yet.
+            if not web_output_dir:
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                web_output_dir = os.path.join("reports", f"web_probe_{domain_label}_{timestamp}")
+                os.makedirs(web_output_dir, exist_ok=True)
+            # Probe the standard web ports plus any custom HTTP ports the user supplied.
+            from utils import format_url
+            web_port_set = _web_port_set(full_service_ports, custom_ports)
+            web_probe_urls = []
+            for target_obj, data in open_ports_results:
+                for port in data.get("open_ports", []):
+                    if port in web_port_set:
+                        host = target_obj.get("display_target") or target_obj.get("scan_address")
+                        for scheme in ("http", "https"):
+                            web_probe_urls.append(format_url(scheme, host, port))
+            web_probe_urls = sorted(set(web_probe_urls))
+
+            web_findings = await _probe_web_urls(
+                web_probe_urls, web_output_dir, domain_label, concurrency,
+                completed_urls=state_manager.get_completed_web_urls(),
+                record_completed=state_manager.add_completed_web_urls,
+                batch_size=WEB_PROBE_CHECKPOINT_BATCH,
+            )
+            for _wf in web_findings:
+                state_manager.add_vulnerability(_wf)
+            state_manager.update_phase("web_probing_complete")
+        elif recon_web_probed and state_manager.state["phase"] == "port_scanning_complete":
+            print(f"{Colors.GRAY}[*] Skipping web re-probe - recon already ran "
+                  f"httpx/nuclei/web-checks/dirsearch/JS on these hosts.{Colors.RESET}")
+
     except KeyboardInterrupt:
         print(f"\n[!] Scan interrupted. Saving final state...")
         state_manager.flush_pending_saves()
@@ -1774,7 +1852,8 @@ async def main(
         return
 
     # 3. Validate services and create tasks for service-specific scanners
-    if state_manager.state["phase"] in ["port_scanning_complete", "full_port_scanning", "service_validation"]:
+    if state_manager.state["phase"] in ["port_scanning_complete", "web_probing_complete",
+                                        "full_port_scanning", "service_validation"]:
         validation_tasks = []
         service_mapping = []
         
@@ -1883,7 +1962,7 @@ async def main(
     # 3b. Cloud asset enumeration for domain targets.
     # Cloud bucket names derive from the registrable/org domain, not each
     # subdomain, so enumerate ONCE per registrable domain (not per host), and skip
-    # any apex already enumerated during passive recon — reuse, don't repeat.
+    # any apex already enumerated during passive recon - reuse, don't repeat.
     if not module_filter or module_filter == 'cloud':
         apex_targets = []
         seen_apex = set()
@@ -1915,7 +1994,7 @@ async def main(
                 cloud_enumerated_domains.add(_cloud_domain)
             print(f"{Colors.GREEN}[+] Cloud asset enumeration complete.{Colors.RESET}")
         elif cloud_enumerated_domains:
-            print(f"{Colors.GRAY}[*] Cloud enumeration already covered during recon — skipping re-enumeration.{Colors.RESET}")
+            print(f"{Colors.GRAY}[*] Cloud enumeration already covered during recon - skipping re-enumeration.{Colors.RESET}")
 
     # 4. Print Results
     print(f"{Colors.BRIGHT_CYAN}\n" + "="*50 + f"{Colors.RESET}")
@@ -2079,7 +2158,7 @@ async def process_streaming_scan(
     # Dedup, then run the SAME finalization tail as a normal scan: NVD/KEV/EPSS/
     # passive-intel enrichment, inventory delta, and CSV/JSON/SARIF output. Streaming
     # previously fed raw (non-deduped, non-enriched) findings to inventory/SARIF and
-    # skipped KEV/EPSS entirely — this brings it to parity.
+    # skipped KEV/EPSS entirely - this brings it to parity.
     final_vulnerabilities = deduplicate_vulnerabilities(all_vulnerabilities)
     print(f"\n{Colors.BRIGHT_CYAN}=== Final Vulnerability Results ({len(final_vulnerabilities)}) ==={Colors.RESET}")
     for result in final_vulnerabilities:
@@ -2128,7 +2207,7 @@ async def process_chunk_services(open_ports_results, service_ports, module_filte
             for result in results: state_manager.add_vulnerability(result)
             return results
         except Exception as e:
-            # Was a bare `except` — that also swallowed KeyboardInterrupt/SystemExit
+            # Was a bare `except` - that also swallowed KeyboardInterrupt/SystemExit
             # and hid programming bugs. Tolerate scanner runtime errors only.
             _reraise_if_bug(e)
             if os.environ.get("VAKT_DEBUG"):
@@ -2160,7 +2239,7 @@ async def process_chunk_services(open_ports_results, service_ports, module_filte
 # ---------------------------------------------------------------------------
 
 async def cmd_scan(args):
-    """Handler for `vaktscan scan` — calls the existing main() orchestrator."""
+    """Handler for `vaktscan scan` - calls the existing main() orchestrator."""
     global _partial_findings
     import ipaddress
     import tempfile
@@ -2171,14 +2250,14 @@ async def cmd_scan(args):
         dashboard.start()
 
     target_type = target_classifier(args.target)
-    print(f"{Colors.CYAN}[*] Target type: {target_type} — {args.target}{Colors.RESET}")
+    print(f"{Colors.CYAN}[*] Target type: {target_type} - {args.target}{Colors.RESET}")
 
     if target_type == 'domain' and not is_valid_domain(args.target):
         print(f"{Colors.RED}[!] Error: '{args.target}' is not a valid domain name.{Colors.RESET}")
         sys.exit(1)
 
     # --posture: lightweight domain-posture triage only (formerly the `domain-scan`
-    # subcommand) — classification, subdomain-takeover, CORS, and security-header
+    # subcommand) - classification, subdomain-takeover, CORS, and security-header
     # checks on the given domain(s). Skips subdomain enum, port/service scanning,
     # nuclei, and dirsearch. Accepts a domain, a URL, or a --sub-domains/file list.
     if getattr(args, 'posture', False):
@@ -2207,9 +2286,9 @@ async def cmd_scan(args):
                 _file_ips.append(_line)
         if _file_domains:
             if args.no_subdomain_enum:
-                print(f"{Colors.CYAN}[*] Mixed file: {len(_file_domains)} domain(s), {len(_file_ips)} IP/CIDR(s) — subdomain enum skipped (--no-subdomain-enum){Colors.RESET}")
+                print(f"{Colors.CYAN}[*] Mixed file: {len(_file_domains)} domain(s), {len(_file_ips)} IP/CIDR(s) - subdomain enum skipped (--no-subdomain-enum){Colors.RESET}")
             else:
-                print(f"{Colors.CYAN}[*] Mixed file: {len(_file_domains)} domain(s), {len(_file_ips)} IP/CIDR(s) — subdomain enum will run for domains{Colors.RESET}")
+                print(f"{Colors.CYAN}[*] Mixed file: {len(_file_domains)} domain(s), {len(_file_ips)} IP/CIDR(s) - subdomain enum will run for domains{Colors.RESET}")
 
     # Guard against IPv6 CIDR ranges that are too large to scan
     if target_type == 'cidr' and ':' in args.target:
@@ -2217,12 +2296,12 @@ async def cmd_scan(args):
             stripped_target = args.target.strip('[]')
             net = ipaddress.ip_network(stripped_target, strict=False)
             if isinstance(net, ipaddress.IPv6Network) and net.prefixlen < 112:
-                print(f"{Colors.RED}[!] IPv6 CIDR /{net.prefixlen} would scan {net.num_addresses:,} addresses — too large. Use /{112}+ (max 65536 hosts).{Colors.RESET}")
+                print(f"{Colors.RED}[!] IPv6 CIDR /{net.prefixlen} would scan {net.num_addresses:,} addresses - too large. Use /{112}+ (max 65536 hosts).{Colors.RESET}")
                 sys.exit(1)
         except ValueError:
             pass
 
-    # main() expects a targets file path — write single targets to a temp file
+    # main() expects a targets file path - write single targets to a temp file
     # Name it after the target so domain_label / output dirs are readable
     _tmp_file = None
     targets_file = args.target
@@ -2304,7 +2383,7 @@ async def cmd_scan(args):
 
 
 async def cmd_enum(args):
-    """Handler for `vaktscan enum` — subdomain enumeration only."""
+    """Handler for `vaktscan enum` - subdomain enumeration only."""
     os.makedirs(args.output_dir, exist_ok=True)
 
     if not is_valid_domain(args.domain):
@@ -2340,7 +2419,7 @@ async def cmd_enum(args):
 
 
 async def cmd_probe(args):
-    """Handler for `vaktscan probe` — httpx + parallel web analysis on a host list or file."""
+    """Handler for `vaktscan probe` - httpx + parallel web analysis on a host list or file."""
     os.makedirs(args.output_dir, exist_ok=True)
     if os.path.isfile(args.target):
         targets = parse_targets_file(args.target)
@@ -2383,7 +2462,7 @@ async def cmd_probe(args):
 
 
 async def cmd_dns(args):
-    """Handler for `vaktscan dns` — DNS recon only."""
+    """Handler for `vaktscan dns` - DNS recon only."""
     os.makedirs(args.output_dir, exist_ok=True)
     domains = args.domain  # list of domains
     print(f"{Colors.CYAN}[*] DNS recon on {len(domains)} domain(s)...{Colors.RESET}")
@@ -2398,7 +2477,7 @@ async def cmd_dns(args):
 
 
 async def cmd_cloud(args):
-    """Handler for `vaktscan cloud` — cloud asset enum only."""
+    """Handler for `vaktscan cloud` - cloud asset enum only."""
     os.makedirs(args.output_dir, exist_ok=True)
     print(f"{Colors.CYAN}[*] Cloud enum for: {args.domain}{Colors.RESET}")
     findings = await cloud_enum.enumerate_cloud_assets(args.domain)
@@ -2412,7 +2491,7 @@ async def cmd_cloud(args):
 
 
 async def cmd_js_paths(args):
-    """Handler for `vaktscan js-paths` — JS path extraction only."""
+    """Handler for `vaktscan js-paths` - JS path extraction only."""
     os.makedirs(args.output_dir, exist_ok=True)
     # Build URL list from target (file or single URL)
     if os.path.isfile(args.target):
@@ -2433,7 +2512,7 @@ async def cmd_js_paths(args):
 
 
 async def cmd_google_dork(args):
-    """Handler for `vaktscan google-dork` — Google Dorking passive recon."""
+    """Handler for `vaktscan google-dork` - Google Dorking passive recon."""
     if args.method == "api" and (not args.google_api_key or not args.google_cx):
         print(f"{Colors.RED}[!] --google-api-key and --google-cx are required for 'api' method (or set GOOGLE_API_KEY / GOOGLE_CX env vars){Colors.RESET}")
         sys.exit(1)
@@ -2462,7 +2541,7 @@ if __name__ == "__main__":
     # --- Root parser ---
     parser = argparse.ArgumentParser(
         prog="vaktscan",
-        description="VaktScan — Attack Surface Scanner",
+        description="VaktScan - Attack Surface Scanner",
     )
     subparsers = parser.add_subparsers(dest="subcommand", metavar="COMMAND")
     subparsers.required = True
@@ -2489,7 +2568,7 @@ if __name__ == "__main__":
     sp_scan.add_argument("--stream-web-probe", action="store_true", dest="stream_web_probe",
                          help="In streaming mode (large target sets >1000 hosts), also run "
                               "httpx/nuclei/dirsearch/web-checks on open web ports per chunk "
-                              "(off by default — can expand to a very large number of URLs)")
+                              "(off by default - can expand to a very large number of URLs)")
     sp_scan.add_argument("--no-archived-scan", action="store_false", dest="archived_scan", default=True,
                          help="Skip weaponizing gau/waybackurls archived URLs (dedup → filter → "
                               "re-probe live → secret-scan archived JS). On by default.")
@@ -2513,13 +2592,13 @@ if __name__ == "__main__":
                               "(puredns/massdns; passthrough if not installed). On by default.")
     sp_scan.add_argument("--dns-permute", action="store_true", dest="dns_permute",
                          help="Additionally generate + resolve subdomain permutations (alterx/dnsgen) "
-                              "during DNS hygiene — can greatly expand the host set")
+                              "during DNS hygiene - can greatly expand the host set")
     sp_scan.add_argument("--no-dns-takeover", action="store_false", dest="dns_takeover", default=True,
                          help="Disable the per-subdomain DNS-level takeover check (dangling CNAME -> "
                               "NXDOMAIN across all discovered subdomains). On by default.")
     sp_scan.add_argument("--exclude", action="append", metavar="PATTERN", dest="exclude",
                          help="Exclude hosts matching this glob (e.g. 'customer1*.homestead.com') from "
-                              "scanning — they stay in the enumerated subdomain list but are never "
+                              "scanning - they stay in the enumerated subdomain list but are never "
                               "resolved/probed/scanned. Repeatable; prefix 're:' for a regex.")
     sp_scan.add_argument("--exclude-file", metavar="FILE", dest="exclude_file",
                          help="File of exclusion patterns, one per line (# comments allowed). See --exclude.")
@@ -2546,7 +2625,7 @@ if __name__ == "__main__":
                          help="Domain-posture triage ONLY: internal/external classification, "
                               "subdomain-takeover, CORS, and security-header checks on the target "
                               "domain(s). Skips subdomain enum, port/service scanning, nuclei, and "
-                              "dirsearch — fast triage of a domain or a --sub-domains/file list. "
+                              "dirsearch - fast triage of a domain or a --sub-domains/file list. "
                               "(Replaces the old `domain-scan` subcommand.)")
     sp_scan.add_argument("--no-subdomain-enum", action="store_true", dest="no_subdomain_enum",
         help="Skip subdomain enumeration for domain targets")

@@ -76,6 +76,10 @@ class ScanStateManager:
             "open_ports": {},  # {ip: [ports]}
             "validated_services": {},  # {ip: {port: service}}
             "vulnerabilities": [],
+            # URLs whose full web-probe pipeline (httpx→nuclei→web_checks→
+            # dirsearch→JS) already finished, so an interrupted web-probe can
+            # resume from the URLs it had not reached yet.
+            "completed_web_urls": [],
             "completed": False
         }
     
@@ -232,6 +236,29 @@ class ScanStateManager:
         # Save immediately for vulnerabilities (they're the main goal)
         self.save_state()
     
+    def get_completed_web_urls(self) -> set:
+        """
+        URLs whose full web-probe pipeline already completed (used to skip them
+        when resuming an interrupted web-probe phase).
+        """
+        return set(self.state.get("completed_web_urls", []))
+
+    def add_completed_web_urls(self, urls: List[str]):
+        """
+        Record web-probe URLs as fully processed and persist immediately, so an
+        interrupted web-probe resumes from the not-yet-probed URLs instead of
+        re-probing everything.
+        """
+        with self._lock:
+            bucket = self.state.setdefault("completed_web_urls", [])
+            seen = set(bucket)
+            for url in urls:
+                if url not in seen:
+                    bucket.append(url)
+                    seen.add(url)
+        # Force outside the lock (save_state re-acquires it - Lock isn't reentrant).
+        self.save_state(force=True)
+
     def get_scanned_ips(self) -> List[str]:
         """
         Get list of IPs that have already been port scanned.
