@@ -272,60 +272,10 @@ async def run_recon_followups(
             f"Skipping the TCP web-port sweep and relying on hostname-first httpx probing.{Colors.RESET}"
         )
 
-    if nmap_enabled and recon_targets:
-        print(
-            f"{Colors.BRIGHT_MAGENTA}[*] Running background full-range port scan "
-            f"(1-65535) to prep Nmap follow-up...{Colors.RESET}"
-        )
-        full_port_range = list(range(1, 65536))
-        full_port_scan_task = asyncio.create_task(
-            scan_ports(
-                recon_targets,
-                full_port_range,
-                concurrency,
-                state_manager=None,
-                connect_timeout=connect_timeout,
-                retries=port_retries,
-            )
-        )
-
-        async def _nmap_followup():
-            full_results = await full_port_scan_task
-            ip_port_map = {}
-            ip_host_map = {}
-            for target_obj, data in full_results:
-                open_ports = data.get('open_ports', [])
-                if not open_ports:
-                    continue
-                ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
-                host = next(iter(ip_to_hosts.get(ip, [])), target_obj.get('display_target') or ip)
-                if not ip:
-                    continue
-                ip_port_map.setdefault(ip, set()).update(open_ports)
-                ip_host_map.setdefault(ip, host)
-            nmap_jobs = [
-                (ip, sorted(ports), ip_host_map.get(ip, ip))
-                for ip, ports in ip_port_map.items()
-            ]
-            if not nmap_jobs:
-                print(
-                    f"{Colors.YELLOW}[!] No open ports discovered during full-range scan; "
-                    f"skipping Nmap follow-up.{Colors.RESET}"
-                )
-                return
-            print(
-                f"{Colors.CYAN}[*] Starting Nmap follow-up for {len(nmap_jobs)} host(s)...{Colors.RESET}"
-            )
-            nmap_inst = nmap_runner.NmapRunner(output_base_dir=output_dir)
-            await nmap_inst.run_batch(nmap_jobs, concurrency=concurrency)
-            nmap_cve_findings = await nmap_inst.run_cve_scan_batch(nmap_jobs, concurrency=concurrency)
-            if nmap_cve_findings:
-                all_findings.extend(nmap_cve_findings)
-            print(
-                f"{Colors.GREEN}[+] Nmap follow-up completed for {len(nmap_jobs)} host(s).{Colors.RESET}"
-            )
-
-        nmap_followup_task = asyncio.create_task(_nmap_followup())
+    # Nmap CVE scanning is NOT done here with a separate full 1-65535 sweep.
+    # It runs once in the main scan phase, executing `nmap --script vuln,vulners`
+    # ONLY on the open ports the port scanner already discovered (all service
+    # ports + any --ports). Kept the scaffolding above as a no-op for callers.
     default_probe_urls = build_default_http_probe_urls(unique_targets)
     probe_urls = build_recon_probe_urls(unique_targets, port_scan_results, ip_to_hosts)
     if not probe_urls:
@@ -1663,9 +1613,9 @@ async def main(
                 if _ip:
                     inventory.upsert_asset(_ip, _hostname, _open_ports)
 
-            # If Nmap is enabled, run Nmap CVE script scan on open ports.
-            # Skip when recon already ran a full-range Nmap CVE sweep on these hosts.
-            if nmap_enabled and not recon_web_probed:
+            # If Nmap is enabled, run `nmap --script vuln,vulners` ONLY on the open
+            # ports the port scanner already found (no separate full-range sweep).
+            if nmap_enabled:
                 nmap_targets_data = []
                 for target_obj, data in open_ports_results:
                     open_ports = data.get('open_ports', [])
