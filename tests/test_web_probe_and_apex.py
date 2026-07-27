@@ -113,7 +113,7 @@ class StreamingWebProbeOptInTest(unittest.TestCase):
             calls["urls"] = urls
             return []
 
-        async def fake_enrich(findings, run_id, output_dir, sarif_output):
+        async def fake_enrich(findings, run_id, output_dir, sarif_output, output_format=None):
             return findings
 
         with ExitStack() as es:

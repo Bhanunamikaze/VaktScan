@@ -158,16 +158,17 @@ def _is_js(url):
 
 
 def _match_reason(url):
-    """Return the first sensitive extension or keyword matched, else ``None``."""
-    low = url.lower()
-    parsed = urlparse(low)
+    """Return the first sensitive extension or path-segment keyword matched, else
+    ``None``. Keywords must be a distinct PATH SEGMENT (``/admin/``) — a substring
+    or query param (``?config=``) is too weak and generates catch-all noise."""
+    parsed = urlparse(url.lower())
     path = parsed.path
-    path_query = path + (("?" + parsed.query) if parsed.query else "")
     for ext in SENSITIVE_EXTENSIONS:
         if _ext_match(path, ext):
             return ext
+    segments = path.split("/")
     for kw in INTERESTING_KEYWORDS:
-        if kw in path_query:
+        if kw in segments:
             return kw
     return None
 
@@ -211,11 +212,11 @@ def _matched_ext(url):
 
 
 def _matched_keyword(url):
-    """The interesting path keyword matched by this URL, or None."""
-    parsed = urlparse(url.lower())
-    path_query = parsed.path + (("?" + parsed.query) if parsed.query else "")
+    """An interesting keyword appearing as a distinct PATH SEGMENT (``/admin/``),
+    NOT inside a query string or a longer word — those are too weak to report."""
+    segments = urlparse(url.lower()).path.split("/")
     for kw in INTERESTING_KEYWORDS:
-        if kw in path_query:
+        if kw in segments:
             return kw
     return None
 
@@ -375,21 +376,49 @@ async def _fetch_text(url, timeout=10.0):
 
 
 async def _fetch_meta(url, timeout=10.0):
-    """Fetch ``(text, content_type, content_length_bytes)`` for content validation.
-
-    Returns ``(None, "", 0)`` on any failure/missing dep. Isolated so tests can
-    mock it without real network access.
+    """Fetch ``(status, text, content_type, content_length_bytes)`` for content
+    validation. Returns ``(None, None, "", 0)`` on any failure/missing dep.
+    Isolated so tests can mock it without real network access.
     """
     try:
         import httpx as _httpx
     except Exception:
-        return None, "", 0
+        return None, None, "", 0
     try:
         async with _httpx.AsyncClient(timeout=timeout, verify=False, follow_redirects=True) as client:
             resp = await client.get(url)
-            return resp.text, resp.headers.get("content-type", ""), len(resp.content)
+            return resp.status_code, resp.text, resp.headers.get("content-type", ""), len(resp.content)
     except Exception:
-        return None, "", 0
+        return None, None, "", 0
+
+
+# A bogus path used to detect catch-all / always-200 servers (soft-404 baseline).
+_SOFT404_PROBE_PATH = "/vaktscan_soft404_probe_zx9q83.bak"
+
+
+def _origin(url):
+    p = urlparse(url)
+    return f"{p.scheme}://{p.netloc}"
+
+
+def _is_catchall_body(base_body, base_len, body, length):
+    """True when ``body`` looks like the host's catch-all/soft-404 response —
+    i.e. it is the same content the host returns for a path that cannot exist."""
+    if base_body is None:
+        return False
+    if body == base_body:
+        return True
+    # Near-identical length + matching prefix is a strong soft-404 signal.
+    if base_len and length and abs(length - base_len) <= max(48, int(0.05 * base_len)):
+        return (body or "")[:200] == (base_body or "")[:200]
+    return False
+
+
+async def _soft404_baseline(origin):
+    """Probe a path that cannot exist. If the host answers 200, it is a
+    catch-all/always-200 server. Returns ``(is_catchall, body, length)``."""
+    status, body, _ctype, clen = await _fetch_meta(origin + _SOFT404_PROBE_PATH)
+    return (status == 200), (body or ""), clen
 
 
 # ---------------------------------------------------------------------------
@@ -496,18 +525,45 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
             #     A live 200 alone is not enough — catch-all/SPA servers 200 every
             #     path. Fetch the body and confirm it IS the artifact.
             if live_sensitive:
+                # Soft-404 baseline per unique host: if a host answers 200 to a path
+                # that cannot exist, it is a catch-all / always-200 server. We then
+                # require a candidate's body to DIFFER from that baseline before
+                # trusting any content oracle — this defeats the non-HTML always-200
+                # false positive (JSON error envelopes, plain-text soft-404s, etc.).
+                origins = sorted({_origin(l) for _s, l, _c in live_sensitive})
+                base_results = await asyncio.gather(
+                    *(_soft404_baseline(o) for o in origins), return_exceptions=True
+                )
+                baselines = {
+                    o: (r if isinstance(r, tuple) else (False, "", 0))
+                    for o, r in zip(origins, base_results)
+                }
+                _catchall = {o for o, (c, _b, _l) in baselines.items() if c}
+                if _catchall:
+                    print(f"{_C.YELLOW}[!] {len(_catchall)} catch-all/always-200 host(s) detected — "
+                          f"suppressing unvalidated archived matches there.{_C.RESET}")
+
                 prog_s = DashboardProgress("archived_urls", total=len(live_sensitive), noun="files")
 
                 async def _validate_one(src, lurl, code):
+                    is_catchall, base_body, base_len = baselines.get(_origin(lurl), (False, "", 0))
                     ext = _matched_ext(src)
                     if ext:
-                        body, ctype, clen = await _fetch_meta(lurl)
-                        if body is None:
+                        status, body, ctype, clen = await _fetch_meta(lurl)
+                        if body is None or status != 200:
+                            return
+                        # On a catch-all host, drop candidates that merely echo the
+                        # host's soft-404 body (the core non-HTML always-200 FP).
+                        if is_catchall and _is_catchall_body(base_body, base_len, body, clen):
                             return
                         if _validate_exposure(ext, body, ctype, clen):
                             findings.append(_build_exposure_finding(src, lurl, code, ext))
                         # else: content did not validate → catch-all FP → drop silently
                     else:
+                        # Keyword-only endpoints: never emit on a catch-all host
+                        # (every path 200s there), and only for path-segment matches.
+                        if is_catchall:
+                            return
                         kw = _matched_keyword(src)
                         if kw:
                             findings.append(_build_info_endpoint_finding(src, lurl, code, kw))

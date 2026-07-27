@@ -280,7 +280,7 @@ class StreamingParityTest(_MainTempCwd):
 
         captured = {}
 
-        async def fake_enrich(findings, run_id, output_dir, sarif_output):
+        async def fake_enrich(findings, run_id, output_dir, sarif_output, output_format=None):
             captured["findings"] = findings
             captured["run_id"] = run_id
             return findings

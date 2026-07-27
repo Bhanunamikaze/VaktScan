@@ -736,7 +736,7 @@ def _web_port_set(base_ports, custom_ports):
     return ports
 
 
-async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_output):
+async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_output, output_format=None):
     """Shared finalization tail for BOTH the non-streaming and streaming scan
     paths: NVD → CISA-KEV → EPSS → passive-intel enrichment, inventory delta +
     scan-run close-out, and CSV/JSON/SARIF output. The caller passes an already
@@ -801,21 +801,31 @@ async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_ou
         except Exception as _exc:
             print(f"{Colors.YELLOW}[!] Alert delivery skipped: {_exc}{Colors.RESET}")
 
-    # Always write CSV (even at 0 findings — a clean empty report).
+    fmt = (output_format or "").lower()
+    _ts = time.strftime('%Y%m%d_%H%M%S')
+
+    # CSV + HTML are ALWAYS written (the default human-readable reports), even at
+    # 0 findings for a clean report. JSON/SARIF are opt-in via --format / --sarif.
     csv_file = save_results_to_csv(
         final_vulnerabilities,
-        filename=os.path.join(output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.csv") if output_dir else None,
+        filename=os.path.join(output_dir, f"scan_results_{_ts}.csv") if output_dir else None,
     )
     if csv_file:
         print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
-    if final_vulnerabilities:
-        json_path = os.path.join(output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.json") if output_dir else None
+
+    html_path = os.path.join(output_dir, f"scan_results_{_ts}.html") if output_dir else None
+    save_results_to_html(final_vulnerabilities, filename=html_path,
+                         scan_label=os.path.basename(output_dir) if output_dir else None)
+
+    if fmt in ("json", "all"):
+        json_path = os.path.join(output_dir, f"scan_results_{_ts}.json") if output_dir else None
         save_results_to_json(final_vulnerabilities, filename=json_path)
-    # Always write the self-contained HTML report (shareable, even at 0 findings).
-    html_path = os.path.join(output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.html") if output_dir else None
-    save_results_to_html(final_vulnerabilities, filename=html_path, scan_label=os.path.basename(output_dir) if output_dir else None)
+
     if sarif_output:
         write_sarif_output(final_vulnerabilities, sarif_output)
+    elif fmt in ("sarif", "all"):
+        sarif_path = os.path.join(output_dir, f"scan_results_{_ts}.sarif") if output_dir else f"scan_results_{_ts}.sarif"
+        write_sarif_output(final_vulnerabilities, sarif_path)
 
     return final_vulnerabilities
 
@@ -848,6 +858,7 @@ async def main(
     enable_screenshots=False,
     enable_horizontal=False,
     extra_scans=frozenset(),
+    output_format=None,
 ):
     """
     Main orchestrator for the scanning tool.
@@ -1541,6 +1552,7 @@ async def main(
                 run_id=run_id,
                 sarif_output=sarif_output,
                 web_probe=stream_web_probe,
+                output_format=output_format,
             )
 
         if not is_resume or state_manager.state["phase"] == "initializing":
@@ -1884,7 +1896,7 @@ async def main(
     # Enrich (NVD/KEV/EPSS/passive-intel), persist to inventory, and write
     # CSV/JSON/SARIF via the shared finalization tail (also used by streaming mode).
     final_vulnerabilities = await _enrich_and_report(
-        final_vulnerabilities, run_id, web_output_dir, sarif_output,
+        final_vulnerabilities, run_id, web_output_dir, sarif_output, output_format=output_format,
     )
 
     state_manager.mark_completed()
@@ -1907,6 +1919,7 @@ async def process_streaming_scan(
     run_id=None,
     sarif_output=None,
     web_probe=False,
+    output_format=None,
 ):
     print(f"{Colors.CYAN}[*] Calculating total targets for progress estimation...{Colors.RESET}")
     total_targets = 0
@@ -2023,7 +2036,7 @@ async def process_streaming_scan(
         print(f"[!] {result.get('status', '?')}: {result.get('vulnerability', '?')} on {result.get('target', '?')}")
 
     final_vulnerabilities = await _enrich_and_report(
-        final_vulnerabilities, run_id, None, sarif_output,
+        final_vulnerabilities, run_id, None, sarif_output, output_format=output_format,
     )
     return final_vulnerabilities
 
@@ -2197,6 +2210,7 @@ async def cmd_scan(args):
                     ("dns_hygiene", getattr(args, 'dns_hygiene', False)),
                 ) if on
             ),
+            output_format=getattr(args, 'format', None),
         )
     except KeyboardInterrupt:
         if _partial_findings:
@@ -2401,7 +2415,8 @@ if __name__ == "__main__":
     sp_scan.add_argument("--format",
         choices=["csv", "json", "sarif", "all"],
         default=None,
-        help="Additional output format (csv always written; use json/sarif/all for extras)")
+        help="CSV + HTML reports are ALWAYS written by default; pass json/sarif/all "
+             "to additionally emit those machine-readable formats")
     sp_scan.add_argument("--sarif", metavar="FILE", default=None)
     sp_scan.add_argument("-m", "--module",
         choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs",

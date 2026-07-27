@@ -124,11 +124,13 @@ class ScanArchivedUrlsTests(unittest.IsolatedAsyncioTestCase):
         fake_runner.run_httpx = AsyncMock(return_value=alive)
 
         async def fake_meta(url, timeout=10.0):
+            if url.endswith("_probe_zx9q83.bak"):
+                return 404, "not found", "text/html", 9   # host is NOT a catch-all
             if url == "https://ex.com/real/.env":
-                return "SECRET_KEY=abc123\nDB_HOST=db\n", "text/plain", 30
+                return 200, "SECRET_KEY=abc123\nDB_HOST=db\n", "text/plain", 30
             if url == "https://ex.com/fake/.env":
-                return "<!DOCTYPE html><html><body>SPA</body></html>", "text/html", 200
-            return None, "", 0
+                return 200, "<!DOCTYPE html><html><body>SPA</body></html>", "text/html", 200
+            return None, None, "", 0
 
         js_body = 'const c={key:"AKIAIOSFODNN7EXAMPLE"};'
 
@@ -169,12 +171,65 @@ class ScanArchivedUrlsTests(unittest.IsolatedAsyncioTestCase):
         alive = [{"input": "https://ex.com/admin/panel", "url": "https://ex.com/admin/panel", "status_code": 200}]
         fake_runner = MagicMock()
         fake_runner.run_httpx = AsyncMock(return_value=alive)
+
+        async def fake_meta(url, timeout=10.0):
+            # soft-404 probe -> 404, so ex.com is NOT a catch-all.
+            return 404, "nf", "text/html", 2
+
         with patch("modules.archived_urls.shutil.which", return_value=None), \
-             patch("modules.archived_urls.HTTPXRunner", return_value=fake_runner):
+             patch("modules.archived_urls.HTTPXRunner", return_value=fake_runner), \
+             patch("modules.archived_urls._fetch_meta", side_effect=fake_meta):
             findings = await scan_archived_urls(["https://ex.com/admin/panel"], "/tmp/vaktscan_archived_test")
         self.assertTrue(findings)
         self.assertEqual(findings[0]["severity"], "INFO")
         self.assertNotEqual(findings[0]["status"], "VULNERABLE")
+
+    async def test_query_param_keyword_is_not_a_candidate(self):
+        # ?config= / ?secret= are benign query params, not path segments — they must
+        # NOT be selected as sensitive candidates (the catch-all INFO-noise source).
+        sensitive, js = _filter_high_signal([
+            "https://ex.com/page?config=1",
+            "https://ex.com/home?secret=x",
+            "https://ex.com/administrator",   # substring, not a segment
+        ])
+        self.assertEqual(sensitive, [])
+
+    async def test_non_html_always_200_catchall_suppressed(self):
+        """The exact FP the audit found: a host that 200s EVERY path with a
+        non-HTML body (JSON error envelope) must NOT yield a false 'exposed .bak',
+        while a genuinely different sensitive file on the same host still fires."""
+        soft = '{"error":"not found","status":404,"detail":"no such path on this host"}'
+        urls = ["https://catch.com/x/app.bak", "https://catch.com/real/.env"]
+        alive = [
+            {"input": "https://catch.com/x/app.bak", "url": "https://catch.com/x/app.bak", "status_code": 200},
+            {"input": "https://catch.com/real/.env", "url": "https://catch.com/real/.env", "status_code": 200},
+        ]
+        fake_runner = MagicMock()
+        fake_runner.run_httpx = AsyncMock(return_value=alive)
+
+        async def fake_meta(url, timeout=10.0):
+            if url.endswith("_probe_zx9q83.bak"):
+                return 200, soft, "application/json", len(soft)   # catch-all: 200 to bogus path
+            if url == "https://catch.com/x/app.bak":
+                return 200, soft, "application/json", len(soft)   # echoes soft-404 -> suppressed
+            if url == "https://catch.com/real/.env":
+                return 200, "AWS_KEY=AKIAABC\nDB_HOST=prod\n", "text/plain", 26  # DIFFERS -> real
+            return None, None, "", 0
+
+        with patch("modules.archived_urls.shutil.which", return_value=None), \
+             patch("modules.archived_urls.HTTPXRunner", return_value=fake_runner), \
+             patch("modules.archived_urls._fetch_meta", side_effect=fake_meta):
+            findings = await scan_archived_urls(urls, "/tmp/vaktscan_archived_test")
+
+        # The .bak that just echoes the catch-all baseline -> NO finding (the FP).
+        self.assertFalse(
+            any("app.bak" in (f.get("url") or "") for f in findings),
+            "a non-HTML always-200 catch-all must not produce a false exposed-file finding",
+        )
+        # A real .env whose content DIFFERS from the baseline still fires.
+        env = [f for f in findings if f["url"] == "https://catch.com/real/.env"]
+        self.assertTrue(env, "a genuinely different sensitive file must still be reported")
+        self.assertEqual(env[0]["severity"], "HIGH")
 
     async def test_dead_urls_yield_no_findings(self):
         fake_runner = MagicMock()
