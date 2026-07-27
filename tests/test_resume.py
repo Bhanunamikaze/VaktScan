@@ -2,11 +2,11 @@
 
 Covers the two things the resume story hinges on:
 
-* **Root-cause bug** — ``--resume`` must actually LOAD the persisted state.
+* **Root-cause bug** - ``--resume`` must actually LOAD the persisted state.
   The old ``resume or state_manager.load_existing_state()`` short-circuited when
   the flag was set, so ``--resume`` silently skipped the load and restarted the
   scan from scratch. ``main._decide_resume`` must load state unconditionally.
-* **Resumable web-probe phase** — an interrupted httpx/web-probe must resume from
+* **Resumable web-probe phase** - an interrupted httpx/web-probe must resume from
   the URLs it had not reached yet (persisted ``completed_web_urls``), keep its
   hostname attribution, and be a first-class phase rather than being skipped.
 
