@@ -15,3 +15,9 @@ GEMINI.md
 .claude/
 .mcp.json
 plan.md
+
+# Runtime artifacts (scan outputs, inventory DB, downloaded caches)
+reports/
+vaktscan_inventory.db
+vaktscan_inventory.db-*
+modules/data/cisa_kev_cache.json
