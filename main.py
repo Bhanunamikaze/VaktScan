@@ -1,10 +1,13 @@
 import asyncio
 import argparse
+import csv
+import ipaddress
 import sys
 import os
 import re
 import signal
 import time
+import traceback
 
 # Load .env if present (optional dependency — silently skipped if not installed)
 try:
@@ -33,6 +36,7 @@ from utils import (
     build_scan_targets_from_mappings,
     collect_domain_hosts,
     get_service_ports,
+    normalize_host_value,
     parse_targets_file,
     process_targets,
     process_targets_streaming,
@@ -73,6 +77,28 @@ from modules import (
     ct_monitor,
     testssl_runner,
 )
+
+# Exceptions that indicate a programming bug rather than an environmental,
+# per-target, or external-tool failure. `UnboundLocalError` is a subclass of
+# `NameError`, so this also covers the "free variable ... not associated with a
+# value" crash that a `return_exceptions=True` gather once masked as
+# "no usable targets". Resilience wrappers below re-raise these so real bugs
+# surface loudly instead of being silently swallowed, while genuine runtime
+# failures (network, subprocess, bad target data) are still tolerated.
+_PROGRAMMING_ERRORS = (NameError, ImportError)
+
+
+def _reraise_if_bug(exc):
+    """Re-raise `exc` if it looks like a programming bug; otherwise return it.
+
+    Used at `asyncio.gather(..., return_exceptions=True)` sites and broad
+    `except` blocks so that a code defect is never hidden behind a generic
+    "task failed, continuing" message.
+    """
+    if isinstance(exc, _PROGRAMMING_ERRORS):
+        raise exc
+    return exc
+
 
 # Map service names to their corresponding modules
 SERVICE_TO_MODULE = {
@@ -407,6 +433,7 @@ async def run_recon_followups(
                 dashboard.complete_task("js_paths", f"Found {js_count} findings")
 
         if isinstance(domain_scan_findings, Exception):
+            _reraise_if_bug(domain_scan_findings)
             print(f"{Colors.YELLOW}[!] Domain scanner error: {domain_scan_findings}{Colors.RESET}")
             domain_scan_findings = []
         if domain_scan_findings:
@@ -417,6 +444,7 @@ async def run_recon_followups(
             save_results_to_csv(domain_scan_findings, filename=os.path.join(output_dir, f"domain_scan_vulns_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
 
         if isinstance(nuclei_results, Exception):
+            _reraise_if_bug(nuclei_results)
             print(f"{Colors.YELLOW}[!] Nuclei error: {nuclei_results}{Colors.RESET}")
             nuclei_results = []
         if nuclei_results:
@@ -428,6 +456,7 @@ async def run_recon_followups(
             print(f"{Colors.GREEN}[+] Nuclei scan complete with no findings.{Colors.RESET}")
 
         if isinstance(wc_results, Exception):
+            _reraise_if_bug(wc_results)
             print(f"{Colors.YELLOW}[!] Web checks error: {wc_results}{Colors.RESET}")
             wc_results = []
         if wc_results:
@@ -437,6 +466,7 @@ async def run_recon_followups(
             print(f"{Colors.GREEN}[+] Web checks complete. No findings.{Colors.RESET}")
 
         if isinstance(js_result, Exception):
+            _reraise_if_bug(js_result)
             print(f"{Colors.YELLOW}[!] JS paths error: {js_result}{Colors.RESET}")
             js_result = []
         js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
@@ -474,11 +504,25 @@ async def run_recon_followups(
     return all_findings
 
 def load_subdomains_file(file_path):
-    """Load targets from a file using the robust parse_targets_file parser."""
-    entries = parse_targets_file(file_path)
-    if not entries:
-        print(f"{Colors.YELLOW}[!] File '{file_path}' contained no usable targets after normalization.{Colors.RESET}")
-    return entries
+    """Load targets from a file, or treat a direct URL/domain/IP string as a single target."""
+    if os.path.isfile(file_path):
+        entries = parse_targets_file(file_path)
+        if not entries:
+            print(f"{Colors.YELLOW}[!] File '{file_path}' contained no usable targets after normalization.{Colors.RESET}")
+        return entries
+    # Not a file path — try to parse as a direct target (URL, domain, or IP)
+    import ipaddress as _ipa
+    host = normalize_host_value(file_path)
+    if host:
+        try:
+            _ipa.ip_network(host, strict=False)
+            return [host]
+        except ValueError:
+            pass
+        if is_valid_domain(host):
+            return [host]
+    print(f"{Colors.YELLOW}[!] '{file_path}' is not a valid file path or target.{Colors.RESET}")
+    return []
 
 
 def expand_recon_inputs(recon_args):
@@ -539,15 +583,165 @@ async def _run_parallel_passive(domain: str, concurrency: int = 20, detailed_das
             dashboard.complete_task("ct_monitor", f"Found {ct_count} findings")
 
     if isinstance(dns_f, Exception):
+        _reraise_if_bug(dns_f)
         print(f"[!] DNS recon error: {dns_f}")
         dns_f = []
     if isinstance(cloud_f, Exception):
+        _reraise_if_bug(cloud_f)
         print(f"[!] Cloud enum error: {cloud_f}")
         cloud_f = []
     if isinstance(ct_f, Exception):
+        _reraise_if_bug(ct_f)
         print(f"[!] CT monitor error: {ct_f}")
         ct_f = []
     return dns_f, cloud_f, ct_f
+
+
+# Common multi-label public suffixes so apex extraction doesn't stop too early.
+_MULTI_LABEL_TLDS = {
+    "co.uk", "org.uk", "gov.uk", "ac.uk", "co.jp", "com.au", "net.au", "org.au",
+    "co.nz", "co.in", "co.za", "com.br", "com.cn", "com.mx", "com.sg", "co.kr",
+}
+
+
+def _registrable_domain(host):
+    """Best-effort registrable/apex domain without a Public Suffix List dependency:
+    handles common two-label suffixes (co.uk, com.au, …), else the last two labels."""
+    host = (host or "").strip().lower().rstrip(".")
+    if not host:
+        return host
+    labels = host.split(".")
+    if len(labels) <= 2:
+        return host
+    if ".".join(labels[-2:]) in _MULTI_LABEL_TLDS and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency):
+    """httpx-probe the given URLs, then run nuclei + web_checks + dirsearch + JS
+    path extraction on the alive ones. Returns the collected findings (dirsearch
+    writes its own reports). Shared by the normal scan and (opt-in) streaming mode.
+    """
+    findings = []
+    if not web_probe_urls:
+        return findings
+    print(f"{Colors.CYAN}[*] Probing {len(web_probe_urls)} open web port URL(s) with httpx...{Colors.RESET}")
+    http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
+    httpx_data = await http_runner.run_httpx(web_probe_urls, concurrency)
+    if not httpx_data:
+        print(f"{Colors.YELLOW}[!] No alive web services found on open web ports.{Colors.RESET}")
+        return findings
+    http_runner.save_csv(httpx_data, domain_label)
+    alive_urls = sorted({e.get("url") for e in httpx_data if e.get("url")})
+    print(f"{Colors.GREEN}[+] {len(alive_urls)} alive web URL(s) found.{Colors.RESET}")
+    if not alive_urls:
+        return findings
+
+    nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
+    nuclei_results = await nuclei_inst.run_nuclei(alive_urls)
+    if nuclei_results:
+        print(f"{Colors.GREEN}[+] Nuclei: {len(nuclei_results)} finding(s).{Colors.RESET}")
+        findings.extend(nuclei_results)
+
+    wc_results = await web_checks.run_checks(alive_urls, concurrency)
+    if wc_results:
+        print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
+        findings.extend(wc_results)
+
+    dir_enumerator = dir_enum.DirEnumerator(domain_label, output_dir=output_dir)
+    await dir_enumerator.run_dirsearch(alive_urls)
+
+    js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=output_dir)
+    js_result = await js_scanner.run()
+    js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
+    findings.extend(js_findings)
+    return findings
+
+
+def _web_port_set(base_ports, custom_ports):
+    """The set of ports to treat as HTTP(S) for web probing: the configured web
+    ports plus any custom ports the user supplied."""
+    ports = set(base_ports.get("web", []))
+    if custom_ports:
+        try:
+            ports |= {int(p.strip()) for p in custom_ports.split(',')}
+        except ValueError:
+            pass
+    return ports
+
+
+async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_output):
+    """Shared finalization tail for BOTH the non-streaming and streaming scan
+    paths: NVD → CISA-KEV → EPSS → passive-intel enrichment, inventory delta +
+    scan-run close-out, and CSV/JSON/SARIF output. The caller passes an already
+    de-duplicated list. Returns the enriched findings.
+
+    Extracted so streaming mode (>1000 targets) gets the same enrichment and
+    outputs as a normal scan instead of silently dropping them.
+    """
+    # NVD CVE lookups for unique (product, version) pairs.
+    _nvd_seen_versions = set()
+    _nvd_tasks = []
+    for _f in final_vulnerabilities:
+        _prod, _ver = nvd.extract_product_and_version(_f)
+        if _prod and _ver and (_prod, _ver) not in _nvd_seen_versions:
+            _nvd_seen_versions.add((_prod, _ver))
+            _nvd_tasks.append(nvd.lookup_cves(
+                product=_prod, version=_ver,
+                target=_f.get("target", "N/A"),
+                resolved_ip=_f.get("resolved_ip", "N/A"),
+                port=_f.get("port", "N/A"),
+            ))
+
+    kev_result, epss_result, passive_result, *nvd_results_list = await asyncio.gather(
+        cisa_kev.enrich_findings_with_kev(final_vulnerabilities),
+        epss.enrich_findings_with_epss(final_vulnerabilities),
+        passive_intel.enrich_findings_with_passive_intel(final_vulnerabilities),
+        *_nvd_tasks,
+    )
+    # kev/epss enrich in-place on the shared list; kev_result is the base.
+    final_vulnerabilities = kev_result
+    _existing_urls = {f.get("url") for f in final_vulnerabilities}
+    for _f in passive_result:
+        if _f.get("url") not in _existing_urls:
+            final_vulnerabilities.append(_f)
+            _existing_urls.add(_f.get("url"))
+    _seen_cve_keys = set()
+    _added_cve_count = 0
+    for _batch in nvd_results_list:
+        for _f in _batch:
+            _cve_id = _f.get("vulnerability", "").split(" — ")[0].strip()
+            _key = (_f.get("target", "N/A"), _f.get("port", "N/A"), _cve_id)
+            if _cve_id and _key not in _seen_cve_keys:
+                _seen_cve_keys.add(_key)
+                final_vulnerabilities.append(_f)
+                _added_cve_count += 1
+    print(f"{Colors.CYAN}[*] CISA KEV cross-reference complete.{Colors.RESET}")
+    if _added_cve_count:
+        print(f"{Colors.CYAN}[*] NVD enrichment added {_added_cve_count} CVE finding(s).{Colors.RESET}")
+
+    # Inventory delta + scan-run close-out.
+    if run_id is not None:
+        delta = inventory.save_findings(run_id, final_vulnerabilities)
+        inventory.complete_scan_run(run_id, len(final_vulnerabilities))
+        inventory.print_delta_report(delta)
+        inventory.print_executive_summary(run_id, len(final_vulnerabilities))
+
+    # Always write CSV (even at 0 findings — a clean empty report).
+    csv_file = save_results_to_csv(
+        final_vulnerabilities,
+        filename=os.path.join(output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.csv") if output_dir else None,
+    )
+    if csv_file:
+        print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
+    if final_vulnerabilities:
+        json_path = os.path.join(output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.json") if output_dir else None
+        save_results_to_json(final_vulnerabilities, filename=json_path)
+    if sarif_output:
+        write_sarif_output(final_vulnerabilities, sarif_output)
+
+    return final_vulnerabilities
 
 
 async def main(
@@ -571,6 +765,9 @@ async def main(
     js_url=None,
     js_timeout=10,
     sarif_output=None,
+    no_dork=False,
+    dork_method='auto',
+    stream_web_probe=False,
 ):
     """
     Main orchestrator for the scanning tool.
@@ -597,6 +794,18 @@ async def main(
     nuclei_vulns_found = False
     recon_targets_file = None
     recon_targets_count = 0
+    # Findings discovered during the reconnaissance phase are buffered here and
+    # flushed into `state_manager` once it exists. The recon block runs before
+    # `state_manager` is created (it is built from the recon-derived targets
+    # file), so it must not reference `state_manager` directly.
+    recon_phase_findings = []
+    # Set once the recon phase has already run the full web pipeline
+    # (httpx→dirsearch→nuclei→web_checks→js→nmap) via run_recon_followups, so the
+    # main scan can skip re-probing the identical hosts (avoids ~2x work).
+    recon_web_probed = False
+    # Registrable domains whose cloud assets were already enumerated during passive
+    # recon, so the main scan's phase 3b can reuse that instead of re-enumerating.
+    cloud_enumerated_domains = set()
 
     # --- DNS RECON MODE (-m dns) ---
     if module_mode == 'dns':
@@ -903,13 +1112,37 @@ async def main(
         )
         if recon_findings:
             print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {safe_label}{Colors.RESET}")
-            for _f in recon_findings:
-                state_manager.add_vulnerability(_f)
+            # This branch returns without building a state_manager, so persist
+            # findings directly to CSV (mirrors cmd_probe / domain-scan mode).
+            csv_file = save_results_to_csv(
+                recon_findings,
+                filename=os.path.join(domain_output_dir, f"recon_findings_{time.strftime('%Y%m%d_%H%M%S')}.csv"),
+            )
+            if csv_file:
+                print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
         return
 
     # --- RECONNAISSANCE MODE (-m recon or --sub-domains WITH a recon domain) ---
     recon_targets_label = None
     if recon_domains:
+        def _persist_orphan_recon_findings():
+            """Persist passive-recon findings that were buffered before
+            state_manager exists, when main() is about to return early (e.g. no
+            subdomains discovered). Without this, findings like subdomain
+            takeovers, exposed buckets, or CT alerts would be silently dropped
+            on the 'no usable targets' path."""
+            if not recon_phase_findings:
+                return
+            passive_dir = os.path.join("reports", "passive_recon")
+            os.makedirs(passive_dir, exist_ok=True)
+            csv_file = save_results_to_csv(
+                list(recon_phase_findings),
+                filename=os.path.join(passive_dir, f"passive_findings_{time.strftime('%Y%m%d_%H%M%S')}.csv"),
+            )
+            if csv_file:
+                print(f"{Colors.GREEN}[+] Passive recon findings saved: {csv_file}{Colors.RESET}")
+            recon_phase_findings.clear()
+
         normalized_domains = []
         seen_domains = set()
         for domain in expand_recon_inputs(recon_domains):
@@ -964,7 +1197,8 @@ async def main(
             if recon_findings:
                 print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {recon_domain}{Colors.RESET}")
                 for _f in recon_findings:
-                    state_manager.add_vulnerability(_f)
+                    recon_phase_findings.append(_f)
+            recon_web_probed = True  # run_recon_followups already probed these hosts
             recon_targets_file = dedup_file
             recon_targets_count = len(unique_subdomains)
             recon_targets_label = dedup_file
@@ -989,11 +1223,10 @@ async def main(
                 _gcx     = os.environ.get('GOOGLE_CX', '')
 
                 async def _maybe_dork():
-                    if getattr(args, 'no_dork', False):
+                    if no_dork:
                         return []
                     if not dashboard.active:
                         print(f"{Colors.CYAN}[*] Google Dork recon running in parallel for {domain}...{Colors.RESET}")
-                    dork_method = getattr(args, 'dork_method', 'auto')
                     return await google_dork.run(
                         domain, api_key=_gapi_key, cx=_gcx,
                         method=dork_method
@@ -1011,12 +1244,12 @@ async def main(
                 if isinstance(dork_findings, list) and dork_findings:
                     print(f"{Colors.GREEN}[+] Google Dork: {len(dork_findings)} finding(s) for {domain}{Colors.RESET}")
                     for _df in dork_findings:
-                        state_manager.add_vulnerability(_df)
+                        recon_phase_findings.append(_df)
                 elif isinstance(dork_findings, Exception):
                     print(f"{Colors.YELLOW}[!] Google Dork error for {domain}: {dork_findings}{Colors.RESET}")
 
                 for _f in dns_findings + cloud_findings + ct_findings:
-                    state_manager.add_vulnerability(_f)
+                    recon_phase_findings.append(_f)
                 if dns_findings:
                     print(f"{Colors.GREEN}[+] DNS recon: {len(dns_findings)} finding(s) for {domain}{Colors.RESET}")
                 if cloud_findings:
@@ -1045,7 +1278,7 @@ async def main(
                     if recon_findings:
                         print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {domain}{Colors.RESET}")
                         for _f in recon_findings:
-                            state_manager.add_vulnerability(_f)
+                            recon_phase_findings.append(_f)
                 else:
                     print(f"{Colors.GRAY}[*] Recon ({domain}) complete. Use --scan-found to automatically probe recon targets (httpx → dirsearch → nuclei).{Colors.RESET}")
                 return {
@@ -1069,11 +1302,25 @@ async def main(
                 if isinstance(result, dict):
                     successes.append(result)
                 elif isinstance(result, Exception):
+                    # A programming bug (e.g. NameError/UnboundLocalError) must
+                    # never be swallowed here — that is exactly what once turned
+                    # a code crash into a misleading "no usable targets".
+                    _reraise_if_bug(result)
                     print(f"{Colors.RED}[!] Recon error: {result}{Colors.RESET}")
+                    if os.environ.get("VAKT_DEBUG"):
+                        traceback.print_exception(type(result), result, result.__traceback__)
 
             if not successes:
                 print(f"{Colors.RED}[!] Recon finished with no usable targets.{Colors.RESET}")
+                _persist_orphan_recon_findings()
                 return
+
+            # handle_domain ran run_recon_followups (the full web pipeline) for
+            # each domain iff scan_found; if so, the main scan must not re-probe.
+            recon_web_probed = scan_found
+            # Passive recon (_run_parallel_passive) already ran cloud enum on each
+            # apex domain — record them so phase 3b doesn't repeat the work.
+            cloud_enumerated_domains.update(_registrable_domain(d) for d in normalized_domains)
 
             if len(successes) == 1:
                 meta = successes[0]
@@ -1092,6 +1339,7 @@ async def main(
                             handle.write(f"{item}\n")
                 except OSError as exc:
                     print(f"{Colors.RED}[!] Failed to write combined recon targets: {exc}{Colors.RESET}")
+                    _persist_orphan_recon_findings()
                     return
                 print(f"{Colors.GRAY}[*] Combined recon targets saved to {combined_file}{Colors.RESET}")
                 recon_targets_file = combined_file
@@ -1100,6 +1348,7 @@ async def main(
 
         if recon_targets_count == 0:
             print(f"{Colors.YELLOW}[!] Recon input did not yield any valid targets. Exiting.{Colors.RESET}")
+            _persist_orphan_recon_findings()
             return
 
         if targets_file:
@@ -1119,6 +1368,13 @@ async def main(
     # Initialize state manager
     state_manager = ScanStateManager(targets_file, concurrency)
 
+    # Flush any findings buffered during the reconnaissance phase (which runs
+    # before state_manager exists) into the now-initialized state manager.
+    if recon_phase_findings:
+        for _rf in recon_phase_findings:
+            state_manager.add_vulnerability(_rf)
+        recon_phase_findings.clear()
+
     # Inventory: initialise DB and open a new scan run
     inventory.init_db()
     run_id = inventory.start_scan_run(targets_file or 'recon')
@@ -1136,7 +1392,24 @@ async def main(
         #    inline comments, commas, tabs, BOM, encoding issues, etc.)
         raw_targets = parse_targets_file(targets_file)
 
-        should_stream = len(raw_targets) > 1000
+        # Decide streaming on the EXPANDED host count, not the raw line count — a
+        # single large CIDR is one line but can be millions of hosts, and the
+        # non-streaming path hard-caps at 50,000 (silently dropping the rest).
+        def _expanded_target_count(lines):
+            n = 0
+            for t in lines:
+                t = (t or "").strip()
+                if not t or t.startswith('#'):
+                    continue
+                try:
+                    n += ipaddress.ip_network(t, strict=False).num_addresses
+                except ValueError:
+                    n += 1
+                if n > 1000:
+                    break
+            return n
+
+        should_stream = _expanded_target_count(raw_targets) > 1000
 
         if should_stream:
             print(f"{Colors.YELLOW}[*] Large target set detected - using streaming mode{Colors.RESET}")
@@ -1150,8 +1423,11 @@ async def main(
                 connect_timeout=connect_timeout,
                 port_retries=port_retries,
                 nmap_enabled=nmap_enabled,
+                run_id=run_id,
+                sarif_output=sarif_output,
+                web_probe=stream_web_probe,
             )
-        
+
         if not is_resume or state_manager.state["phase"] == "initializing":
             print(f"{Colors.CYAN}[*] Parsing targets from {targets_file}...{Colors.RESET}")
             try:
@@ -1162,6 +1438,7 @@ async def main(
                 print(f"{Colors.RED}[!] Error: Input file not found at {targets_file}{Colors.RESET}")
                 return
             except Exception as e:
+                _reraise_if_bug(e)
                 print(f"[!] An error occurred during target processing: {e}")
                 return
         else:
@@ -1203,13 +1480,30 @@ async def main(
 
         # --- STANDARD PORT SCAN LOGIC ---
         if state_manager.state["phase"] in ["initializing", "target_processing_complete", "port_scanning"]:
-            state_manager.set_totals(len(targets), len(targets) * len(all_ports_to_scan))
-            
-            print(f"{Colors.CYAN}[*] Starting concurrent port scan for {len(targets)} targets across {len(all_ports_to_scan)} unique ports...{Colors.RESET}")
+            # process_targets emits both a hostname object and a bare-IP object per
+            # host (both connect to the same resolved IP), which doubles the port
+            # scan AND every downstream per-service module run. De-duplicate by
+            # resolved IP for scanning, preferring the hostname-bearing object (it
+            # is emitted first), so each IP is scanned once but keeps its hostname.
+            scan_targets = []
+            _seen_scan_ips = set()
+            for _t in targets:
+                _key = _t.get('resolved_ip') or _t.get('scan_address')
+                if _key in _seen_scan_ips:
+                    continue
+                _seen_scan_ips.add(_key)
+                scan_targets.append(_t)
+            if len(scan_targets) < len(targets):
+                print(f"{Colors.GRAY}[*] De-duplicated {len(targets)} target objects to "
+                      f"{len(scan_targets)} unique host(s) for scanning.{Colors.RESET}")
+
+            state_manager.set_totals(len(scan_targets), len(scan_targets) * len(all_ports_to_scan))
+
+            print(f"{Colors.CYAN}[*] Starting concurrent port scan for {len(scan_targets)} targets across {len(all_ports_to_scan)} unique ports...{Colors.RESET}")
             state_manager.update_phase("port_scanning")
-            
+
             open_ports_results = await scan_ports(
-                targets,
+                scan_targets,
                 all_ports_to_scan,
                 concurrency,
                 state_manager,
@@ -1237,8 +1531,9 @@ async def main(
                 if _ip:
                     inventory.upsert_asset(_ip, _hostname, _open_ports)
 
-            # If Nmap is enabled, run Nmap CVE script scan on open ports
-            if nmap_enabled:
+            # If Nmap is enabled, run Nmap CVE script scan on open ports.
+            # Skip when recon already ran a full-range Nmap CVE sweep on these hosts.
+            if nmap_enabled and not recon_web_probed:
                 nmap_targets_data = []
                 for target_obj, data in open_ports_results:
                     open_ports = data.get('open_ports', [])
@@ -1254,52 +1549,29 @@ async def main(
                         for v in nmap_cve_findings:
                             state_manager.add_vulnerability(v)
 
-            # Run httpx + nuclei on any open web ports found (80, 443, 8080, etc.)
+            # Run httpx + nuclei on any open web ports found (80, 443, 8080, etc.).
             # These ports have no specific service module — probe them directly.
-            web_port_set = set(full_service_ports.get("web", []))
+            # Skip entirely when the recon phase already probed these exact hosts
+            # (httpx→nuclei→web_checks→dirsearch→JS) to avoid ~2x work and request volume.
             web_probe_urls = []
-            for target_obj, data in open_ports_results:
-                for port in data.get("open_ports", []):
-                    if port in web_port_set:
-                        host = target_obj.get("display_target") or target_obj.get("scan_address")
-                        for scheme in ("http", "https"):
-                            from utils import format_url
-                            web_probe_urls.append(format_url(scheme, host, port))
-            web_probe_urls = sorted(set(web_probe_urls))
+            if recon_web_probed:
+                print(f"{Colors.GRAY}[*] Skipping web re-probe — recon already ran "
+                      f"httpx/nuclei/web-checks/dirsearch/JS on these hosts.{Colors.RESET}")
+            else:
+                # Probe the standard web ports plus any custom HTTP ports the user supplied.
+                web_port_set = _web_port_set(full_service_ports, custom_ports)
+                for target_obj, data in open_ports_results:
+                    for port in data.get("open_ports", []):
+                        if port in web_port_set:
+                            host = target_obj.get("display_target") or target_obj.get("scan_address")
+                            for scheme in ("http", "https"):
+                                from utils import format_url
+                                web_probe_urls.append(format_url(scheme, host, port))
+                web_probe_urls = sorted(set(web_probe_urls))
 
-            if web_probe_urls:
-                print(f"{Colors.CYAN}[*] Probing {len(web_probe_urls)} open web port URL(s) with httpx...{Colors.RESET}")
-                http_runner = httpx_runner.HTTPXRunner(output_dir=web_output_dir)
-                httpx_data = await http_runner.run_httpx(web_probe_urls, concurrency)
-                if httpx_data:
-                    http_runner.save_csv(httpx_data, domain_label)
-                    alive_urls = sorted({e.get("url") for e in httpx_data if e.get("url")})
-                    print(f"{Colors.GREEN}[+] {len(alive_urls)} alive web URL(s) found.{Colors.RESET}")
-                    if alive_urls:
-                        nuclei_inst = nuclei_runner.NucleiRunner(output_dir=web_output_dir)
-                        nuclei_results = await nuclei_inst.run_nuclei(alive_urls)
-                        if nuclei_results:
-                            print(f"{Colors.GREEN}[+] Nuclei: {len(nuclei_results)} finding(s).{Colors.RESET}")
-                            for v in nuclei_results:
-                                state_manager.add_vulnerability(v)
-                        wc_results = await web_checks.run_checks(alive_urls, concurrency)
-                        if wc_results:
-                            print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
-                            for v in wc_results:
-                                state_manager.add_vulnerability(v)
-
-                        # dirsearch
-                        dir_enumerator = dir_enum.DirEnumerator(domain_label, output_dir=web_output_dir)
-                        await dir_enumerator.run_dirsearch(alive_urls)
-
-                        # JS path extraction
-                        js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=web_output_dir)
-                        js_result = await js_scanner.run()
-                        js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
-                        for _jf in js_findings:
-                            state_manager.add_vulnerability(_jf)
-                else:
-                    print(f"{Colors.YELLOW}[!] No alive web services found on open web ports.{Colors.RESET}")
+            web_findings = await _probe_web_urls(web_probe_urls, web_output_dir, domain_label, concurrency)
+            for _wf in web_findings:
+                state_manager.add_vulnerability(_wf)
         else:
             print(f"[*] Using previously scanned port results...")
             open_ports_results = {}
@@ -1379,10 +1651,21 @@ async def main(
                         state_manager.add_vulnerability(result)
                     return results
                 except Exception as e:
-                    # print(f"[!] Error scanning {target_obj['scan_address']}:{port} - {e}")
+                    # Keep tolerating per-scanner runtime failures, but never a bug.
+                    _reraise_if_bug(e)
+                    if os.environ.get("VAKT_DEBUG"):
+                        print(f"{Colors.YELLOW}[!] Error scanning {target_obj['scan_address']}:{port} - {e}{Colors.RESET}")
                     return []
 
             for is_valid, (service, target_obj, port, scanner_func, target_open_ports) in zip(validation_results, service_mapping):
+                if isinstance(is_valid, Exception):
+                    # A raised validation result used to be silently read as
+                    # "not a valid service" and the target skipped without a word.
+                    _reraise_if_bug(is_valid)
+                    if os.environ.get("VAKT_DEBUG"):
+                        print(f"{Colors.YELLOW}[!] Service validation error for {service} on "
+                              f"{target_obj.get('scan_address', '?')}:{port} - {is_valid}{Colors.RESET}")
+                    continue
                 if isinstance(is_valid, bool) and is_valid:
                     display_url = target_obj['scan_address']
                     if not display_url.startswith(('http://', 'https://')):
@@ -1410,34 +1693,42 @@ async def main(
     else:
         print(f"\n[*] Using previously found vulnerabilities...")
 
-    # 3b. Cloud asset enumeration for domain targets
-    # Run after service scanning; only for non-IP targets (domains).
+    # 3b. Cloud asset enumeration for domain targets.
+    # Cloud bucket names derive from the registrable/org domain, not each
+    # subdomain, so enumerate ONCE per registrable domain (not per host), and skip
+    # any apex already enumerated during passive recon — reuse, don't repeat.
     if not module_filter or module_filter == 'cloud':
-        domain_targets_for_cloud = []
+        apex_targets = []
+        seen_apex = set()
         for t in targets:
             host = t.get('display_target') or t.get('scan_address', '')
             if not host:
                 continue
             try:
-                import ipaddress as _ipa
-                _ipa.ip_network(host, strict=False)
+                ipaddress.ip_network(host, strict=False)
                 continue  # skip raw IPs
             except ValueError:
                 pass
-            domain_targets_for_cloud.append(host)
-        domain_targets_for_cloud = list(dict.fromkeys(domain_targets_for_cloud))
-        if domain_targets_for_cloud:
+            apex = _registrable_domain(host)
+            if not apex or apex in seen_apex or apex in cloud_enumerated_domains:
+                continue
+            seen_apex.add(apex)
+            apex_targets.append(apex)
+        if apex_targets:
             print(
                 f"{Colors.CYAN}[*] Running cloud asset enumeration on "
-                f"{len(domain_targets_for_cloud)} domain target(s)...{Colors.RESET}"
+                f"{len(apex_targets)} registrable domain(s)...{Colors.RESET}"
             )
-            for _cloud_domain in domain_targets_for_cloud:
+            for _cloud_domain in apex_targets:
                 _cloud_findings = await cloud_enum.enumerate_cloud_assets(
                     _cloud_domain, concurrency=concurrency
                 )
                 for _cf in _cloud_findings:
                     state_manager.add_vulnerability(_cf)
+                cloud_enumerated_domains.add(_cloud_domain)
             print(f"{Colors.GREEN}[+] Cloud asset enumeration complete.{Colors.RESET}")
+        elif cloud_enumerated_domains:
+            print(f"{Colors.GRAY}[*] Cloud enumeration already covered during recon — skipping re-enumeration.{Colors.RESET}")
 
     # 4. Print Results
     print(f"{Colors.BRIGHT_CYAN}\n" + "="*50 + f"{Colors.RESET}")
@@ -1465,73 +1756,11 @@ async def main(
     else:
         print(f"{Colors.GREEN}[*] No vulnerabilities found.{Colors.RESET}")
     
-    # Collect NVD CVE findings for unique (product, version) pairs from existing findings
-    _nvd_seen_versions: set[tuple[str, str]] = set()
-    _nvd_tasks = []
-    for _f in final_vulnerabilities:
-        _prod, _ver = nvd.extract_product_and_version(_f)
-        if _prod and _ver and (_prod, _ver) not in _nvd_seen_versions:
-            _nvd_seen_versions.add((_prod, _ver))
-            _nvd_tasks.append(nvd.lookup_cves(
-                product=_prod,
-                version=_ver,
-                target=_f.get("target", "N/A"),
-                resolved_ip=_f.get("resolved_ip", "N/A"),
-                port=_f.get("port", "N/A"),
-            ))
-
-    kev_result, epss_result, passive_result, *nvd_results_list = await asyncio.gather(
-        cisa_kev.enrich_findings_with_kev(final_vulnerabilities),
-        epss.enrich_findings_with_epss(final_vulnerabilities),
-        passive_intel.enrich_findings_with_passive_intel(final_vulnerabilities),
-        *_nvd_tasks,
+    # Enrich (NVD/KEV/EPSS/passive-intel), persist to inventory, and write
+    # CSV/JSON/SARIF via the shared finalization tail (also used by streaming mode).
+    final_vulnerabilities = await _enrich_and_report(
+        final_vulnerabilities, run_id, web_output_dir, sarif_output,
     )
-    # kev and epss operate in-place on the same list; use kev_result as the base
-    final_vulnerabilities = kev_result
-    # Merge EPSS enrichment (in-place updates) — epss_result shares the same finding objects
-    # Merge passive intel additions
-    _existing_urls = {f.get("url") for f in final_vulnerabilities}
-    for _f in passive_result:
-        if _f.get("url") not in _existing_urls:
-            final_vulnerabilities.append(_f)
-            _existing_urls.add(_f.get("url"))
-    # Merge NVD CVE findings, deduplicate by target, port, and CVE ID
-    _seen_cve_keys: set[tuple[str, str, str]] = set()
-    _added_cve_count = 0
-    for _batch in nvd_results_list:
-        for _f in _batch:
-            _cve_id = _f.get("vulnerability", "").split(" — ")[0].strip()
-            _target = _f.get("target", "N/A")
-            _port = _f.get("port", "N/A")
-            _key = (_target, _port, _cve_id)
-            if _cve_id and _key not in _seen_cve_keys:
-                _seen_cve_keys.add(_key)
-                final_vulnerabilities.append(_f)
-                _added_cve_count += 1
-    print(f"{Colors.CYAN}[*] CISA KEV cross-reference complete.{Colors.RESET}")
-    if _added_cve_count:
-        print(f"{Colors.CYAN}[*] NVD enrichment added {_added_cve_count} CVE finding(s).{Colors.RESET}")
-
-    # Inventory delta report
-    delta = inventory.save_findings(run_id, final_vulnerabilities)
-    inventory.complete_scan_run(run_id, len(final_vulnerabilities))
-    inventory.print_delta_report(delta)
-    inventory.print_executive_summary(run_id, len(final_vulnerabilities))
-
-    # Always write CSV — even when 0 findings (gives a clean empty report)
-    csv_file = save_results_to_csv(
-        final_vulnerabilities,
-        filename=os.path.join(web_output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.csv") if web_output_dir else None,
-    )
-    if csv_file:
-        print(f"{Colors.GREEN}[+] CSV report generated: {csv_file}{Colors.RESET}")
-
-    if final_vulnerabilities:
-        json_path = os.path.join(web_output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.json") if web_output_dir else None
-        save_results_to_json(final_vulnerabilities, filename=json_path)
-
-    if sarif_output:
-        write_sarif_output(final_vulnerabilities, sarif_output)
 
     state_manager.mark_completed()
     print(f"\n{state_manager.get_scan_summary()}")
@@ -1550,6 +1779,9 @@ async def process_streaming_scan(
     connect_timeout=DEFAULT_CONNECT_TIMEOUT,
     port_retries=DEFAULT_PORT_RETRIES,
     nmap_enabled=False,
+    run_id=None,
+    sarif_output=None,
+    web_probe=False,
 ):
     print(f"{Colors.CYAN}[*] Calculating total targets for progress estimation...{Colors.RESET}")
     total_targets = 0
@@ -1602,7 +1834,28 @@ async def process_streaming_scan(
             )
             all_port_scan_results.extend(open_ports_results)
             chunk_vulnerabilities = await process_chunk_services(open_ports_results, service_ports, module_filter, custom_ports, state_manager)
-            
+
+            # Opt-in (--stream-web-probe): run httpx→nuclei→web_checks→dirsearch→JS
+            # on this chunk's open web ports. Off by default because a large target
+            # set can expand to an enormous number of web URLs.
+            if web_probe:
+                web_port_set = _web_port_set(base_ports, custom_ports)
+                chunk_web_urls = []
+                for target_obj, data in open_ports_results:
+                    for port in data.get("open_ports", []):
+                        if port in web_port_set:
+                            host = target_obj.get("display_target") or target_obj.get("scan_address")
+                            for scheme in ("http", "https"):
+                                from utils import format_url
+                                chunk_web_urls.append(format_url(scheme, host, port))
+                chunk_web_urls = sorted(set(chunk_web_urls))
+                if chunk_web_urls:
+                    web_findings = await _probe_web_urls(chunk_web_urls, "reports", "streaming", concurrency)
+                    for _wf in web_findings:
+                        state_manager.add_vulnerability(_wf)
+                    chunk_vulnerabilities.extend(web_findings)
+
+
             # Run Nmap CVE scan if enabled
             if nmap_enabled:
                 nmap_targets_data = []
@@ -1635,40 +1888,19 @@ async def process_streaming_scan(
     if all_port_scan_results:
         save_port_scan_csv(all_port_scan_results, "streaming")
 
-    # Collect NVD CVE findings for unique (product, version) pairs from existing findings
-    _nvd_seen_versions = set()
-    _nvd_tasks = []
-    for _f in all_vulnerabilities:
-        _prod, _ver = nvd.extract_product_and_version(_f)
-        if _prod and _ver and (_prod, _ver) not in _nvd_seen_versions:
-            _nvd_seen_versions.add((_prod, _ver))
-            _nvd_tasks.append(nvd.lookup_cves(
-                product=_prod,
-                version=_ver,
-                target=_f.get("target", "N/A"),
-                resolved_ip=_f.get("resolved_ip", "N/A"),
-                port=_f.get("port", "N/A"),
-            ))
+    # Dedup, then run the SAME finalization tail as a normal scan: NVD/KEV/EPSS/
+    # passive-intel enrichment, inventory delta, and CSV/JSON/SARIF output. Streaming
+    # previously fed raw (non-deduped, non-enriched) findings to inventory/SARIF and
+    # skipped KEV/EPSS entirely — this brings it to parity.
+    final_vulnerabilities = deduplicate_vulnerabilities(all_vulnerabilities)
+    print(f"\n{Colors.BRIGHT_CYAN}=== Final Vulnerability Results ({len(final_vulnerabilities)}) ==={Colors.RESET}")
+    for result in final_vulnerabilities:
+        print(f"[!] {result.get('status', '?')}: {result.get('vulnerability', '?')} on {result.get('target', '?')}")
 
-    if _nvd_tasks:
-        nvd_results_list = await asyncio.gather(*_nvd_tasks)
-        _seen_cve_keys = set()
-        _added_cve_count = 0
-        for _batch in nvd_results_list:
-            for _f in _batch:
-                _cve_id = _f.get("vulnerability", "").split(" — ")[0].strip()
-                _target = _f.get("target", "N/A")
-                _port = _f.get("port", "N/A")
-                _key = (_target, _port, _cve_id)
-                if _cve_id and _key not in _seen_cve_keys:
-                    _seen_cve_keys.add(_key)
-                    all_vulnerabilities.append(_f)
-                    _added_cve_count += 1
-        if _added_cve_count:
-            print(f"{Colors.CYAN}[*] NVD enrichment added {_added_cve_count} CVE finding(s).{Colors.RESET}")
-
-    await print_final_results(all_vulnerabilities)
-    return all_vulnerabilities
+    final_vulnerabilities = await _enrich_and_report(
+        final_vulnerabilities, run_id, None, sarif_output,
+    )
+    return final_vulnerabilities
 
 # Helper functions for streaming (included to ensure self-contained file)
 async def process_chunk_services(open_ports_results, service_ports, module_filter, custom_ports, state_manager):
@@ -1707,9 +1939,21 @@ async def process_chunk_services(open_ports_results, service_ports, module_filte
                 results = await scan_func(target_obj, port)
             for result in results: state_manager.add_vulnerability(result)
             return results
-        except: return []
+        except Exception as e:
+            # Was a bare `except` — that also swallowed KeyboardInterrupt/SystemExit
+            # and hid programming bugs. Tolerate scanner runtime errors only.
+            _reraise_if_bug(e)
+            if os.environ.get("VAKT_DEBUG"):
+                print(f"{Colors.YELLOW}[!] Error scanning {target_obj.get('scan_address', '?')}:{port} - {e}{Colors.RESET}")
+            return []
 
     for is_valid, (service, target_obj, port, scanner_func, target_open_ports) in zip(validation_results, service_mapping):
+        if isinstance(is_valid, Exception):
+            _reraise_if_bug(is_valid)
+            if os.environ.get("VAKT_DEBUG"):
+                print(f"{Colors.YELLOW}[!] Service validation error for {service} on "
+                      f"{target_obj.get('scan_address', '?')}:{port} - {is_valid}{Colors.RESET}")
+            continue
         if isinstance(is_valid, bool) and is_valid:
             state_manager.add_validated_service(target_obj['resolved_ip'], port, service)
             adj = target_open_ports if service == 'cpanel' else None
@@ -1813,6 +2057,9 @@ async def cmd_scan(args):
             js_url=None,
             js_timeout=10,
             sarif_output=args.sarif,
+            no_dork=getattr(args, 'no_dork', False),
+            dork_method=getattr(args, 'dork_method', 'auto'),
+            stream_web_probe=getattr(args, 'stream_web_probe', False),
         )
     except KeyboardInterrupt:
         if _partial_findings:
@@ -2025,6 +2272,10 @@ if __name__ == "__main__":
         help="Run only this service module (all modules by default)")
     sp_scan.add_argument("--ports", type=str)
     sp_scan.add_argument("--chunk-size", type=int, default=30000)
+    sp_scan.add_argument("--stream-web-probe", action="store_true", dest="stream_web_probe",
+                         help="In streaming mode (large target sets >1000 hosts), also run "
+                              "httpx/nuclei/dirsearch/web-checks on open web ports per chunk "
+                              "(off by default — can expand to a very large number of URLs)")
     sp_scan.add_argument("--wordlist")
     # --scan-found removed: the scan subcommand always probes discovered subdomains
     sp_scan.add_argument("--nmap", action="store_true")
@@ -2131,4 +2382,7 @@ if __name__ == "__main__":
         sys.exit(0)
     except Exception as e:
         print(f"\n[!] Fatal error: {e}")
+        # Always surface the traceback for an uncaught error so bugs are
+        # diagnosable instead of collapsing to a one-line message.
+        traceback.print_exc()
         sys.exit(1)

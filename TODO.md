@@ -295,3 +295,52 @@ This section tracks the implementation of a dedicated SSL/TLS scanning wrapper a
   - [x] Add default credential checks for MySQL, PostgreSQL, MongoDB, Cassandra, RabbitMQ, and ActiveMQ.
 - [x] **Subdomain Takeover Signature Expansion**: Expand `domain_scan.py` to support Webflow, Shopify, Ghost, Cargo, Tumblr, etc.
 - [x] **Cookie Security Flags**: Audit cookies for missing `Secure`, `HttpOnly`, and `SameSite` flags.
+
+---
+
+## 12. Orchestration Correctness & Performance (2026-07 audit)
+
+Findings from a multi-agent audit of the scan pipeline. Progress-feedback is shipped; the scan-order items are the active work (this section = "option 2").
+
+### 12.0 Live progress feedback (frozen dashboard) ✅ DONE
+- [x] Root cause: long scans showed a frozen `Running... | Starting` because their dashboard task got no `update_task` during work (only `add_task`→`complete_task`).
+- [x] Shared helper `modules/progress.py` — `DashboardProgress` (per-item counter) + `heartbeat` (elapsed ticker); unit-tested in `tests/test_progress.py`.
+- [x] Wired every affected task: `httpx` (stream stdout + heartbeat + concurrent stderr drain), `dirsearch`, `gau`, `wayback`, `web_checks`, `domain_scan` (per-item counters); `js_paths`, `cloud_enum`, `dns_recon`, `ct_monitor` (heartbeats). `nmap`/`nuclei`/`recon` already reported.
+- [ ] Follow-up (deferred): ffuf vhost fuzz, `testssl` (300s silent/host), `service_recon` shell-outs, and per-tool heartbeats in the recon phase — not dashboard-task freezes, need `main.py` task wiring.
+
+### 12.0b dirsearch terminal spam ✅ DONE
+- [x] **B9 dirsearch spammed the terminal**, redrawing the whole dashboard on every URL. Fixed in `modules/dir_enum.py`: dirsearch stdout→DEVNULL and stderr captured (no longer echoed on success — that was the `pkg_resources` DeprecationWarning source); exit code 0/1 treated as success (results are read from the `--output` file, not stdout); genuine failures gated behind `VAKT_DEBUG`/inactive-dashboard so they never force a redraw.
+
+### 12.1 Scan-order / orchestration fixes ("option 2")
+- [x] **B1 [HIGH] Double web-pipeline for domain/recon targets** — DONE. `recon_web_probed` flag threaded from both recon fall-through paths; the main scan now skips the httpx→nuclei→web_checks→dirsearch→JS re-probe (and the redundant Nmap sweep, B5) when recon already probed the same hosts. Port-scan + service-module validation + enrichment still run.
+- [x] **B2 [HIGH] Streaming-mode parity** — DONE. (1) Extracted shared `_enrich_and_report()` (NVD/KEV/EPSS/passive-intel + dedup + inventory + CSV/JSON/SARIF); both `main()` and `process_streaming_scan()` call it — streaming previously fed **raw, non-deduped, non-enriched** findings to inventory/SARIF and skipped KEV/EPSS. (2) Extracted shared `_probe_web_urls()` (httpx→nuclei→web_checks→dirsearch→JS) used by the normal scan and, **opt-in via `--stream-web-probe`**, per chunk in streaming mode (off by default since a >1000-host set can expand to a huge URL count).
+- [x] **B3 [MED] `should_stream` now decides on the EXPANDED host count** (`_expanded_target_count`), so a single large CIDR routes into streaming instead of being silently truncated at 50k.
+- [x] **B4 [MED] Port-scan target de-duplication by resolved IP** — DONE. The main scan dedups the hostname+IP object pair to one per IP before `scan_ports`, halving the port scan and every per-service module run; the hostname-bearing object is kept.
+- [x] **B5 [MED] Nmap no longer runs twice** for domain+`--nmap` — the main-scan Nmap CVE block is skipped when recon already ran it (gated on `recon_web_probed`).
+- [x] **B6 [LOW] Cloud enum overlap** — DONE. Phase 3b now enumerates **once per registrable domain** (`_registrable_domain()`) instead of per-subdomain, and skips any apex already enumerated during passive recon (tracked in `cloud_enumerated_domains`) — reuses the existing data instead of repeating the work.
+- [x] **B7 [LOW] Custom `--ports` serving HTTP now get httpx/nuclei/web_checks** — custom ports are merged into the web-probe port set.
+- [ ] **B8 [LOW] Resume loses hostname attribution and skips web probing** (rebuilds IP-keyed targets; web block gated behind the port-scan phase). (remaining)
+
+---
+
+## 13. ASM Coverage Roadmap (next — after §12)
+
+Not missing detectors — the highest-leverage work is connecting data already collected.
+
+### HIGH
+- [ ] **H1 Weaponize the archived-URL corpus.** gau/waybackurls output is a dead-end; pipe → `uro` dedupe → live re-probe → extension/keyword filter → feed archived `.js` into the existing `js_paths` secret engine.
+- [ ] **H2 Horizontal / infrastructure expansion.** Turn per-IP ASN enrichment into discovery: `asnmap` (org→ASN→CIDR), reverse-DNS sweep, `amass intel` (registrant→related roots).
+- [ ] **H3 Screenshotting / visual triage** (`gowitness`/aquatone) over alive URLs; thumbnails in report.
+
+### MEDIUM
+- [ ] Parameter discovery (`arjun`/paramspider + `gf`) → nuclei DAST.
+- [ ] DNS resolution hygiene (`puredns`/massdns wildcard filter) + permutations (`alterx`/dnsgen).
+- [ ] Favicon hashing (mmh3) + JARM → Shodan/Censys pivots (keys already wired).
+- [ ] Deeper tech fingerprinting (`webanalyze`/Wappalyzer) + EOL cross-ref → better NVD/KEV mapping.
+- [ ] Alerting/notification delivery (Slack/webhook/email on inventory delta + CT new-certs).
+- [ ] Active default-credential breadth (Tomcat Manager, Jenkins, Grafana admin/admin).
+
+### LOW
+- [ ] Integrate raw dirsearch/gau/wayback outputs into the unified findings/inventory/SARIF pipeline.
+- [ ] Cloud provider breadth (DigitalOcean Spaces, Alibaba OSS, non-Blob Azure).
+- [ ] CSP directive analysis (`unsafe-inline`, wildcard sources, missing `frame-ancestors`).
