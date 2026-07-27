@@ -43,9 +43,16 @@ class TestCLISmoke(unittest.TestCase):
         code, _ = self._help_exit_code('js-paths')
         self.assertEqual(code, 0)
 
-    def test_domain_scan_help(self):
-        code, _ = self._help_exit_code('domain-scan')
+    def test_domain_scan_merged_into_scan_posture(self):
+        # The standalone `domain-scan` subcommand was merged into `scan --posture`.
+        result = subprocess.run(
+            [sys.executable, 'main.py', 'domain-scan', '--help'],
+            capture_output=True, text=True, cwd=WORKTREE
+        )
+        self.assertNotEqual(result.returncode, 0, "domain-scan subcommand should be removed")
+        code, out = self._help_exit_code('scan')
         self.assertEqual(code, 0)
+        self.assertIn('--posture', out)
 
     def test_google_dork_help(self):
         code, _ = self._help_exit_code('google-dork')

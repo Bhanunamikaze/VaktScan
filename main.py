@@ -1065,7 +1065,7 @@ async def main(
     if module_mode == 'domain-scan':
         target_file = domain_scan_file or subdomains_file
         if not target_file:
-            print(f"{Colors.RED}[!] Error: -m domain-scan requires a domains file via --ds-file <file> or --sub-domains <file>.{Colors.RESET}")
+            print(f"{Colors.RED}[!] Error: --posture requires a target domain or a --sub-domains <file>.{Colors.RESET}")
             sys.exit(1)
         
         print(f"{Colors.CYAN}[*] Starting Domain Scanner Module...{Colors.RESET}")
@@ -1116,10 +1116,13 @@ async def main(
             concurrency=domain_scan_concurrency
         )
         
-        if findings:
-            save_results_to_csv(findings, filename=os.path.join(output_dir, f"domain_scan_vulns_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
+        # CSV + HTML reports are always written (consistent with the full scan).
+        _ds_ts = time.strftime('%Y%m%d_%H%M%S')
+        save_results_to_csv(findings, filename=os.path.join(output_dir, f"domain_scan_vulns_{_ds_ts}.csv"))
+        save_results_to_html(findings, filename=os.path.join(output_dir, f"domain_scan_{_ds_ts}.html"),
+                             scan_label="domain-posture")
 
-        print(f"{Colors.GREEN}[+] Domain scan module completed.{Colors.RESET}")
+        print(f"{Colors.GREEN}[+] Domain-posture scan completed.{Colors.RESET}")
         return
 
     # --- STANDALONE --sub-domains MODE (no -m recon needed) ---
@@ -2082,6 +2085,23 @@ async def cmd_scan(args):
         print(f"{Colors.RED}[!] Error: '{args.target}' is not a valid domain name.{Colors.RESET}")
         sys.exit(1)
 
+    # --posture: lightweight domain-posture triage only (formerly the `domain-scan`
+    # subcommand) — classification, subdomain-takeover, CORS, and security-header
+    # checks on the given domain(s). Skips subdomain enum, port/service scanning,
+    # nuclei, and dirsearch. Accepts a domain, a URL, or a --sub-domains/file list.
+    if getattr(args, 'posture', False):
+        await main(
+            targets_file=None,
+            concurrency=args.concurrency,
+            module_mode='domain-scan',
+            domain_scan_file=getattr(args, 'sub_domains_file', None) or args.target,
+            domain_scan_concurrency=args.concurrency,
+            connect_timeout=args.connect_timeout,
+            port_retries=args.port_retries,
+            output_format=getattr(args, 'format', None),
+        )
+        return
+
     # For file targets: use robust parser then classify each entry
     _file_domains = []
     _file_ips = []
@@ -2311,21 +2331,6 @@ async def cmd_js_paths(args):
         print(f"{Colors.GREEN}[*] JS paths complete. No findings.{Colors.RESET}")
 
 
-async def cmd_domain_scan(args):
-    """Handler for `vaktscan domain-scan` — domain HTTP analysis only."""
-    os.makedirs(args.output_dir, exist_ok=True)
-    await main(
-        targets_file=None,
-        concurrency=args.concurrency,
-        resume=False,
-        module_filter=None,
-        module_mode='domain-scan',
-        domain_scan_file=args.domain,
-        domain_scan_concurrency=args.concurrency,
-        sarif_output=None,
-    )
-
-
 async def cmd_google_dork(args):
     """Handler for `vaktscan google-dork` — Google Dorking passive recon."""
     if args.method == "api" and (not args.google_api_key or not args.google_cx):
@@ -2413,6 +2418,12 @@ if __name__ == "__main__":
     sp_scan.add_argument("--nmap", action="store_true")
     sp_scan.add_argument("--sub-domains", metavar="FILE", dest="sub_domains_file")
     sp_scan.add_argument("--recon-concurrency", type=int, default=2)
+    sp_scan.add_argument("--posture", action="store_true", dest="posture",
+                         help="Domain-posture triage ONLY: internal/external classification, "
+                              "subdomain-takeover, CORS, and security-header checks on the target "
+                              "domain(s). Skips subdomain enum, port/service scanning, nuclei, and "
+                              "dirsearch — fast triage of a domain or a --sub-domains/file list. "
+                              "(Replaces the old `domain-scan` subcommand.)")
     sp_scan.add_argument("--no-subdomain-enum", action="store_true", dest="no_subdomain_enum",
         help="Skip subdomain enumeration for domain targets")
     sp_scan.add_argument("--no-dashboard", action="store_true", help="Disable the multi-row live progress dashboard")
@@ -2461,11 +2472,7 @@ if __name__ == "__main__":
     sp_js.add_argument("--output-dir", default="reports/")
 
     # ---- domain-scan subcommand ----
-    sp_ds = subparsers.add_parser("domain-scan", help="Domain-level HTTP analysis")
-    sp_ds.add_argument("domain", help="Apex domain")
-    sp_ds.add_argument("--httpx-data", metavar="FILE", help="Existing httpx JSON output")
-    sp_ds.add_argument("-c", "--concurrency", type=int, default=50)
-    sp_ds.add_argument("--output-dir", default="reports/")
+    # NOTE: the standalone `domain-scan` subcommand was merged into `scan --posture`.
 
     # ---- google-dork subcommand ----
     sp_dork = subparsers.add_parser("google-dork", help="Google Dorking passive recon")
@@ -2505,8 +2512,6 @@ if __name__ == "__main__":
             asyncio.run(cmd_cloud(args))
         elif args.subcommand == "js-paths":
             asyncio.run(cmd_js_paths(args))
-        elif args.subcommand == "domain-scan":
-            asyncio.run(cmd_domain_scan(args))
         elif args.subcommand == "google-dork":
             asyncio.run(cmd_google_dork(args))
     except KeyboardInterrupt:

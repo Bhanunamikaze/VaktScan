@@ -9,7 +9,7 @@ Every external tool it drives is **optional**: if a binary is missing, that stag
 
 ## Key Features
 
-- **Unified subcommand CLI** — `scan`, `enum`, `probe`, `dns`, `cloud`, `js-paths`, `domain-scan`, `google-dork`.
+- **Unified subcommand CLI** — `scan` (with `--posture`), `enum`, `probe`, `dns`, `cloud`, `js-paths`, `google-dork`.
 - **Full auto pipeline** — `scan <domain>` runs enumeration → passive recon → probing → service checks → enrichment → reporting with no extra flags.
 - **Subdomain enumeration** — amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys, crt.sh, plus ffuf VHost fuzzing.
 - **Passive recon in parallel** — DNS recon, cloud-asset enumeration, and certificate-transparency monitoring run concurrently per domain, alongside Google dorking.
@@ -139,11 +139,13 @@ flowchart TD
     AR --> CSV["probe findings CSV"]
 ```
 
-### `domain-scan` — domain-level HTTP analysis
+### `scan --posture` — domain-posture triage (lightweight)
+
+Fast domain-level HTTP posture checks with **no** subdomain enum, port/service scanning, nuclei, or dirsearch. (Replaces the former `domain-scan` subcommand.)
 
 ```mermaid
 flowchart TD
-    A(["domain-scan &lt;domain-list&gt;"]) --> L["Load + dedup domain list"]
+    A(["scan &lt;domain|file&gt; --posture"]) --> L["Load + dedup domain(s)"]
     L --> R["Resolve hostnames -> IPs"]
     R --> PS["Web-port scan on web ports"]
     PS --> HX["httpx probe -> alive URLs"]
@@ -158,7 +160,7 @@ flowchart TD
         BC["Broken components"]
     end
 
-    SCAN --> OUT["domain_scan_vulns_*.csv"]
+    SCAN --> OUT["CSV + HTML report"]
 ```
 
 > **IP / CIDR targets** skip Stage 1 (no subdomain enum, DNS recon, cloud enum, CT monitor, or Google dork) and go straight to the port scan. Archived-URL harvesting is also skipped for raw IPs.
@@ -251,14 +253,9 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `--timeout` | `10` | Request timeout (seconds) |
 | `--output-dir` | `reports/` | Output directory |
 
-### `domain-scan` — domain-level HTTP analysis
-
-| Flag | Default | Description |
-|---|---|---|
-| `domain` | — | Apex domain (or file of domains) |
-| `--httpx-data FILE` | — | Reuse existing httpx JSON output |
-| `-c`, `--concurrency` | `50` | Concurrency |
-| `--output-dir` | `reports/` | Output directory |
+> **Domain-posture triage** is now a flag on `scan`, not a separate subcommand:
+> `scan <domain|file> --posture` runs only the DomainScanner checks (classification,
+> subdomain-takeover, CORS, security headers) — see the `scan` flag table above.
 
 ### `google-dork` — passive recon via Google dorking
 
@@ -286,7 +283,7 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `scan_results_*.sarif` | `--format sarif` / `all`, or `--sarif FILE` | SARIF 2.1 for GitHub/GitLab security tabs |
 | `portscan_results_*.csv` | port scan | Open ports per host |
 | `httpx_*.csv` | probing | Alive URLs: status, title, tech |
-| `domain_scan_vulns_*.csv` | domain scan | Classification / takeover / CORS / header findings |
+| `domain_scan_vulns_*.csv` | `scan --posture` | Classification / takeover / CORS / header findings |
 | `screenshots/` | `--screenshots` | Screenshot gallery (`manifest.csv` + `index.html`) |
 
 **Asset inventory & alerting.** Findings are persisted to a SQLite inventory (`vaktscan_inventory.db`); each run prints a **delta report** ("new since last scan" vs "resolved") and an executive summary. When new findings appear, `notify.py` sends alerts via Slack, Discord, generic webhook, or email — **only if** the relevant environment variables are set; it never raises on failure. CISA KEV data is cached locally in `modules/data/cisa_kev_cache.json`.
@@ -344,7 +341,7 @@ All are optional; modules degrade gracefully when they are absent.
 | `port_scanner` | `probe` / `scan` | Async TCP port scanner (IPv4/IPv6, streaming for large CIDRs) |
 | `nmap_runner` | `--nmap` | `nmap --script vuln,vulners` on the open ports found; parses XML into findings |
 | `web_checks` | probing | Security headers, `.git`/`.env` exposure, CORS, cookie flags, WAF, GraphQL/Swagger, EOL software, SSL expiry |
-| `domain_scan` | `domain-scan` / `scan` | Internal/external classification, 62 takeover signatures, CORS/header anomalies, broken components |
+| `domain_scan` | `scan` / `scan --posture` | Internal/external classification, 62 takeover signatures, CORS/header anomalies, broken components |
 | `js_paths` | `js-paths` / `scan` | JS secrets, source maps, internal IPs, endpoint extraction/probing |
 | `gau_runner` / `waybackurls_runner` | `scan` | Archived-URL harvesting |
 | `archived_urls` | `scan` | Dedup → high-signal filter → live re-probe → archived-JS secret scan (content-oracle validated) |
