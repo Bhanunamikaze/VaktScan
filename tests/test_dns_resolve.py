@@ -225,6 +225,32 @@ class EntryPointTests(unittest.IsolatedAsyncioTestCase):
         # No accidental double-count of www.
         self.assertEqual(len(result["resolved"]), len(set(result["resolved"])))
 
+    async def test_permute_false_skips_permutation_even_with_tools(self):
+        """Default (--dns-hygiene without --dns-permute): wildcard-filter only —
+        permutation generation must be skipped even though alterx is installed."""
+        tmp = tempfile.mkdtemp(prefix="vakt_dr_noperm_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+
+        which = _which_map({"puredns": "/usr/bin/puredns", "alterx": "/usr/bin/alterx"})
+        called = {"programs": []}
+
+        async def fake_exec(*args, **kwargs):
+            program = os.path.basename(args[0])
+            called["programs"].append(program)
+            if program == "puredns":
+                return _fake_proc(b"www.example.com\n")
+            return _fake_proc(b"")
+
+        with patch("shutil.which", side_effect=which), \
+             patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+            result = await dr.resolve_and_permute(
+                ["www.example.com"], ["example.com"], tmp, permute=False
+            )
+
+        self.assertEqual(result["permutations_found"], [])
+        self.assertEqual(result["resolved"], ["www.example.com"])
+        self.assertNotIn("alterx", called["programs"], "alterx must not run when permute=False")
+
     async def test_findings_conform_to_canonical_schema(self):
         tmp = tempfile.mkdtemp(prefix="vakt_dr_schema_")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)

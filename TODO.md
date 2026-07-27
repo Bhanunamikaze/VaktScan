@@ -334,7 +334,7 @@ Not missing detectors — the highest-leverage work is connecting data already c
 
 ### MEDIUM — ✅ DONE (built with false-positive oracles, opt-in flags, wired)
 - [x] **Parameter discovery** — `modules/param_discovery.py` (`--params`). arjun/paramspider/gf; INFO-only (gf = "candidates", never vuln claims). Tests assert gf-tagged never become VULNERABLE.
-- [x] **DNS resolution hygiene** — `modules/dns_resolve.py` (`--dns-hygiene`). puredns/massdns wildcard filter + alterx/dnsgen permutations (50k cap); feeds cleaned set forward. Wildcard filtering IS the FP-reducing oracle.
+- [x] **DNS resolution hygiene** — `modules/dns_resolve.py`. **Wildcard-filtering is now ON by default** (`--no-dns-hygiene` to disable) since it removes catch-all false-positive subdomains (FP-reducing oracle); passthrough when puredns/massdns absent. Permutation expansion (alterx/dnsgen, 50k cap) is opt-in via `--dns-permute`. Feeds the cleaned set forward into probing.
 - [x] **Favicon (mmh3) + JARM** — `modules/favicon_jarm.py` (`--favicon`). Shodan/Censys pivot hashes (facts, no vuln claim).
 - [x] **Tech fingerprint + EOL** — `modules/tech_fingerprint.py` (`--tech`). webanalyze + endoflife.date; EOL finding ONLY when product+version+past-EOL-date all confirmed (4 negative paths tested).
 - [x] **Alerting** — `modules/notify.py` (on by default, env-gated). Slack/Discord/webhook/email on inventory `delta['new']`; min-severity gated; never raises.

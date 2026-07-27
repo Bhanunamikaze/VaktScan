@@ -407,6 +407,7 @@ async def resolve_and_permute(
     apex_domains: list[str],
     output_dir: str,
     concurrency: int = 50,
+    permute: bool = True,
 ) -> dict:
     """Clean (resolve + wildcard-filter) and expand (permute) a subdomain set.
 
@@ -475,7 +476,7 @@ async def resolve_and_permute(
     capped = False
     can_resolve = bool(have_puredns or have_massdns)
 
-    if resolved and (have_alterx or have_dnsgen):
+    if permute and resolved and (have_alterx or have_dnsgen):
         if not can_resolve:
             _skip("dns_resolve: permutation tools present but no resolver — skipping permutation resolution.")
         else:

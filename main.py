@@ -859,6 +859,8 @@ async def main(
     enable_horizontal=False,
     extra_scans=frozenset(),
     output_format=None,
+    dns_hygiene=True,
+    dns_permute=False,
 ):
     """
     Main orchestrator for the scanning tool.
@@ -1374,18 +1376,21 @@ async def main(
                         print(f"{Colors.GREEN}[+] Horizontal expansion: {_rd} related domain(s), "
                               f"{_rh} reverse-DNS host(s) discovered for {domain}.{Colors.RESET}")
 
-                # DNS hygiene (opt-in --dns-hygiene): wildcard-filter + permutation-
-                # expand the enumerated subdomains before probing. Passthrough when
-                # puredns/massdns aren't installed. Feeds the cleaned set forward.
-                if "dns_hygiene" in extra_scans:
-                    _dns = await dns_resolve.resolve_and_permute(subdomains, [domain], domain_output_dir, concurrency)
+                # DNS hygiene (ON by default; --no-dns-hygiene to disable): wildcard-
+                # filter the enumerated subdomains before probing to drop catch-all
+                # false-positive names. Permutation expansion (--dns-permute) is
+                # opt-in. Passthrough when puredns/massdns aren't installed.
+                if dns_hygiene:
+                    _dns = await dns_resolve.resolve_and_permute(
+                        subdomains, [domain], domain_output_dir, concurrency, permute=dns_permute
+                    )
                     for _f in _dns.get("findings", []):
                         recon_phase_findings.append(_f)
                     if _dns.get("resolved"):
                         _before = len(subdomains)
                         subdomains = _dns["resolved"]
-                        print(f"{Colors.GREEN}[+] DNS hygiene: {_before} → {len(subdomains)} host(s) "
-                              f"(wildcard-filtered + permutation-expanded).{Colors.RESET}")
+                        _how = "wildcard-filtered + permutation-expanded" if dns_permute else "wildcard-filtered"
+                        print(f"{Colors.GREEN}[+] DNS hygiene: {_before} → {len(subdomains)} host(s) ({_how}).{Colors.RESET}")
 
                 if scan_found:
                     recon_findings = await run_recon_followups(
@@ -2207,10 +2212,11 @@ async def cmd_scan(args):
                     ("favicon", getattr(args, 'favicon', False)),
                     ("tech", getattr(args, 'tech', False)),
                     ("default_creds", getattr(args, 'default_creds', False)),
-                    ("dns_hygiene", getattr(args, 'dns_hygiene', False)),
                 ) if on
             ),
             output_format=getattr(args, 'format', None),
+            dns_hygiene=getattr(args, 'dns_hygiene', True),
+            dns_permute=getattr(args, 'dns_permute', False),
         )
     except KeyboardInterrupt:
         if _partial_findings:
@@ -2446,9 +2452,12 @@ if __name__ == "__main__":
                          help="Technology fingerprint + End-of-Life check on alive URLs (webanalyze + endoflife.date)")
     sp_scan.add_argument("--default-creds", action="store_true", dest="default_creds",
                          help="Confirmed default-credential checks on alive URLs (Tomcat/Jenkins/Grafana/Basic-Auth)")
-    sp_scan.add_argument("--dns-hygiene", action="store_true", dest="dns_hygiene",
-                         help="Wildcard-filter + permutation-expand enumerated subdomains before probing "
-                              "(puredns/massdns/alterx; passthrough if not installed)")
+    sp_scan.add_argument("--no-dns-hygiene", action="store_false", dest="dns_hygiene", default=True,
+                         help="Disable the default DNS wildcard-filtering of enumerated subdomains "
+                              "(puredns/massdns; passthrough if not installed). On by default.")
+    sp_scan.add_argument("--dns-permute", action="store_true", dest="dns_permute",
+                         help="Additionally generate + resolve subdomain permutations (alterx/dnsgen) "
+                              "during DNS hygiene — can greatly expand the host set")
     sp_scan.add_argument("--wordlist")
     # --scan-found removed: the scan subcommand always probes discovered subdomains
     sp_scan.add_argument("--nmap", action="store_true")
