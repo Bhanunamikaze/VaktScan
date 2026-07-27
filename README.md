@@ -1,34 +1,48 @@
 # VaktScan — Attack Surface Scanner
 
-> *"vakt"* is the Nordic word for "guard" or "watch".
+> *"vakt"* is the Nordic word for *"guard"* or *"watch"*.
 
-VaktScan is a high-performance attack surface scanner that accepts domains, IPs, CIDRs, or mixed target files and runs the full pipeline — subdomain enumeration, port scanning, HTTP probing, service-specific CVE checks, JavaScript analysis, DNS recon, cloud asset discovery, Google dorking, and multi-source enrichment — concurrently. Results land in a timestamped output directory as CSV, JSON, and SARIF.
+VaktScan is an async, high-throughput attack-surface / ASM scanner. Point it at a domain, IP, CIDR, or a mixed targets file and it runs the full pipeline — subdomain enumeration, passive recon (DNS, cloud, certificate-transparency, Google dorking), HTTP probing, service/CVE checks, JavaScript secret hunting, archived-URL weaponization, TLS posture, and multi-source vulnerability enrichment — concurrently, then writes de-duplicated findings and maintains a SQLite asset inventory with delta alerting.
 
-
-## Architecture
-
-![VaktScan Architecture](docs/architecture.svg)
-
-> **IP/CIDR targets** skip Stage 1 (no subdomain enum, DNS recon, cloud enum, CT monitor, or Google Dork)
-> and go directly to Stage 2. GAU/WaybackURLs also skip for raw IP targets.
+Every external tool it drives is **optional**: if a binary is missing, that stage is skipped gracefully and the rest of the scan continues.
 
 
-## Quick Start
+## Key Features
 
-### Installation
+- **Unified subcommand CLI** — `scan`, `enum`, `probe`, `dns`, `cloud`, `js-paths`, `domain-scan`, `google-dork`.
+- **Full auto pipeline** — `scan <domain>` runs enumeration → passive recon → probing → service checks → enrichment → reporting with no extra flags.
+- **Subdomain enumeration** — amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys, crt.sh, plus ffuf VHost fuzzing.
+- **Passive recon in parallel** — DNS recon, cloud-asset enumeration, and certificate-transparency monitoring run concurrently per domain, alongside Google dorking.
+- **DNS hygiene (on by default)** — wildcard-filters enumerated hosts (puredns/massdns) to drop catch-all false positives; optional permutation expansion (alterx/dnsgen).
+- **Web analysis** — httpx alive-probing then dirsearch, nuclei, `web_checks` (security headers, exposed `.git`/`.env`, CORS, cookie flags, WAF detection, GraphQL/Swagger exposure, EOL software), and a domain scanner (internal/external classification, 62 subdomain-takeover signatures, CORS, header anomalies).
+- **Archived-URL weaponization** — gau + waybackurls harvest, dedup, high-signal filter, live re-probe, and archived-JS secret scan.
+- **JavaScript analysis** — hardcoded secrets, source maps, internal IPs, endpoint extraction and probing.
+- **Port scanning + service modules** — async TCP scan, then per-service CVE modules (Elasticsearch, Kibana, Grafana, Prometheus, Next.js, AEM, cPanel/WHM, Jenkins, plus a broad `service_recon` covering 80+ ports) and `testssl.sh` TLS posture.
+- **Nmap CVE scripts** — `nmap --script vuln,vulners` runs **only on the open ports the port scanner already found** (no separate full 1–65535 sweep), gated behind `--nmap`.
+- **Enrichment** — NVD CVE lookup, CISA KEV cross-reference, EPSS exploit-probability scoring, and Shodan/Censys passive intel.
+- **Reporting & state** — CSV + HTML reports are **always** written to `reports/`; JSON and SARIF 2.1 are opt-in. A SQLite inventory tracks assets and emits "new vs resolved" deltas, and `notify.py` sends Slack/Discord/webhook/email alerts on new findings (env-gated).
+- **Opt-in expansions** — screenshots, parameter discovery, favicon (mmh3) + JARM pivots, tech fingerprint + EOL, confirmed default-credential checks, and horizontal/infra expansion (asnmap, reverse-DNS, amass intel).
+- **Scale features** — streaming mode for large CIDRs, resumable scans, IPv6, proxy support, and a live multi-row progress dashboard.
+
+
+## Requirements & Installation
+
+- **Python 3.8+** (tested 3.8–3.11).
+- Python packages: `httpx`, `requests`, `urllib3`, `beautifulsoup4`, `playwright` (+ stealth) — see `requirements.txt`.
+- **Optional external tools** — subdomain enum (amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys), probing (httpx, ffuf, dirsearch, nuclei), scanning (nmap, testssl.sh), archives (gau, waybackurls, uro), DNS hygiene (puredns, massdns, alterx, dnsgen, dnsx), expansion (asnmap, amass), and optional add-ons (gowitness/aquatone, arjun/paramspider/gf, webanalyze). **All are optional** — any missing tool simply skips its stage.
 
 ```bash
 git clone https://github.com/Bhanunamikaze/VaktScan.git
 cd VaktScan
 
-# Install the vendored Python httpx dependency
-pip install httpx --target=./vendor
+# Python dependencies
+pip install -r requirements.txt
 
-# Install all 40+ external tools (amass, subfinder, httpx, nuclei, ffuf, nmap, ...)
+# Optional: install the external recon/scanning tools
 bash requirements.sh
 ```
 
-Check or selectively install tools:
+Check or selectively install external tools:
 
 ```bash
 python scripts/setup_recon_tools.py            # view install status
@@ -36,138 +50,323 @@ python scripts/setup_recon_tools.py --install  # install all missing tools
 python scripts/setup_recon_tools.py --install --tools amass httpx nuclei
 ```
 
-### Basic Usage
+
+## Quick Start
 
 ```bash
 # Full scan of a single domain (subdomain enum + all modules)
 python main.py scan example.com
 
-# Full scan of an IP or CIDR
+# Scan an IP or CIDR (skips subdomain enum / passive recon, goes straight to port scan)
 python main.py scan 192.168.1.0/24
 
-# Scan a mixed targets file (IPs, hostnames, domains, CIDRs)
+# Scan a mixed targets file (domains, IPs, CIDRs)
 python main.py scan targets.txt
 
-# Skip subdomain enumeration for domain targets
+# Skip subdomain enumeration for a domain target
 python main.py scan example.com --no-subdomain-enum
 
 # Resume an interrupted scan
 python main.py scan targets.txt --resume
 
-# High-concurrency scan with JSON + SARIF output
-python main.py scan targets.txt -c 500 --format all
+# High concurrency with Nmap CVE scripts and JSON + SARIF output
+python main.py scan targets.txt -c 500 --nmap --format all
+
+# Subdomain enum only, then chain into probing
+python main.py enum example.com --probe
 ```
+
+
+## Workflows
+
+### `scan <domain>` — full pipeline
+
+```mermaid
+flowchart TD
+    A(["scan &lt;domain&gt;"]) --> TC{Target type}
+    TC -->|ip / cidr| PS2
+    TC -->|domain| REC
+
+    subgraph REC ["Stage 1 · passive & subdomain recon (parallel per domain)"]
+        direction LR
+        ENUM["Subdomain enum<br/>amass · subfinder · assetfinder<br/>findomain · sublist3r · knockpy<br/>bbot · censys · crt.sh · ffuf"]
+        PASS["DNS recon + Cloud enum + CT monitor"]
+        DORK["Google Dork<br/>(--no-dork to skip)"]
+    end
+
+    REC --> HYG["DNS hygiene · wildcard filter<br/>(--dns-permute to expand)"]
+    HYG --> HZ["Horizontal expand (--horizontal)<br/>asnmap · reverse-DNS · amass intel"]
+    HZ --> PROBE["Web-port scan -> httpx probe -> alive URLs"]
+
+    subgraph WEB ["Stage 2 · web analysis on alive URLs (parallel)"]
+        direction LR
+        DS["domain_scan<br/>classify · takeover · CORS · headers"]
+        DIR["dirsearch"]
+        NUC["nuclei"]
+        WC["web_checks"]
+        JS["js_paths secrets"]
+    end
+    PROBE --> WEB
+    WEB --> OPT["Optional per-flag: screenshots ·<br/>params · favicon · tech · default-creds"]
+    OPT --> ARCH["gau + waybackurls -> archived-URL weaponization"]
+
+    ARCH --> PS2["Full port scan<br/>(all service ports + --ports)"]
+    PS2 --> NMAP["nmap --script vuln,vulners<br/>on OPEN ports only (--nmap)"]
+    PS2 --> SVC["Service modules on matched ports:<br/>elastic · kibana · grafana · prometheus<br/>aem · cpanel · jenkins · nextjs<br/>service_recon · testssl"]
+
+    subgraph ENR ["Stage 3 · enrichment"]
+        direction LR
+        NVD["NVD CVE"] --> KEV["CISA KEV"] --> EPSS["EPSS"] --> PI["passive-intel"]
+    end
+    NMAP --> ENR
+    SVC --> ENR
+    ENR --> DD["Deduplicate findings"]
+    DD --> RPT["CSV + HTML (always)<br/>JSON / SARIF (opt-in)"]
+    RPT --> INV["Inventory delta (SQLite) + alerts"]
+```
+
+### `enum <domain>` — subdomain enumeration
+
+```mermaid
+flowchart TD
+    A(["enum &lt;domain&gt;"]) --> E["Subdomain enum<br/>amass · subfinder · assetfinder<br/>findomain · sublist3r · knockpy<br/>bbot · censys · crt.sh · ffuf"]
+    E --> W["Write subs -> reports/&lt;domain&gt;_subdomains_*.txt"]
+    W --> P{--probe?}
+    P -->|no| DONE(["Done"])
+    P -->|yes| PR["probe: web-port scan -> httpx -> alive URLs"]
+    PR --> WA["Parallel web analysis:<br/>domain_scan · dirsearch · nuclei<br/>web_checks · js_paths"]
+    WA --> AR["gau + waybackurls -> archived-URL scan"]
+    AR --> CSV["probe findings CSV"]
+```
+
+### `domain-scan` — domain-level HTTP analysis
+
+```mermaid
+flowchart TD
+    A(["domain-scan &lt;domain-list&gt;"]) --> L["Load + dedup domain list"]
+    L --> R["Resolve hostnames -> IPs"]
+    R --> PS["Web-port scan on web ports"]
+    PS --> HX["httpx probe -> alive URLs"]
+    HX --> SCAN
+
+    subgraph SCAN ["DomainScanner analysis"]
+        direction LR
+        CL["Internal / External classification"]
+        TK["Subdomain takeover · 62 signatures"]
+        CO["CORS misconfiguration"]
+        HD["Security headers + default-page anomalies"]
+        BC["Broken components"]
+    end
+
+    SCAN --> OUT["domain_scan_vulns_*.csv"]
+```
+
+> **IP / CIDR targets** skip Stage 1 (no subdomain enum, DNS recon, cloud enum, CT monitor, or Google dork) and go straight to the port scan. Archived-URL harvesting is also skipped for raw IPs.
 
 
 ## CLI Reference
 
-VaktScan uses subcommands. Run `python main.py <subcommand> --help` for per-command flags.
+VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exact per-command flags.
 
-| Subcommand | Key Flags | What It Does |
-|---|---|---|
-| `scan` | `target` `-c` `--module` `--ports` `--no-subdomain-enum` `--resume` `--format` `--proxy` `--nmap` `--update-templates` | Full attack surface scan: enum → port scan → httpx → service modules → enrichment → report |
-| `enum` | `domain` `-c` `--wordlist` `--output-dir` `--probe` | Subdomain enumeration only (subfinder, amass, crt.sh, ffuf VHost fuzzing); optionally chains into `probe` |
-| `probe` | `target` `--ports` `-c` `--timeout` `--output-dir` | Port scan + httpx probe; outputs open-port CSV and alive-URL list |
-| `dns` | `domain [...]` `-c` `--output-dir` | DNS recon: A/AAAA/MX/NS/TXT/SOA/CAA/DNSKEY, SPF/DMARC/DKIM, AXFR, open recursion, DNSSEC |
-| `cloud` | `domain` `-c` `--output-dir` | Cloud asset enumeration: S3 bucket guessing, Azure Blob, GCP storage, CloudFront detection |
-| `js-paths` | `target` `--threads` `--timeout` `--output-dir` | JavaScript path extraction: secrets, source maps, internal IPs, endpoint probing |
-| `domain-scan` | `domain` `--httpx-data` `-c` `--output-dir` | HTTP-level domain analysis: classification, takeover detection (58 signatures), CORS, header audit |
-| `google-dork` | `domain` `--google-api-key` `--google-cx` `--dorks` `--delay` `--max-results` `--output-dir` | Passive recon via Google Custom Search API using operator-crafted dorks |
-
-### Selected `scan` Flags
+### `scan` — full attack-surface scan
 
 | Flag | Default | Description |
 |---|---|---|
-| `-c`, `--concurrency` | `100` | Concurrent connections (max ~2000) |
-| `--module` | all | Restrict to one service module: `elasticsearch` `kibana` `grafana` `prometheus` `nextjs` `aem` `cpanel` `jenkins` `service_recon` |
+| `target` | — | Domain, IP, CIDR, or a targets file (positional) |
+| `-c`, `--concurrency` | `100` | Concurrent connections |
+| `--connect-timeout` | tool default | TCP connect timeout (seconds) |
+| `--port-retries` | tool default | Port-scan connect retries |
+| `-r`, `--resume` | off | Resume a checkpointed scan |
+| `--format` | — | Additionally emit `csv` / `json` / `sarif` / `all` (CSV + HTML are always written regardless) |
+| `--sarif FILE` | — | Write a SARIF 2.1 report to a specific path |
+| `-m`, `--module` | all | Run only one service module: `elasticsearch` `kibana` `grafana` `prometheus` `nextjs` `aem` `cpanel` `jenkins` `service_recon` |
 | `--ports` | — | Extra comma-separated ports to add to the scan |
-| `--no-subdomain-enum` | off | Skip subdomain discovery for domain targets |
-| `--resume` | off | Resume a checkpointed scan |
-| `--format` | csv | Additional output formats: `json` `sarif` `all` |
-| `--proxy` | — | HTTP/HTTPS proxy URL (e.g. `http://127.0.0.1:8080`) |
-| `--nmap` | off | Run full 1–65535 port scan + `nmap -sCV -Pn` on open ports |
-| `--update-templates` | off | Pull latest Nuclei templates before scanning |
 | `--chunk-size` | `30000` | IPs per streaming chunk for large CIDR scans |
+| `--stream-web-probe` | off | In streaming mode (>1000 hosts), also run httpx/nuclei/dirsearch/web-checks per chunk |
+| `--nmap` | off | Run `nmap --script vuln,vulners` on the open ports found |
+| `--wordlist` | — | Wordlist for ffuf VHost fuzzing |
+| `--sub-domains FILE` | — | Use an existing subdomain list instead of enumerating |
+| `--recon-concurrency` | `2` | Parallel domains processed during recon |
+| `--no-subdomain-enum` | off | Skip subdomain discovery for domain targets |
+| `--no-dashboard` | off | Disable the live multi-row progress dashboard |
+| `--proxy URL` | — | Route all traffic through a proxy (sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`) |
+| `--update-templates` | off | Sync latest Nuclei templates before scanning |
+| `--no-dork` | off | Skip Google dorking passive recon |
+| `--dork-method` | `auto` | Google-dork method: `api` `playwright` `html` `auto` |
+| `--no-archived-scan` | on | Disable gau/waybackurls archived-URL weaponization |
+| `--screenshots` | off | Screenshot alive URLs (gowitness/aquatone, capped at 500) |
+| `--horizontal` | off | Horizontal/infra expansion: asnmap CIDRs, reverse-DNS sweep, amass intel |
+| `--params` | off | Parameter discovery on alive URLs (arjun/paramspider/gf) |
+| `--favicon` | off | Favicon mmh3 hash + JARM fingerprint (Shodan/Censys pivots) |
+| `--tech` | off | Technology fingerprint + End-of-Life check (webanalyze + endoflife.date) |
+| `--default-creds` | off | Confirmed default-credential checks (Tomcat/Jenkins/Grafana/Basic-Auth) |
+| `--no-dns-hygiene` | on | Disable default DNS wildcard-filtering of enumerated subdomains |
+| `--dns-permute` | off | Generate + resolve subdomain permutations (alterx/dnsgen) during DNS hygiene |
 
+### `enum` — subdomain enumeration only
 
-## Output
-
-Each `scan` run writes to `reports/<target>_<YYYYMMDD_HHMMSS>/`:
-
-| File | Contents |
-|---|---|
-| `portscan_results_*.csv` | Open ports: IP, port, service, banner |
-| `httpx_*.csv` | Alive URLs from httpx probe: URL, status code, title, tech |
-| `scan_results_*.csv` | All vulnerability findings: target, module, CVE, severity, description |
-| `scan_results_*.json` | Same findings in JSON (with `--format json` or `--format all`) |
-| `scan_results_*.sarif` | SARIF 2.1 report for CI/CD integration (with `--format sarif` or `--format all`) |
-| `nuclei_*.txt` | Raw Nuclei output |
-
-Non-scan subcommands write to `reports/<target>/` (no timestamp).
-
-
-## Configuration (.env)
-
-Create a `.env` file in the project root (or export variables in your shell). All are optional — modules degrade gracefully when keys are absent.
-
-| Variable | Module | Purpose |
+| Flag | Default | Description |
 |---|---|---|
-| `SHODAN_API_KEY` | `passive_intel` | Shodan host lookups for passive enrichment |
-| `CENSYS_API_ID` | `passive_intel` | Censys search API credentials |
-| `CENSYS_API_SECRET` | `passive_intel` | Censys search API credentials |
-| `GOOGLE_API_KEY` | `google-dork` | Google Custom Search API key |
-| `GOOGLE_CX` | `google-dork` | Google Custom Search engine ID |
-| `NVD_API_KEY` | `nvd` | NVD API key (unauthenticated works but is rate-limited) |
-| `VAKTSCAN_AGGRESSIVE_CPANEL` | `cpanel` | Set to `1` to enable credential brute-force probes |
-| `VAKT_NUCLEI_BIN` | `nuclei_runner` | Override path to `nuclei` binary |
-| `VAKT_HTTPX_BIN` | `httpx_runner` | Override path to `httpx` binary |
-| `VAKT_GAU_BIN` | `gau_runner` | Override path to `gau` binary |
+| `domain` | — | Apex domain to enumerate |
+| `-c`, `--concurrency` | `20` | Concurrency |
+| `--wordlist` | — | Wordlist for ffuf VHost fuzzing |
+| `--output-dir` | `reports/` | Output directory |
+| `--probe` | off | Chain into `probe` after enumeration |
+| `--no-dashboard` | off | Disable the live progress dashboard |
+
+### `probe` — port scan + httpx web analysis
+
+| Flag | Default | Description |
+|---|---|---|
+| `target` | — | Domain, IP, CIDR, or a file of targets |
+| `--ports` | — | Extra comma-separated ports |
+| `-c`, `--concurrency` | `50` | Concurrency |
+| `--timeout` | `10.0` | Connect timeout (seconds) |
+| `--output-dir` | `reports/` | Output directory |
+| `--no-dashboard` | off | Disable the live progress dashboard |
+| `--proxy URL` | — | Route traffic through a proxy |
+
+### `dns` — DNS recon only
+
+| Flag | Default | Description |
+|---|---|---|
+| `domain [...]` | — | One or more domains |
+| `-c`, `--concurrency` | `20` | Concurrency |
+| `--output-dir` | `reports/` | Output directory |
+
+### `cloud` — cloud asset enumeration
+
+| Flag | Default | Description |
+|---|---|---|
+| `domain` | — | Apex domain |
+| `-c`, `--concurrency` | `50` | Concurrency |
+| `--output-dir` | `reports/` | Output directory |
+
+### `js-paths` — JavaScript path/secret extraction
+
+| Flag | Default | Description |
+|---|---|---|
+| `target` | — | A single URL or a file of URLs |
+| `--threads` | `20` | Worker threads |
+| `--timeout` | `10` | Request timeout (seconds) |
+| `--output-dir` | `reports/` | Output directory |
+
+### `domain-scan` — domain-level HTTP analysis
+
+| Flag | Default | Description |
+|---|---|---|
+| `domain` | — | Apex domain (or file of domains) |
+| `--httpx-data FILE` | — | Reuse existing httpx JSON output |
+| `-c`, `--concurrency` | `50` | Concurrency |
+| `--output-dir` | `reports/` | Output directory |
+
+### `google-dork` — passive recon via Google dorking
+
+| Flag | Default | Description |
+|---|---|---|
+| `domain` | — | Target domain |
+| `--google-api-key` | `$GOOGLE_API_KEY` | Google Custom Search API key |
+| `--google-cx` | `$GOOGLE_CX` | Google Custom Search engine ID |
+| `--dorks FILE` | — | Custom dork list |
+| `--delay` | `1.0` | Delay between queries (seconds) |
+| `--max-results` | `10` | Max results per dork |
+| `--method` | `auto` | Search method: `api` `playwright` `html` `auto` |
+| `--proxy URL` | — | Route traffic through a proxy |
+
+
+## Output & Reports
+
+`scan` runs write artifacts into a timestamped directory under `reports/` (e.g. `reports/web_probe_<label>_<YYYYMMDD_HHMMSS>/`). Other subcommands write to `reports/` or their own subdirectory.
+
+| Artifact | When | Contents |
+|---|---|---|
+| `scan_results_*.csv` | **always** | All findings: target, module, severity/status, CVE, details |
+| `scan_results_*.html` | **always** | Self-contained HTML report — severity summary + client-side filter |
+| `scan_results_*.json` | `--format json` / `all` | Same findings as JSON |
+| `scan_results_*.sarif` | `--format sarif` / `all`, or `--sarif FILE` | SARIF 2.1 for GitHub/GitLab security tabs |
+| `portscan_results_*.csv` | port scan | Open ports per host |
+| `httpx_*.csv` | probing | Alive URLs: status, title, tech |
+| `domain_scan_vulns_*.csv` | domain scan | Classification / takeover / CORS / header findings |
+| `screenshots/` | `--screenshots` | Screenshot gallery (`manifest.csv` + `index.html`) |
+
+**Asset inventory & alerting.** Findings are persisted to a SQLite inventory (`vaktscan_inventory.db`); each run prints a **delta report** ("new since last scan" vs "resolved") and an executive summary. When new findings appear, `notify.py` sends alerts via Slack, Discord, generic webhook, or email — **only if** the relevant environment variables are set; it never raises on failure. CISA KEV data is cached locally in `modules/data/cisa_kev_cache.json`.
+
+
+## Configuration (environment variables)
+
+All are optional; modules degrade gracefully when they are absent.
+
+| Variable | Used by | Purpose |
+|---|---|---|
+| `SHODAN_API_KEY` | passive_intel | Shodan host enrichment |
+| `CENSYS_API_ID` / `CENSYS_API_SECRET` | passive_intel / recon | Censys search API |
+| `GOOGLE_API_KEY` / `GOOGLE_CX` | google-dork | Google Custom Search |
+| `NVD_API_KEY` | nvd | NVD API key (unauthenticated works but is rate-limited) |
+| `SLACK_WEBHOOK_URL` / `DISCORD_WEBHOOK_URL` / `VAKT_WEBHOOK_URL` | notify | Alert destinations for new findings |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `ALERT_EMAIL_TO` / `ALERT_EMAIL_FROM` | notify | Email alerting |
+| `VAKT_ALERT_MIN_SEVERITY` / `VAKT_ALERT_TOP_N` | notify | Alert severity gate / cap |
+| `VAKTSCAN_AGGRESSIVE_CPANEL` | cpanel | Set to `1` to enable credential brute-force probes |
+| `VAKT_NUCLEI_BIN` / `VAKT_HTTPX_BIN` / `VAKT_GAU_BIN` / `VAKT_WAYBACK_BIN` / `VAKT_JARM_BIN` / `VAKT_WEBANALYZE_BIN` | runners | Override external binary paths |
+| `VAKT_RESOLVERS` | dns_resolve | Custom resolver list for DNS hygiene |
+| `VAKT_DEBUG` | all | Verbose error output |
 
 
 ## Modules
 
-### Service Modules (triggered automatically when the matching port is found open)
+### Service modules (auto-triggered when the matching port is found open)
 
-| Module | Default Ports | What It Checks |
+| Module | Default ports | Checks |
 |---|---|---|
-| `elastic` | 9200, 9300 | 11+ CVEs: Log4Shell, Groovy RCE, auth bypass, info disclosure |
-| `kibana` | 5601 | 4 CVEs: LFI, Timelion RCE, XSS, info disclosure; API enumeration |
-| `grafana` | 3000 | 18+ CVEs: SQL RCE, path traversal, SSRF, snapshot access, XSS |
-| `prometheus` | 9090 | 3 CVEs: open redirect, stored XSS, path traversal; metrics/target exposure |
-| `cpanel` | 2077–2096, 9998–9999, 80, 443 | Full cPanel/WHM/Webmail CVE suite, bundled-component matrix (Roundcube, WHMCS, phpMyAdmin, Exim, Dovecot), anti-FP baselining |
-| `jenkins` | 8080 | Unauthenticated API, script console RCE, user enumeration |
-| `aem` | 4502, 4503, 80, 443, 8080, 8443 | CRXDE Lite exposure, Sling servlet enum, JCR content exposure |
-| `service_recon` | 79 port mappings | 30+ service checks: FTP anon login, SMB null session, Redis unauth, Docker API, etcd secrets, Kubernetes API/Kubelet, MongoDB, Cassandra, RabbitMQ, Vault, TeamCity CVE-2024-27198, IPMI Cipher-0, Jupyter RCE, Hadoop YARN RCE, and more |
-| `nuclei` | all alive URLs | ProjectDiscovery Nuclei template engine; auto-syncs templates with `--update-templates` |
+| `elastic` | 9200, 9300 | Log4Shell, Groovy RCE, auth bypass, info disclosure |
+| `kibana` | 5601 | LFI, Timelion RCE, XSS, info disclosure, API enum |
+| `grafana` | 3000, 3003 | SQL/path-traversal RCE, SSRF, snapshot access, XSS |
+| `prometheus` | 9090, 9100–9104 | Open redirect, stored XSS, path traversal, metrics/target exposure |
+| `react_to_shell` (`nextjs`) | 3000, 80, 443, 8080 | Next.js / React exposure and RCE indicators |
+| `aem` | 4502, 4503, 80, 443, 8080, 8443 | CRXDE Lite, Sling servlet enum, JCR content exposure |
+| `cpanel` | 2077–2096, 9998–9999, 80, 443 | Full cPanel/WHM/Webmail CVE suite, bundled-component matrix, anti-FP baselining |
+| `jenkins` | 8080, 8090, 8443, 8888 | Unauthenticated API, script-console RCE, user enum, CVE-2024-23897 |
+| `service_recon` | 80+ ports | FTP/SMB/Redis/Docker/etcd/Kubernetes/MongoDB/Cassandra/RabbitMQ/Vault/TeamCity/IPMI/Jupyter/Hadoop-YARN, GitLab, Jira, Confluence, ArgoCD, Rancher, OpenTelemetry, Java RMI, Nagios/Zabbix, and more |
+| `testssl_runner` (`testssl`) | 443, 8443, 465, 993, 995 | TLS protocols + Heartbleed/ROBOT/BEAST/POODLE/SWEET32/etc., weak certs/keys, HSTS |
 
-### Recon / Analysis Modules
+### Recon / analysis / enrichment modules
 
-| Module | Subcommand | What It Does |
+| Module | Entry point | What it does |
 |---|---|---|
-| `dns_recon` | `dns` | Wire-format DNS: SPF classification, DMARC `p=none`, DKIM (16 selectors), AXFR, open recursion, CAA/DNSSEC absence |
-| `cloud_enum` | `cloud` | S3/Azure/GCP bucket and blob permutation + existence checks; CloudFront detection |
-| `google_dork` | `google-dork` | 28 operator-crafted dorks via Custom Search API or Playwright/HTML scraping fallback |
-| `js_paths` | `js-paths` | 12+ JS extraction strategies: hardcoded secrets, source maps, internal IPs, endpoint probing |
-| `domain_scan` | `domain-scan` | Internal/external classification, parked-page detection, 58-signature takeover detection (GitHub Pages, S3, Heroku, Cloudflare, Vercel, Netlify, Azure, and more), CORS/header anomalies |
-| `web_checks` | auto on all alive URLs | Security headers, `.git/HEAD`/`.env` exposure, GraphQL introspection, Swagger/OpenAPI exposure, SSL expiry, admin panels, directory listing, default CMS credentials |
-| `nvd` | enrichment | NVD CVE lookup for detected product/version pairs |
-| `cisa_kev` | enrichment | Flags findings that appear in the CISA Known Exploited Vulnerabilities catalog |
-| `epss` | enrichment | Appends EPSS exploit-probability scores to CVE findings |
-| `passive_intel` | enrichment | Shodan + Censys passive host data for discovered IPs |
+| `recon` | `enum` / `scan` | Subdomain enumeration orchestrator (amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys, crt.sh, ffuf) |
+| `dns_recon` | `dns` / `scan` | SPF/DMARC/DKIM, AXFR, open recursion, DNSSEC, CAA, email-security posture |
+| `dns_resolve` | `scan` | DNS hygiene: wildcard filtering (puredns/massdns) + optional permutations (alterx/dnsgen) |
+| `cloud_enum` | `cloud` / `scan` | S3/Azure Blob/GCS bucket permutation + existence, CloudFront detection |
+| `ct_monitor` | `scan` | Certificate-transparency baseline + new-cert diffing per domain |
+| `google_dork` | `google-dork` / `scan` | Operator-crafted dorks via Custom Search API or Playwright/HTML fallback |
+| `httpx_runner` | probing | httpx alive-probing of candidate URLs |
+| `dir_enum` | probing | dirsearch content discovery + ffuf VHost fuzzing |
+| `nuclei_runner` | probing | ProjectDiscovery Nuclei template engine (`--update-templates` to sync) |
+| `port_scanner` | `probe` / `scan` | Async TCP port scanner (IPv4/IPv6, streaming for large CIDRs) |
+| `nmap_runner` | `--nmap` | `nmap --script vuln,vulners` on the open ports found; parses XML into findings |
+| `web_checks` | probing | Security headers, `.git`/`.env` exposure, CORS, cookie flags, WAF, GraphQL/Swagger, EOL software, SSL expiry |
+| `domain_scan` | `domain-scan` / `scan` | Internal/external classification, 62 takeover signatures, CORS/header anomalies, broken components |
+| `js_paths` | `js-paths` / `scan` | JS secrets, source maps, internal IPs, endpoint extraction/probing |
+| `gau_runner` / `waybackurls_runner` | `scan` | Archived-URL harvesting |
+| `archived_urls` | `scan` | Dedup → high-signal filter → live re-probe → archived-JS secret scan (content-oracle validated) |
+| `horizontal_expand` | `--horizontal` | asnmap → CIDRs, reverse-DNS sweep, amass intel → related domains |
+| `screenshots` | `--screenshots` | gowitness/aquatone visual triage + HTML gallery |
+| `param_discovery` | `--params` | arjun/paramspider/gf parameter surface (INFO only) |
+| `favicon_jarm` | `--favicon` | Favicon mmh3 hash + JARM fingerprint pivots |
+| `tech_fingerprint` | `--tech` | webanalyze tech detection + endoflife.date EOL validation |
+| `default_creds` | `--default-creds` | Confirmed default-credential checks with a wrong-credential negative control |
+| `passive_intel` | enrichment | Shodan + Censys passive host data |
+| `nvd` | enrichment | Product/version → CVE lookup (CVSS ≥ 7) |
+| `cisa_kev` | enrichment | Flags findings present in the CISA Known Exploited Vulnerabilities catalog |
+| `epss` | enrichment | Appends EPSS exploit-probability scores |
+| `inventory` | reporting | SQLite asset inventory, delta + executive summary |
+| `notify` | reporting | Slack/Discord/webhook/email alerts on new findings (env-gated) |
+| `dashboard` / `progress` | UI | Live multi-row progress dashboard |
+| `schema` | internal | Canonical finding schema + `normalize_finding()` |
 
 
 ## Adding a New Module
 
-See `docs/adding-a-module.md` for a step-by-step walkthrough. The short version: create `modules/newservice.py` with an async `run_scans(ip, port)` function, register its ports in `utils.py` → `get_service_ports()`, and wire the module into `main.py`'s scanner delegation block.
-
-
-## Requirements
-
-- Python 3.8+ (tested on 3.8–3.11)
-- `httpx` vendored in `vendor/` — no system install needed
-- 40+ external tools installed via `bash requirements.sh`
-- Raw socket access for port scanning
-- ~50 MB RAM per 1000 concurrent connections; streaming mode handles millions of IPs with minimal memory
+See [`docs/adding-a-module.md`](docs/adding-a-module.md). In short: create `modules/newservice.py` with an async `run_scans(target_obj, port)` returning canonical findings, register its ports in `utils.py` → `get_service_ports()`, and add it to `SERVICE_TO_MODULE` in `main.py`.
 
 
 ## License
@@ -177,4 +376,6 @@ MIT — see [LICENSE](LICENSE).
 
 ## Disclaimer
 
-VaktScan is intended for authorized security testing and educational purposes only. Always obtain explicit written permission before scanning systems you do not own. Unauthorized scanning is illegal.
+VaktScan is for authorized security testing and educational purposes only. Always obtain explicit written permission before scanning systems you do not own. Unauthorized scanning is illegal.
+</content>
+</invoke>
