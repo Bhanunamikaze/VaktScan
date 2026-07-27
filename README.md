@@ -105,6 +105,10 @@ python main.py scan steinzsecurity.com --posture
 
 # Use an existing subdomain list, company-only, alert on new findings (env-configured)
 python main.py scan steinzsecurity.com --sub-domains subs.txt --company-only
+
+# Tune concurrency: 300 concurrent connections (-c) and 4 domains resolved in
+# parallel during recon (--recon-concurrency) for a faster large scan
+python main.py scan steinzsecurity.com -c 300 --recon-concurrency 4 --company-only
 ```
 
 
