@@ -88,6 +88,7 @@ from modules import (
     tech_fingerprint,
     default_creds,
     notify,
+    asset_classifier,
 )
 
 # Exceptions that indicate a programming bug rather than an environmental,
@@ -815,6 +816,9 @@ async def main(
     dns_permute=False,
     dns_takeover=True,
     exclude_patterns=None,
+    include_only_patterns=None,
+    company_only=False,
+    shared_ip_threshold=10,
 ):
     """
     Main orchestrator for the scanning tool.
@@ -822,6 +826,8 @@ async def main(
     # Predicate: host -> True when it must be EXCLUDED from scanning (still listed
     # in the enumerated subdomain output, just never scanned).
     _is_excluded = build_exclusion_matcher(exclude_patterns)
+    # Predicate: host -> True when it matches an --include-only allowlist pattern.
+    _include_only = build_exclusion_matcher(include_only_patterns) if include_only_patterns else None
     # Set up signal handlers
     def signal_handler():
         print(f"\n[!] Received interrupt signal. Shutting down gracefully...")
@@ -1344,6 +1350,33 @@ async def main(
                             print(f"{Colors.YELLOW}[!] All discovered subdomains for {domain} were excluded — nothing to scan.{Colors.RESET}")
                             return None
 
+                # --include-only (allowlist): keep ONLY hosts matching the patterns.
+                # Runs after --exclude so the two compose (exclude wins on overlap).
+                if _include_only is not None:
+                    _before = len(subdomains)
+                    subdomains = [s for s in subdomains if _include_only(s)]
+                    print(f"{Colors.YELLOW}[*] --include-only kept {len(subdomains)}/{_before} host(s).{Colors.RESET}")
+                    if not subdomains:
+                        print(f"{Colors.YELLOW}[!] No subdomains matched --include-only for {domain} — nothing to scan.{Colors.RESET}")
+                        return None
+
+                # --company-only: resolve + map IPs, then drop customer/shared-hosting
+                # sites (>= shared_ip_threshold hosts on one IP), keeping company assets
+                # (distinct IPs + functional-named hosts). Runs AFTER exclude/include so
+                # we only resolve the reduced set (saves DNS work).
+                if company_only and subdomains:
+                    _cls = await asset_classifier.classify_by_shared_ip(
+                        subdomains, domain, domain_output_dir,
+                        shared_ip_threshold=shared_ip_threshold, concurrency=concurrency,
+                    )
+                    for _cf in _cls.get("findings", []):
+                        recon_phase_findings.append(_cf)
+                    if _cls.get("customer"):
+                        subdomains = _cls["company"]
+                        if not subdomains:
+                            print(f"{Colors.YELLOW}[!] All hosts classified as customer/shared-hosting for {domain} — nothing to scan.{Colors.RESET}")
+                            return None
+
                 # Horizontal / infrastructure expansion (opt-in via --horizontal):
                 # asnmap → CIDRs, reverse-DNS sweep, amass intel → related domains.
                 # Gracefully skips when the tools aren't installed.
@@ -1580,6 +1613,17 @@ async def main(
                 targets = _kept
             if not targets:
                 print("[!] All targets were excluded. Exiting.")
+                return
+
+        # --include-only allowlist on the final scan set (file/IP scans).
+        if _include_only is not None:
+            _kept = [t for t in targets
+                     if _include_only(t.get('display_target') or t.get('scan_address', ''))]
+            if len(_kept) < len(targets):
+                print(f"{Colors.YELLOW}[*] --include-only kept {len(_kept)}/{len(targets)} target(s).{Colors.RESET}")
+                targets = _kept
+            if not targets:
+                print("[!] No targets matched --include-only. Exiting.")
                 return
 
         # 2. Define service ports (only modules that have scanners)
@@ -2239,6 +2283,11 @@ async def cmd_scan(args):
             exclude_patterns=load_exclusion_patterns(
                 getattr(args, 'exclude', None), getattr(args, 'exclude_file', None)
             ),
+            include_only_patterns=load_exclusion_patterns(
+                getattr(args, 'include_only', None), getattr(args, 'include_only_file', None)
+            ),
+            company_only=getattr(args, 'company_only', False),
+            shared_ip_threshold=getattr(args, 'shared_ip_threshold', 10),
         )
     except KeyboardInterrupt:
         if _partial_findings:
@@ -2474,6 +2523,20 @@ if __name__ == "__main__":
                               "resolved/probed/scanned. Repeatable; prefix 're:' for a regex.")
     sp_scan.add_argument("--exclude-file", metavar="FILE", dest="exclude_file",
                          help="File of exclusion patterns, one per line (# comments allowed). See --exclude.")
+    sp_scan.add_argument("--include-only", action="append", metavar="PATTERN", dest="include_only",
+                         help="Allowlist: scan ONLY hosts matching this glob/regex (see --exclude syntax). "
+                              "Repeatable. Applied after --exclude.")
+    sp_scan.add_argument("--include-only-file", metavar="FILE", dest="include_only_file",
+                         help="File of --include-only patterns, one per line.")
+    sp_scan.add_argument("--company-only", action="store_true", dest="company_only",
+                         help="Skip customer/shared-hosting sites: resolve every subdomain, and drop hosts "
+                              "that sit on a shared hosting IP (a website-builder platform), keeping only the "
+                              "company's own assets (distinct IPs + functional-named hosts like www/api/mail). "
+                              "Writes company_assets.txt / customer_sites.txt. Runs after --exclude/--include-only.")
+    sp_scan.add_argument("--shared-ip-threshold", type=int, default=10, dest="shared_ip_threshold",
+                         metavar="N",
+                         help="For --company-only: an IP hosting N or more subdomains is treated as shared "
+                              "hosting (its hosts = customer sites). Default: 10.")
     sp_scan.add_argument("--wordlist")
     # --scan-found removed: the scan subcommand always probes discovered subdomains
     sp_scan.add_argument("--nmap", action="store_true")
