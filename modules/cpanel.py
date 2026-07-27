@@ -17,7 +17,7 @@ emits is a dict with the AEM-compatible keys (`status`, `vulnerability`,
 `target`, `resolved_ip`, `port`, `url`, `payload_url`, `module`,
 `service_version`, `severity`, `details`, plus `http_status`,
 `page_title`, `content_length` set by enrich_vuln). `status` is one of
-{CRITICAL, VULNERABLE, POTENTIAL, INFO} — matching main.py:1119-1128.
+{CRITICAL, VULNERABLE, POTENTIAL, INFO} - matching main.py:1119-1128.
 """
 
 import asyncio
@@ -313,7 +313,7 @@ async def identify_cpanel_target(client, origin_url, version_info, port=80):
     cpsrvd serves cPanel-flavoured templates on 4xx responses (404, 401)
     too, so the status-code gate explicitly includes 404. The magic-
     revision asset name (`cPanel_magic_revision_<epoch>`) is itself a
-    strong fingerprint — when present in version_info evidence we add +3
+    strong fingerprint - when present in version_info evidence we add +3
     even without a parsed version number.
     """
     evidence = []
@@ -358,7 +358,7 @@ async def identify_cpanel_target(client, origin_url, version_info, port=80):
                 score += weight
 
     for hdr_name in ('x-cpanel-server', 'x-cpanel-mailloop', 'x-cpanel-redirect', 'x-cpanel-request-id'):
-        # We didn't keep the response — re-probe `/` once for the headers.
+        # We didn't keep the response - re-probe `/` once for the headers.
         pass
 
     try:
@@ -473,7 +473,7 @@ def _oracle_cve_2023_29489_indicator(r_pos, r_neg):
     # Encoded reflection is not exploitable.
     if f"&lt;svg" in body.lower() or f"&#x3c;svg" in body.lower():
         return False
-    # Control must NOT contain the marker (it shouldn't — random token).
+    # Control must NOT contain the marker (it shouldn't - random token).
     if r_neg is not None and marker in (r_neg.text or ''):
         return False
     return True
@@ -551,7 +551,7 @@ async def _oracle_cve_2021_38583_positive(client, origin):
     # SSRF indicator: server attempts to fetch the supplied URL and surfaces
     # an error tied to the attacker domain. Pre-94 cPanel accepted arbitrary
     # fqdns; the API is reachable from cpsess paths only, so we look for the
-    # endpoint's existence as an INFO/POTENTIAL — actual SSRF needs a
+    # endpoint's existence as an INFO/POTENTIAL - actual SSRF needs a
     # collaborator we don't have.
     return await _safe_get(client, origin + "/json-api/fetch_ssl_certificates_for_fqdns?api.version=1&domains=attacker.example", timeout=8)
 
@@ -712,9 +712,9 @@ async def check_version_vulnerabilities(client, ctx, version_info):
             f"Covers: {cves}. {bulletin.get('summary', '')}"
         )
         if not cross_confirmed:
-            details += ' [version came from a single source — confirm by reading /cpanelbranding/]'
+            details += ' [version came from a single source - confirm by reading /cpanelbranding/]'
         if bulletin.get('auth_required'):
-            details += ' [auth_required: true — flagged for context, not exploited]'
+            details += ' [auth_required: true - flagged for context, not exploited]'
 
         out.append(_finding(
             status=status,
@@ -736,7 +736,7 @@ async def check_version_vulnerabilities(client, ctx, version_info):
 #
 # exposed_codes: the HTTP status codes that mean the path is *actually exposed*
 # (not just protected). For a sensitive API like /json-api/listaccts, 403/401
-# means the auth gate is doing its job — that's NOT a finding. Only 200 (with
+# means the auth gate is doing its job - that's NOT a finding. Only 200 (with
 # a real body) means the endpoint leaked. For login portals and reset flows,
 # 200/302 are the exposed signals because they're meant to be public.
 #
@@ -746,14 +746,14 @@ SENSITIVE_PATHS = [
     ('/whm/login',                                       'WHM login portal exposed',                   'INFO',       'INFO',       (200, 302, 401)),
     ('/webmail/',                                        'Webmail portal exposed',                     'INFO',       'INFO',       (200, 302, 401)),
     ('/webdisk/',                                        'WebDisk portal exposed',                     'INFO',       'INFO',       (200, 302, 401)),
-    # Default install pages — both are stock cPanel static files; we only
+    # Default install pages - both are stock cPanel static files; we only
     # surface defaultwebpage.cgi because a 200 on it on an unrelated
     # vhost is a strong subdomain-takeover signal (handled separately by
     # domain_scan). We drop /unprotected/redirect.html because it's a
     # stock asset present on every install and not a vulnerability.
     ('/cgi-sys/defaultwebpage.cgi',                      'cPanel default landing page reachable',     'INFO',       'INFO',       (200,)),
     ('/cpanelbranding/',                                 'cPanel branding directory listing',          'LOW',        'VULNERABLE', (200,)),
-    # API surfaces that should not be public — only 200 means leaked
+    # API surfaces that should not be public - only 200 means leaked
     ('/json-api/listaccts',                              'WHM json-api listaccts leaks accounts',      'CRITICAL',   'CRITICAL',   (200,)),
     ('/xml-api/listaccts',                               'WHM xml-api listaccts leaks accounts',       'CRITICAL',   'CRITICAL',   (200,)),
     ('/json-api/version',                                'WHM json-api version leaks',                 'MEDIUM',     'VULNERABLE', (200,)),
@@ -761,7 +761,7 @@ SENSITIVE_PATHS = [
     ('/json-api/php_get_installed_versions',             'WHM MultiPHP version enumeration',           'MEDIUM',     'VULNERABLE', (200,)),
     ('/json-api/listresellers',                          'WHM reseller list leaks',                    'HIGH',       'VULNERABLE', (200,)),
     ('/json-api/listpkgs',                               'WHM package list leaks',                     'MEDIUM',     'VULNERABLE', (200,)),
-    # 3rd-party bundled apps — 200 only (the existence finding)
+    # 3rd-party bundled apps - 200 only (the existence finding)
     ('/3rdparty/roundcube/',                             'Roundcube webmail surface',                  'INFO',       'INFO',       (200, 302)),
     ('/3rdparty/squirrelmail/',                          'SquirrelMail surface (end-of-life)',         'HIGH',       'VULNERABLE', (200, 302)),
     ('/horde/',                                          'Horde groupware surface',                    'INFO',       'INFO',       (200, 302)),
@@ -777,13 +777,13 @@ SENSITIVE_PATHS = [
     ('/wp-toolkit/',                                     'WP Toolkit UI reachable',                    'INFO',       'INFO',       (200, 302)),
     ('/imunify360/',                                     'Imunify360 UI reachable',                    'INFO',       'INFO',       (200, 302)),
     ('/csf/',                                            'ConfigServer Firewall UI reachable',         'MEDIUM',     'VULNERABLE', (200,)),
-    # Server info / config — strictly 200
+    # Server info / config - strictly 200
     ('/server-status',                                   'Apache server-status reachable',             'HIGH',       'VULNERABLE', (200,)),
     ('/server-info',                                     'Apache server-info reachable',               'HIGH',       'VULNERABLE', (200,)),
     ('/.htaccess',                                       '.htaccess directly readable',                'HIGH',       'VULNERABLE', (200,)),
     ('/var/cpanel/version',                              '/var/cpanel/version readable',               'MEDIUM',     'VULNERABLE', (200,)),
     # Password reset / signup (public exposure flow). The reset form is
-    # MEANT to be reachable — cPanel users reset their own passwords
+    # MEANT to be reachable - cPanel users reset their own passwords
     # through it. Rate-limiting is cPHulkd's job, surfaced separately.
     # We report as INFO so operators see the surface without claiming it's
     # a vulnerability.
@@ -798,7 +798,7 @@ SENSITIVE_PATHS = [
     ('/scripts/backup',                                  'WHM backup-script surface reachable',        'INFO',       'INFO',       (200,)),
     ('/scripts2/manage_api_tokens',                      'WHM API-token management surface reachable', 'MEDIUM',     'VULNERABLE', (200,)),
     ('/scripts2/listapitokens',                          'WHM API-token list surface reachable',       'MEDIUM',     'VULNERABLE', (200,)),
-    # CGI scripts (classic cPanel RCE surface) — 200 only
+    # CGI scripts (classic cPanel RCE surface) - 200 only
     ('/cgi-sys/FormMail-clone.cgi',                      'Legacy FormMail-clone.cgi present',          'HIGH',       'VULNERABLE', (200,)),
     ('/cgi-sys/cpaddons.cgi',                            'Legacy cpaddons.cgi present',                'MEDIUM',     'VULNERABLE', (200,)),
     ('/cgi-sys/randhtml.cgi',                            'Legacy randhtml.cgi present',                'MEDIUM',     'VULNERABLE', (200,)),
@@ -814,7 +814,7 @@ async def check_sensitive_paths(client, ctx, baselines):
     a finding only when:
       (1) the response status is in the entry's declared `exposed_codes`,
       (2) the body is not the cpsrvd login-template (which cpsrvd serves
-          as a normalised 200 to ANY unknown path — body length is
+          as a normalised 200 to ANY unknown path - body length is
           identical at ~37KB but the hash drifts because the template
           embeds CSRF tokens, so we have to detect by CONTENT not hash),
       (3) for CRITICAL/HIGH API endpoints, the body actually looks like
@@ -953,7 +953,7 @@ async def check_http_method_tampering(client, ctx, baselines):
             status='VULNERABLE',
             severity='MEDIUM',
             vulnerability='HTTP TRACE method enabled',
-            details='Apache TRACE method returns 200 and echoes the request headers — enables Cross-Site Tracing.',
+            details='Apache TRACE method returns 200 and echoes the request headers - enables Cross-Site Tracing.',
             payload_url=origin + '/',
             surface=ctx['surface'],
         ))
@@ -965,7 +965,7 @@ async def check_http_method_tampering(client, ctx, baselines):
             status='CRITICAL',
             severity='CRITICAL',
             vulnerability='HTTP PUT method accepted',
-            details=f'PUT to /_vakt_probe.txt returned {r_put.status_code} — server may accept arbitrary file uploads.',
+            details=f'PUT to /_vakt_probe.txt returned {r_put.status_code} - server may accept arbitrary file uploads.',
             payload_url=origin + '/_vakt_probe.txt',
             surface=ctx['surface'],
         ))
@@ -989,7 +989,7 @@ async def check_host_header_bypass(client, ctx):
             status='POTENTIAL',
             severity='MEDIUM',
             vulnerability='Host-header allow-list bypass possible',
-            details=f"Host: localhost returns HTTP {r_local.status_code} (vs {r_real.status_code} for the real host) — source-IP allow-list may be bypassable.",
+            details=f"Host: localhost returns HTTP {r_local.status_code} (vs {r_real.status_code} for the real host) - source-IP allow-list may be bypassable.",
             payload_url=real_host_url,
             surface=ctx['surface'],
         ))
@@ -1001,7 +1001,7 @@ async def check_host_header_bypass(client, ctx):
 async def check_session_bypass(client, ctx, baselines):
     """
     cpsrvd may rewrite an unknown /cpsess<n>/ path to its normal login flow
-    and serve the 37 KB login HTML with HTTP 200 — that is NOT a bypass. We
+    and serve the 37 KB login HTML with HTTP 200 - that is NOT a bypass. We
     only flag the row when the response is clearly authenticated content:
     JSON / XML, or HTML that contains a session marker but is NOT the
     login template.
@@ -1064,7 +1064,7 @@ async def check_cors_misconfig(client, ctx):
                 status='VULNERABLE',
                 severity='HIGH',
                 vulnerability='CORS misconfiguration with credentials',
-                details=f'{path} echoes Access-Control-Allow-Origin (={acao}) with Allow-Credentials: true — cross-origin reads possible.',
+                details=f'{path} echoes Access-Control-Allow-Origin (={acao}) with Allow-Credentials: true - cross-origin reads possible.',
                 payload_url=origin + path,
                 surface=ctx['surface'],
             ))
@@ -1073,7 +1073,7 @@ async def check_cors_misconfig(client, ctx):
                 status='POTENTIAL',
                 severity='MEDIUM',
                 vulnerability='CORS echoes arbitrary Origin',
-                details=f'{path} echoes attacker-supplied Origin header without credentials — limited cross-origin read.',
+                details=f'{path} echoes attacker-supplied Origin header without credentials - limited cross-origin read.',
                 payload_url=origin + path,
                 surface=ctx['surface'],
             ))
@@ -1099,7 +1099,7 @@ async def check_crlf_injection(client, ctx):
             status='VULNERABLE',
             severity='HIGH',
             vulnerability='CRLF / response header injection',
-            details=f'goto_uri parameter on /login/ allows CRLF injection — attacker-controlled header reflected.',
+            details=f'goto_uri parameter on /login/ allows CRLF injection - attacker-controlled header reflected.',
             payload_url=origin + payload,
             surface=ctx['surface'],
         ))
@@ -1120,7 +1120,7 @@ async def check_cache_poisoning(client, ctx):
             status='VULNERABLE',
             severity='HIGH',
             vulnerability='X-Forwarded-Host poisoning',
-            details=f'/login/ reflects X-Forwarded-Host into Location header — caching layer can be poisoned.',
+            details=f'/login/ reflects X-Forwarded-Host into Location header - caching layer can be poisoned.',
             payload_url=origin + '/login/',
             surface=ctx['surface'],
         ))
@@ -1135,9 +1135,9 @@ async def check_cookie_security(client, ctx):
     /login/ which (pre-auth) emits a CSRF-token cookie under the same
     name as the post-auth session cookie. Distinguishing them from a
     single request is unreliable, so we audit conservatively:
-      - REQUIRE HttpOnly + Secure (on TLS surfaces) — both are mandatory
+      - REQUIRE HttpOnly + Secure (on TLS surfaces) - both are mandatory
         whether the cookie is pre-auth CSRF or post-auth session;
-      - DO NOT flag missing SameSite — many cPanel installs intentionally
+      - DO NOT flag missing SameSite - many cPanel installs intentionally
         omit it on pre-auth CSRF cookies to support cross-site auth
         kicks; flagging it on a CSRF-token cookie was noisy and not a
         real CSRF risk (no auth state attached yet).
@@ -1218,7 +1218,7 @@ async def check_userdir_enum(client, ctx):
                 status='VULNERABLE',
                 severity='MEDIUM',
                 vulnerability='mod_userdir enumeration / directory listing',
-                details=f'~{user}/ returned an index listing — user trees enumerable.',
+                details=f'~{user}/ returned an index listing - user trees enumerable.',
                 payload_url=origin + f'/~{user}/',
                 surface=ctx['surface'],
             ))
@@ -1261,7 +1261,7 @@ async def check_caldav_exposure(client, ctx):
             status='VULNERABLE',
             severity='HIGH',
             vulnerability='CalDAV / CardDAV PROPFIND reachable',
-            details='PROPFIND on / returned multistatus — calendar/contact metadata enumerable.',
+            details='PROPFIND on / returned multistatus - calendar/contact metadata enumerable.',
             payload_url=origin + '/',
             surface=ctx['surface'],
         ))
@@ -1475,7 +1475,7 @@ async def check_cphulk_present(client, ctx):
                 'Three failed logins did not surface X-Cphulkd-* response headers. '
                 'cPHulkd may be enabled but only surface headers after the lockout '
                 'threshold is hit, OR it may be disabled. Verify with `whmapi1 '
-                'gethulkstatus`. Not a confirmed vulnerability — just a posture note.'
+                'gethulkstatus`. Not a confirmed vulnerability - just a posture note.'
             ),
             payload_url=origin + '/login/',
             surface=ctx['surface'],
@@ -1488,7 +1488,7 @@ async def check_cphulk_present(client, ctx):
 async def check_auto_subdomains(client, ctx):
     """
     Removed: emitting a generic "auto-subdomains likely" row on every
-    cPanel/WHM host was noisy and not a finding — it was a hint. Use
+    cPanel/WHM host was noisy and not a finding - it was a hint. Use
     `-m recon` (subdomain enumeration), `-m dns` (full DNS posture), and
     `-m domain-scan` (takeover signals) for the actual checks.
     """
@@ -1500,7 +1500,7 @@ async def check_auto_subdomains(client, ctx):
 async def check_open_reset(client, ctx):
     """
     The cPanel reset-password form is reachable unauthenticated **by design**
-    — cPanel users reset their own passwords through it. Rate-limiting is
+    - cPanel users reset their own passwords through it. Rate-limiting is
     cPHulkd's job (audited separately by check_cphulk_present). We only
     flag this as a VULNERABLE row when cPHulkd is missing AND the reset
     flow is exposed; otherwise it's an INFO-grade surface note.
@@ -1510,7 +1510,7 @@ async def check_open_reset(client, ctx):
     whether the form accepts arbitrary usernames without rate-limit
     enforcement headers. Absent rate-limit headers do not imply absent
     rate-limiting (the response code 200 is normal), so the row stays
-    INFO unless we see actual sequential successes — outside the scope of
+    INFO unless we see actual sequential successes - outside the scope of
     a single-request probe.
     """
     return []
@@ -1903,7 +1903,7 @@ async def check_ssi_execution(client, ctx):
                 status='VULNERABLE',
                 severity='MEDIUM',
                 vulnerability='Server-Side Includes (SSI) processing enabled',
-                details=f'{path} returned 200 with SSI directives visible in response — .shtml extension is processed.',
+                details=f'{path} returned 200 with SSI directives visible in response - .shtml extension is processed.',
                 payload_url=origin + path,
                 surface=ctx['surface'],
             ))
@@ -1920,7 +1920,7 @@ async def check_request_smuggling(client, ctx):
     header pair. A smuggling-vulnerable front+back disagreement shows as
     status divergence on the smug request while the baseline succeeds, or
     a >256-byte body delta when both return the same status. We require
-    BOTH responses to be 2xx or BOTH non-2xx — a divergence caused by the
+    BOTH responses to be 2xx or BOTH non-2xx - a divergence caused by the
     body itself (auth, method, route) is rejected.
     """
     out = []
@@ -1953,13 +1953,13 @@ async def check_request_smuggling(client, ctx):
         return out
     if r_smug is None or r_baseline is None:
         return out
-    # Reject if both responses are identical — no desync.
+    # Reject if both responses are identical - no desync.
     if r_smug.status_code == r_baseline.status_code and not _response_size_delta(r_smug, r_baseline, threshold=256):
         return out
     # Reject when the response pair is just an auth-state difference
     # (one side 200/302, the other 401/403). That tells us the body
     # processing changed because the server treated the request as
-    # authenticated vs unauthenticated — not because of framing desync.
+    # authenticated vs unauthenticated - not because of framing desync.
     codes = {r_smug.status_code, r_baseline.status_code}
     if codes & {401, 403} and codes & {200, 302}:
         return out
@@ -1982,7 +1982,7 @@ async def check_request_smuggling(client, ctx):
 
 async def check_branding_upload(client, ctx):
     """
-    HEAD-probe upload endpoints under /cpanelbranding/ — historically allowed
+    HEAD-probe upload endpoints under /cpanelbranding/ - historically allowed
     unauthenticated POST file writes on some cPanel builds. We never POST a
     payload; reachable HEAD = HIGH finding.
     """
@@ -1998,14 +1998,14 @@ async def check_branding_upload(client, ctx):
         if r is None:
             continue
         # 200 or 405 with no auth challenge = exposed POST endpoint.
-        # 401/403 means the endpoint is auth-gated — not a finding.
+        # 401/403 means the endpoint is auth-gated - not a finding.
         if r.status_code in (200, 405):
             out.append(_finding(
                 status='VULNERABLE',
                 severity='HIGH',
                 vulnerability='cPanel branding upload endpoint exposed',
                 details=(
-                    f'HEAD {path} returned HTTP {r.status_code} with no auth challenge — '
+                    f'HEAD {path} returned HTTP {r.status_code} with no auth challenge - '
                     'endpoint accepts POST and historically allowed unauthenticated file uploads.'
                 ),
                 payload_url=origin + path,
@@ -2091,7 +2091,7 @@ async def check_default_credentials(client, ctx):
       - opt-in via VAKTSCAN_AGGRESSIVE_CPANEL env var (default off).
     Successful login is detected by: distinct Set-Cookie cpsession= AND 302
     redirect AND `Location` containing `/cpsess`. Any of these alone is not
-    enough — all three must match for the row to emit (VULNERABLE/CRITICAL).
+    enough - all three must match for the row to emit (VULNERABLE/CRITICAL).
     """
     if ctx['port'] not in WHM_PORTS:
         return []
@@ -2116,7 +2116,7 @@ async def check_default_credentials(client, ctx):
             continue
         if r is None:
             continue
-        # cPHulkd / Imunify lockout — stop probing.
+        # cPHulkd / Imunify lockout - stop probing.
         if _detect_waf(r) == 'cphulkd':
             break
         loc = r.headers.get('location', '')

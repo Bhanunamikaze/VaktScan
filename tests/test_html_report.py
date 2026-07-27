@@ -54,7 +54,7 @@ class HtmlReportTests(unittest.TestCase):
 
     def test_self_contained_no_external_assets(self):
         html = self._write([{"severity": "LOW", "vulnerability": "x", "target": "t"}])
-        # Inlined CSS/JS only — no external stylesheet/script references.
+        # Inlined CSS/JS only - no external stylesheet/script references.
         self.assertNotIn("http://", html.split("</head>")[0].replace("initial-scale", ""))
         self.assertIn("<style>", html)
 

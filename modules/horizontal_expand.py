@@ -5,16 +5,16 @@ live *beyond* the scope the operator hands us. Given a set of seed domains this
 module reaches outward along three independent axes and folds everything it finds
 back into canonical INFO findings:
 
-1. ``asnmap``      — org / domain  → owned ASNs → CIDR ranges.
-2. Reverse-DNS     — ``dnsx -ptr`` sweep over the discovered CIDRs to surface
+1. ``asnmap``      - org / domain  → owned ASNs → CIDR ranges.
+2. Reverse-DNS     - ``dnsx -ptr`` sweep over the discovered CIDRs to surface
                      hostnames living on owned ranges.  Deliberately *bounded*:
                      ranges larger than ``/20`` are skipped and the total number
                      of probed IPs is capped so a single ``/8`` cannot trigger a
                      multi-million-address sweep.
-3. ``amass intel`` — registrant / WHOIS pivot → related root domains.
+3. ``amass intel`` - registrant / WHOIS pivot → related root domains.
 
 Every external tool is detected with :func:`shutil.which`.  A missing tool is
-skipped gracefully with a single info line — no crash, no auto-install.  When the
+skipped gracefully with a single info line - no crash, no auto-install.  When the
 seed list is empty or none of the tools are present the entry point still returns
 a fully-shaped (empty) result dict rather than raising.
 
@@ -184,7 +184,7 @@ def _parse_dnsx_output(text):
         candidate = (bracket.group(1) if bracket else line).strip().rstrip(".")
         if not candidate:
             continue
-        # Skip bare IP addresses — we only want hostnames.
+        # Skip bare IP addresses - we only want hostnames.
         try:
             ipaddress.ip_address(candidate)
             continue
@@ -354,7 +354,7 @@ async def expand_horizontal(seed_domains: list[str], output_dir: str) -> dict:
 
     Returns a dict with keys ``asns``, ``cidrs``, ``related_domains``,
     ``reverse_hosts`` and ``findings`` (canonical INFO findings summarizing what
-    was discovered).  Returns an empty version of that dict — never raises — when
+    was discovered).  Returns an empty version of that dict - never raises - when
     the seed list is empty or the required tools are absent.
     """
     result = _empty_result()
@@ -363,7 +363,7 @@ async def expand_horizontal(seed_domains: list[str], output_dir: str) -> dict:
         (d or "").strip().lower() for d in (seed_domains or []) if d and d.strip()
     )
     if not seeds:
-        _info("horizontal_expand: no seed domains supplied — skipping.")
+        _info("horizontal_expand: no seed domains supplied - skipping.")
         return result
 
     have_asnmap = shutil.which("asnmap")
@@ -371,7 +371,7 @@ async def expand_horizontal(seed_domains: list[str], output_dir: str) -> dict:
     have_amass = shutil.which("amass")
 
     if not any([have_asnmap, have_dnsx, have_amass]):
-        _skip("horizontal_expand: none of asnmap/dnsx/amass found in PATH — skipping expansion.")
+        _skip("horizontal_expand: none of asnmap/dnsx/amass found in PATH - skipping expansion.")
         return result
 
     results_dir = os.path.join(output_dir, "horizontal_expand")
@@ -394,7 +394,7 @@ async def expand_horizontal(seed_domains: list[str], output_dir: str) -> dict:
             cidrs.update(seed_cidrs)
         _ok(f"horizontal_expand: asnmap found {len(asns)} ASN(s), {len(cidrs)} CIDR range(s).")
     else:
-        _skip("horizontal_expand: asnmap not found — skipping ASN/CIDR discovery.")
+        _skip("horizontal_expand: asnmap not found - skipping ASN/CIDR discovery.")
 
     # --- Phase 2: bounded reverse-DNS sweep over owned CIDRs -----------------
     if have_dnsx and cidrs:
@@ -418,7 +418,7 @@ async def expand_horizontal(seed_domains: list[str], output_dir: str) -> dict:
         else:
             _note("horizontal_expand: no in-bounds IPs to sweep after applying limits.")
     elif not have_dnsx:
-        _skip("horizontal_expand: dnsx not found — skipping reverse-DNS sweep.")
+        _skip("horizontal_expand: dnsx not found - skipping reverse-DNS sweep.")
 
     # --- Phase 3: amass intel → related root domains ------------------------
     if have_amass:
@@ -434,7 +434,7 @@ async def expand_horizontal(seed_domains: list[str], output_dir: str) -> dict:
             related.update(domains)
         _ok(f"horizontal_expand: amass intel found {len(related)} related root domain(s).")
     else:
-        _skip("horizontal_expand: amass not found — skipping related-domain discovery.")
+        _skip("horizontal_expand: amass not found - skipping related-domain discovery.")
 
     # --- Assemble output ----------------------------------------------------
     result["asns"] = sorted(asns)

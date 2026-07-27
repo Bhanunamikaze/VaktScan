@@ -8,20 +8,20 @@ default-credential coverage that already lives in other modules
 database / ActiveMQ / Tomcat probes) to the common web-admin surface reached
 over ``alive_urls``.
 
-Panels covered (bounded — a few creds each, to avoid account lockouts):
+Panels covered (bounded - a few creds each, to avoid account lockouts):
 
-* **Apache Tomcat Manager** (``/manager/html`` Basic-Auth) — ``tomcat/tomcat``,
+* **Apache Tomcat Manager** (``/manager/html`` Basic-Auth) - ``tomcat/tomcat``,
   ``admin/admin``. Confirmed via HTTP 200 + Tomcat Manager HTML.
-* **Jenkins** — anonymous Groovy script console (RCE) and a weak
+* **Jenkins** - anonymous Groovy script console (RCE) and a weak
   ``admin/admin`` form login confirmed via ``/whoAmI/api/json``.
-* **Grafana** — ``admin/admin`` login confirmed via the ``/api/user`` API
+* **Grafana** - ``admin/admin`` login confirmed via the ``/api/user`` API
   returning an authenticated session.
-* **Generic HTTP Basic-Auth realms** — ``admin/admin``, ``admin/password``,
+* **Generic HTTP Basic-Auth realms** - ``admin/admin``, ``admin/password``,
   confirmed via a ``401 → non-401`` transition where a random credential is
   still rejected.
 
 Design contract (mirrors ``modules/cpanel.py`` + ``modules/service_recon.py``):
-a finding is emitted **only when access is CONFIRMED via a response oracle** —
+a finding is emitted **only when access is CONFIRMED via a response oracle** -
 never on a bare 200 to a login page. Every check first establishes that the
 service is present *and* that a bogus / random credential is rejected, so a
 server that answers 200 (or "authenticated") to everything cannot produce a
@@ -204,7 +204,7 @@ async def check_tomcat_manager(url: str, client: httpx.AsyncClient) -> list[dict
 
     # Baseline with a random credential. If Tomcat is not here, or if the
     # endpoint hands back the manager UI to *any* credential, we cannot claim
-    # a default-credential finding — bail (false-positive guard).
+    # a default-credential finding - bail (false-positive guard).
     r_base = await _safe_get(client, mgr_url, auth=_bogus_creds())
     if not _tomcat_present(r_base):
         return out
@@ -255,7 +255,7 @@ async def check_jenkins(url: str, client: httpx.AsyncClient) -> list[dict]:
             vulnerability="Jenkins Script Console Accessible (Anonymous)",
             details=(
                 f"Jenkins Groovy script console at {script_url} is reachable "
-                f"without authentication — arbitrary code execution as the "
+                f"without authentication - arbitrary code execution as the "
                 f"Jenkins process."
             ),
             url=url,
@@ -437,7 +437,7 @@ async def check_basic_auth(url: str, client: httpx.AsyncClient) -> list[dict]:
             continue
         body = r.text or ""
         # POSITIVE ORACLE: authenticated access must return real protected
-        # content — a 2xx whose body actually DIFFERS from the 401 challenge
+        # content - a 2xx whose body actually DIFFERS from the 401 challenge
         # (and from the wrong-credential response). A redirect to a login page,
         # an unchanged challenge, or a catch-all 200 cannot satisfy this.
         if not (200 <= r.status_code < 300):
@@ -490,7 +490,7 @@ async def _run_checks_for_url(
         for res in results:
             if isinstance(res, list):
                 findings.extend(res)
-            # A per-check exception is caught here and skipped — a single bad
+            # A per-check exception is caught here and skipped - a single bad
             # host can never crash the whole run.
         return findings
 

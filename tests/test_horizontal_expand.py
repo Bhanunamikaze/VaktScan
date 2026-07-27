@@ -3,7 +3,7 @@
 subprocess for asnmap / dnsx / amass is mocked, so the suite runs with none of
 those tools installed.  Coverage:
   * parsing of representative asnmap (JSON + plain), amass intel, and dnsx output
-  * the reverse-DNS sweep bounds — the /20 range skip and the total-IP cap
+  * the reverse-DNS sweep bounds - the /20 range skip and the total-IP cap
   * graceful empty returns (no seeds / no tools) and canonical-schema findings
 """
 
@@ -31,7 +31,7 @@ AMASS_INTEL_OUT = (
     "example.com\n"
     "example.org\n"
     "example-corp.net\n"
-    "example.org\n"          # duplicate — must be collapsed
+    "example.org\n"          # duplicate - must be collapsed
     "\n"
 )
 
@@ -39,7 +39,7 @@ DNSX_PTR_OUT = (
     "mail.example.com\n"
     "vpn.example.com\n"
     "192.0.2.5 [gw.example.com]\n"   # IP [host] form
-    "203.0.113.9\n"                  # bare IP with no PTR — ignored
+    "203.0.113.9\n"                  # bare IP with no PTR - ignored
     "\n"
 )
 

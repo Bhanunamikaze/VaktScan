@@ -132,7 +132,7 @@ class LiveDashboard:
         
         lines = []
         sep_width = min(max_line_len, 80)
-        lines.append("\033[90m" + "—"*sep_width + "\033[0m")
+        lines.append("\033[90m" + "-"*sep_width + "\033[0m")
         
         spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         spinner_char = spinners[int(time.time() * 10) % len(spinners)]
@@ -182,7 +182,7 @@ class LiveDashboard:
             line = f" \033[96m* {display_name:<{name_width}}\033[0m {indicator} | {display_status}"
             lines.append(line)
             
-        lines.append("\033[90m" + "—"*sep_width + "\033[0m")
+        lines.append("\033[90m" + "-"*sep_width + "\033[0m")
         
         # Write dashboard content with trailing newline, keeping the cursor at the end
         dashboard_content = "\n".join(lines) + "\n"

@@ -1,4 +1,4 @@
-"""Unit tests for `main._reraise_if_bug` — the resilience-vs-bug policy.
+"""Unit tests for `main._reraise_if_bug` - the resilience-vs-bug policy.
 
 Orchestration code tolerates per-target/tool/network failures (so one bad
 target does not abort a whole scan), but must NOT swallow programming bugs.
@@ -33,7 +33,7 @@ class ReraiseIfBugTest(unittest.TestCase):
             main._reraise_if_bug(ImportError("no module named foo"))
 
     def test_returns_non_bug_exceptions_untouched(self):
-        # These represent tolerable runtime/environmental failures — they must
+        # These represent tolerable runtime/environmental failures - they must
         # be returned (so the caller can log-and-continue), never raised.
         for exc in (
             ValueError("bad data"),

@@ -17,7 +17,7 @@ This module resolves each subdomain, groups hosts by IP, and classifies:
   * Hosts on low-count IPs (< threshold), and hosts that do not resolve, are
     COMPANY assets.
 
-Reuses the project's raw DNS query (``dns_recon._query``) — no external tool
+Reuses the project's raw DNS query (``dns_recon._query``) - no external tool
 required. Never raises.
 """
 
@@ -90,7 +90,7 @@ async def classify_by_shared_ip(subdomains, apex, output_dir=None,
         }
 
     Always returns a fully-shaped dict; never raises. If nothing resolves, every
-    host is treated as COMPANY (fail-open — we do not silently drop targets).
+    host is treated as COMPANY (fail-open - we do not silently drop targets).
     """
     result = {"company": [], "customer": [], "ip_map": {}, "shared_ips": [], "findings": []}
     try:

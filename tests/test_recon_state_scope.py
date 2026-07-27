@@ -43,7 +43,7 @@ class ReconStateScopeTest(unittest.TestCase):
         dns_finding = {"type": "dns", "severity": "LOW", "id": "recon-scope-test"}
 
         async def fake_passive(domain, concurrency, detailed_dashboard=True):
-            # (dns_findings, cloud_findings, ct_findings) — dns non-empty triggers
+            # (dns_findings, cloud_findings, ct_findings) - dns non-empty triggers
             # the recon-phase add_vulnerability call that used to crash.
             return ([dns_finding], [], [])
 

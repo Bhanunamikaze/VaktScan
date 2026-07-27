@@ -5,11 +5,11 @@ Computes *pivot fingerprints* for alive web hosts so they can be cross-reference
 in Shodan/Censys (whose API keys VaktScan already reads via
 ``modules/passive_intel.py``):
 
-  * FAVICON HASH — fetch each host's ``/favicon.ico`` and compute the mmh3
+  * FAVICON HASH - fetch each host's ``/favicon.ico`` and compute the mmh3
     (MurmurHash3) hash the way Shodan expects: base64-encode the raw favicon
     bytes with a newline every 76 chars, then ``mmh3.hash(b64)``. Searchable in
     Shodan as ``http.favicon.hash:<hash>``.
-  * JARM — compute the JARM active TLS fingerprint per ``host:port``. Searchable
+  * JARM - compute the JARM active TLS fingerprint per ``host:port``. Searchable
     in Shodan as ``ssl.jarm:<hash>`` (and equivalently in Censys).
 
 Both capabilities degrade gracefully:
@@ -17,7 +17,7 @@ Both capabilities degrade gracefully:
   * if neither a ``jarm`` CLI nor a ``jarm``/``pyjarm`` python module is present,
     JARM is skipped.
 
-The module never raises out of the scan path — a host that errors simply yields
+The module never raises out of the scan path - a host that errors simply yields
 no finding.
 
 Findings are emitted as canonical VaktScan INFO findings (see
@@ -40,7 +40,7 @@ from modules.schema import normalize_finding
 
 MODULE_NAME = 'favicon_jarm'
 
-# Short timeouts — a favicon fetch or JARM probe should never stall a scan.
+# Short timeouts - a favicon fetch or JARM probe should never stall a scan.
 _TIMEOUT = httpx.Timeout(8.0, connect=5.0)
 
 _USER_AGENT = 'VaktScan/1.0 favicon-jarm'
@@ -268,7 +268,7 @@ async def _fingerprint_one(client: httpx.AsyncClient, sem: asyncio.Semaphore,
                     f'Favicon mmh3 hash for {host} is {fhash}. '
                     f'pivot: search this favicon hash in Shodan '
                     f'(http.favicon.hash:{fhash}) or Censys to discover other '
-                    f'hosts — including attacker infrastructure — serving the '
+                    f'hosts - including attacker infrastructure - serving the '
                     f'same favicon.'
                 ),
                 host, favicon_url, port,
@@ -328,18 +328,18 @@ async def fingerprint_favicon_jarm(alive_urls: list[str], output_dir: str,
     if not _HAVE_MMH3 and not have_jarm:
         print(
             '\033[93m[!] favicon_jarm: mmh3 not importable and no jarm CLI/module '
-            'found — skipping favicon/JARM fingerprinting.\033[0m'
+            'found - skipping favicon/JARM fingerprinting.\033[0m'
         )
         return []
 
     if not _HAVE_MMH3:
         print(
-            '\033[93m[!] favicon_jarm: mmh3 not importable — skipping favicon '
+            '\033[93m[!] favicon_jarm: mmh3 not importable - skipping favicon '
             'hashing (JARM still computed).\033[0m'
         )
     if not have_jarm:
         print(
-            '\033[93m[!] favicon_jarm: no jarm CLI or jarm/pyjarm module found — '
+            '\033[93m[!] favicon_jarm: no jarm CLI or jarm/pyjarm module found - '
             'skipping JARM (favicon hashing still computed).\033[0m'
         )
 

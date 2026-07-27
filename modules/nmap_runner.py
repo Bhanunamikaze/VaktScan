@@ -272,7 +272,7 @@ class NmapRunner:
                                         findings.append({
                                             'status': status,
                                             'severity': severity,
-                                            'vulnerability': f"{vuln_id} — {product or 'Service'} {version or ''}".strip(),
+                                            'vulnerability': f"{vuln_id} - {product or 'Service'} {version or ''}".strip(),
                                             'target': hostname,
                                             'resolved_ip': ip,
                                             'port': str(port_id),
@@ -312,7 +312,7 @@ class NmapRunner:
                                             findings.append({
                                                 'status': status,
                                                 'severity': severity,
-                                                'vulnerability': f"{cve_upper} — {product or 'Service'} {version or ''}".strip(),
+                                                'vulnerability': f"{cve_upper} - {product or 'Service'} {version or ''}".strip(),
                                                 'target': hostname,
                                                 'resolved_ip': ip,
                                                 'port': str(port_id),
@@ -396,7 +396,7 @@ class NmapRunner:
                 if dashboard.active:
                     dashboard.update_task("nmap_cve", completed=completed, status=f"Scanned {completed}/{len(targets_data)} hosts (findings: {len(all_findings)})")
                 else:
-                    print(f"[+] [Nmap CVE Scan] Completed scan on {target_name} ({completed}/{len(targets_data)} hosts done) — Found {len(res)} finding(s)")
+                    print(f"[+] [Nmap CVE Scan] Completed scan on {target_name} ({completed}/{len(targets_data)} hosts done) - Found {len(res)} finding(s)")
 
         try:
             tasks = [sem_task(t) for t in targets_data]

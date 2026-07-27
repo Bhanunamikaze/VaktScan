@@ -4,14 +4,14 @@ These drive `main()` and `process_streaming_scan()` with the heavy/networked
 collaborators mocked, exercising the code paths that previously had latent
 bugs:
 
-* B#1 — the standalone ``--sub-domains`` branch must PERSIST its findings
+* B#1 - the standalone ``--sub-domains`` branch must PERSIST its findings
   (it returns before a state_manager exists, so it writes CSV directly).
-* B#2 — passive-recon findings buffered before a subdomain is discovered must
+* B#2 - passive-recon findings buffered before a subdomain is discovered must
   NOT be dropped on the "no usable targets" early return.
-* B#3 — the streaming (>1000 targets) path must reach inventory persistence and
+* B#3 - the streaming (>1000 targets) path must reach inventory persistence and
   SARIF output, at parity with the non-streaming path. This also exercises the
   ``ipaddress.ip_network`` target-count loop that used to raise ``NameError``.
-* A1 — a programming bug (NameError/UnboundLocalError) raised inside recon must
+* A1 - a programming bug (NameError/UnboundLocalError) raised inside recon must
   PROPAGATE, not be masked by ``gather(return_exceptions=True)`` as
   "Recon finished with no usable targets".
 
@@ -100,7 +100,7 @@ class OrphanPassiveFindingsTest(_MainTempCwd):
                 self.domain = domain
 
             async def run_all(self):
-                # results_file, subdomains — NO subdomains discovered.
+                # results_file, subdomains - NO subdomains discovered.
                 return (os.path.join("reports", "example.com", "subs.txt"), [])
 
         async def fake_passive(domain, concurrency, detailed_dashboard=True):

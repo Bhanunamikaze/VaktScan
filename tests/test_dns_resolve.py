@@ -24,8 +24,8 @@ from modules.schema import CANONICAL_KEYS, validate_finding
 PUREDNS_RESOLVED_OUT = (
     "www.example.com\n"
     "api.example.com\n"
-    "MAIL.example.com\n"      # mixed case — must normalize
-    "www.example.com\n"       # duplicate — must collapse
+    "MAIL.example.com\n"      # mixed case - must normalize
+    "www.example.com\n"       # duplicate - must collapse
     "\n"
 )
 
@@ -39,7 +39,7 @@ MASSDNS_SIMPLE_OUT = (
 ALTERX_OUT = (
     "api-dev.example.com\n"
     "api-staging.example.com\n"
-    "www.example.com\n"        # already-known host — dedup vs resolved
+    "www.example.com\n"        # already-known host - dedup vs resolved
     "\n"
 )
 
@@ -226,7 +226,7 @@ class EntryPointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["resolved"]), len(set(result["resolved"])))
 
     async def test_permute_false_skips_permutation_even_with_tools(self):
-        """Default (--dns-hygiene without --dns-permute): wildcard-filter only —
+        """Default (--dns-hygiene without --dns-permute): wildcard-filter only -
         permutation generation must be skipped even though alterx is installed."""
         tmp = tempfile.mkdtemp(prefix="vakt_dr_noperm_")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)

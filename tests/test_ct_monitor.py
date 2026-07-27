@@ -1,4 +1,4 @@
-"""Tests for modules/ct_monitor.py — CT change detection."""
+"""Tests for modules/ct_monitor.py - CT change detection."""
 
 import asyncio
 import os

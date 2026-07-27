@@ -1,37 +1,37 @@
-# VaktScan — Attack Surface Scanner
+# VaktScan - Attack Surface Scanner
 
 > *"vakt"* is the Nordic word for *"guard"* or *"watch"*.
 
-VaktScan is an async, high-throughput attack-surface / ASM scanner. Point it at a domain, IP, CIDR, or a mixed targets file and it runs the full pipeline — subdomain enumeration, passive recon (DNS, cloud, certificate-transparency, Google dorking), HTTP probing, service/CVE checks, JavaScript secret hunting, archived-URL weaponization, TLS posture, and multi-source vulnerability enrichment — concurrently, then writes de-duplicated findings and maintains a SQLite asset inventory with delta alerting.
+VaktScan is an async, high-throughput attack-surface / ASM scanner. Point it at a domain, IP, CIDR, or a mixed targets file and it runs the full pipeline - subdomain enumeration, passive recon (DNS, cloud, certificate-transparency, Google dorking), HTTP probing, service/CVE checks, JavaScript secret hunting, archived-URL weaponization, TLS posture, and multi-source vulnerability enrichment - concurrently, then writes de-duplicated findings and maintains a SQLite asset inventory with delta alerting.
 
 Every external tool it drives is **optional**: if a binary is missing, that stage is skipped gracefully and the rest of the scan continues.
 
 
 ## Key Features
 
-- **Unified subcommand CLI** — `scan` (with `--posture`), `enum`, `probe`, `dns`, `cloud`, `js-paths`, `google-dork`.
-- **Full auto pipeline** — `scan <domain>` runs enumeration → passive recon → probing → service checks → enrichment → reporting with no extra flags.
-- **Subdomain enumeration** — amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys, crt.sh, plus ffuf VHost fuzzing.
-- **Passive recon in parallel** — DNS recon, cloud-asset enumeration, and certificate-transparency monitoring run concurrently per domain, alongside Google dorking.
-- **DNS hygiene (on by default)** — wildcard-filters enumerated hosts (puredns/massdns) to drop catch-all false positives; optional permutation expansion (alterx/dnsgen).
-- **Scope control** — `--exclude` / `--include-only` (glob or `re:` regex, inline or from a file) plus `--company-only`, which resolves every subdomain, maps IPs, and scans **only the company's own assets** — dropping customer sites that crowd a shared hosting IP (validated on a real 22,413-subdomain website-builder domain: **99% reduction**, 22,259 customer sites excluded, ~154 company assets kept).
-- **DNS-level subdomain takeover (on by default)** — flags dangling CNAMEs (`CNAME → NXDOMAIN`, double-checked A+AAAA) across all discovered subdomains, catching takeovers that serve no HTTP response and so are invisible to the HTTP-based signatures.
-- **Web analysis** — httpx alive-probing then dirsearch, nuclei, `web_checks` (security headers, exposed `.git`/`.env`, CORS, cookie flags, WAF detection, GraphQL/Swagger exposure, EOL software), and a domain scanner (internal/external classification, 62 subdomain-takeover signatures, CORS, header anomalies).
-- **Archived-URL weaponization** — gau + waybackurls harvest, dedup, high-signal filter, live re-probe, and archived-JS secret scan.
-- **JavaScript analysis** — hardcoded secrets, source maps, internal IPs, endpoint extraction and probing.
-- **Port scanning + service modules** — async TCP scan, then per-service CVE modules (Elasticsearch, Kibana, Grafana, Prometheus, Next.js, AEM, cPanel/WHM, Jenkins, plus a broad `service_recon` covering 80+ ports) and `testssl.sh` TLS posture.
-- **Nmap CVE scripts** — `nmap --script vuln,vulners` runs **only on the open ports the port scanner already found** (no separate full 1–65535 sweep), gated behind `--nmap`.
-- **Enrichment** — NVD CVE lookup, CISA KEV cross-reference, EPSS exploit-probability scoring, and Shodan/Censys passive intel.
-- **Reporting & state** — CSV + HTML reports are **always** written to `reports/`; JSON and SARIF 2.1 are opt-in. A SQLite inventory tracks assets and emits "new vs resolved" deltas, and `notify.py` sends Slack/Discord/webhook/email alerts on new findings (env-gated).
-- **Opt-in expansions** — screenshots, parameter discovery, favicon (mmh3) + JARM pivots, tech fingerprint + EOL, confirmed default-credential checks, and horizontal/infra expansion (asnmap, reverse-DNS, amass intel).
-- **Scale features** — streaming mode for large CIDRs, resumable scans, IPv6, proxy support, and a live multi-row progress dashboard.
+- **Unified subcommand CLI** - `scan` (with `--posture`), `enum`, `probe`, `dns`, `cloud`, `js-paths`, `google-dork`.
+- **Full auto pipeline** - `scan <domain>` runs enumeration → passive recon → probing → service checks → enrichment → reporting with no extra flags.
+- **Subdomain enumeration** - amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys, crt.sh, plus ffuf VHost fuzzing.
+- **Passive recon in parallel** - DNS recon, cloud-asset enumeration, and certificate-transparency monitoring run concurrently per domain, alongside Google dorking.
+- **DNS hygiene (on by default)** - wildcard-filters enumerated hosts (puredns/massdns) to drop catch-all false positives; optional permutation expansion (alterx/dnsgen).
+- **Scope control** - `--exclude` / `--include-only` (glob or `re:` regex, inline or from a file) plus `--company-only`, which resolves every subdomain, maps IPs, and scans **only the company's own assets** - dropping customer sites that crowd a shared hosting IP (validated on a real 22,413-subdomain website-builder domain: **99% reduction**, 22,259 customer sites excluded, ~154 company assets kept).
+- **DNS-level subdomain takeover (on by default)** - flags dangling CNAMEs (`CNAME → NXDOMAIN`, double-checked A+AAAA) across all discovered subdomains, catching takeovers that serve no HTTP response and so are invisible to the HTTP-based signatures.
+- **Web analysis** - httpx alive-probing then dirsearch, nuclei, `web_checks` (security headers, exposed `.git`/`.env`, CORS, cookie flags, WAF detection, GraphQL/Swagger exposure, EOL software), and a domain scanner (internal/external classification, 62 subdomain-takeover signatures, CORS, header anomalies).
+- **Archived-URL weaponization** - gau + waybackurls harvest, dedup, high-signal filter, live re-probe, and archived-JS secret scan.
+- **JavaScript analysis** - hardcoded secrets, source maps, internal IPs, endpoint extraction and probing.
+- **Port scanning + service modules** - async TCP scan, then per-service CVE modules (Elasticsearch, Kibana, Grafana, Prometheus, Next.js, AEM, cPanel/WHM, Jenkins, plus a broad `service_recon` covering 80+ ports) and `testssl.sh` TLS posture.
+- **Nmap CVE scripts** - `nmap --script vuln,vulners` runs **only on the open ports the port scanner already found** (no separate full 1-65535 sweep), gated behind `--nmap`.
+- **Enrichment** - NVD CVE lookup, CISA KEV cross-reference, EPSS exploit-probability scoring, and Shodan/Censys passive intel.
+- **Reporting & state** - CSV + HTML reports are **always** written to `reports/`; JSON and SARIF 2.1 are opt-in. A SQLite inventory tracks assets and emits "new vs resolved" deltas, and `notify.py` sends Slack/Discord/webhook/email alerts on new findings (env-gated).
+- **Opt-in expansions** - screenshots, parameter discovery, favicon (mmh3) + JARM pivots, tech fingerprint + EOL, confirmed default-credential checks, and horizontal/infra expansion (asnmap, reverse-DNS, amass intel).
+- **Scale features** - streaming mode for large CIDRs, resumable scans, IPv6, proxy support, and a live multi-row progress dashboard.
 
 
 ## Requirements & Installation
 
-- **Python 3.8+** (tested 3.8–3.11).
-- Python packages: `httpx`, `requests`, `urllib3`, `beautifulsoup4`, `playwright` (+ stealth) — see `requirements.txt`.
-- **Optional external tools** — subdomain enum (amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys), probing (httpx, ffuf, dirsearch, nuclei), scanning (nmap, testssl.sh), archives (gau, waybackurls, uro), DNS hygiene (puredns, massdns, alterx, dnsgen, dnsx), expansion (asnmap, amass), and optional add-ons (gowitness/aquatone, arjun/paramspider/gf, webanalyze). **All are optional** — any missing tool simply skips its stage.
+- **Python 3.8+** (tested 3.8-3.11).
+- Python packages: `httpx`, `requests`, `urllib3`, `beautifulsoup4`, `playwright` (+ stealth) - see `requirements.txt`.
+- **Optional external tools** - subdomain enum (amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys), probing (httpx, ffuf, dirsearch, nuclei), scanning (nmap, testssl.sh), archives (gau, waybackurls, uro), DNS hygiene (puredns, massdns, alterx, dnsgen, dnsx), expansion (asnmap, amass), and optional add-ons (gowitness/aquatone, arjun/paramspider/gf, webanalyze). **All are optional** - any missing tool simply skips its stage.
 
 ```bash
 git clone https://github.com/Bhanunamikaze/VaktScan.git
@@ -81,7 +81,7 @@ python main.py enum steinzsecurity.com --probe
 ### Scope control & advanced examples
 
 ```bash
-# Company assets only — drop customer sites on shared hosting (raise the shared-IP
+# Company assets only - drop customer sites on shared hosting (raise the shared-IP
 # cutoff to 15), run Nmap CVE scripts on open ports, and skip any *blog* hosts
 python main.py scan steinzsecurity.com --nmap --company-only --shared-ip-threshold 15 --exclude "*blog*.steinzsecurity.com"
 
@@ -100,7 +100,7 @@ python main.py scan steinzsecurity.com --company-only --screenshots --tech --for
 # Everything on: horizontal expansion, params, favicon/JARM pivots, default-cred checks
 python main.py scan steinzsecurity.com --company-only --horizontal --params --favicon --default-creds
 
-# Lightweight domain-posture triage only (takeover / CORS / headers — no heavy scanning)
+# Lightweight domain-posture triage only (takeover / CORS / headers - no heavy scanning)
 python main.py scan steinzsecurity.com --posture
 
 # Use an existing subdomain list, company-only, alert on new findings (env-configured)
@@ -114,7 +114,7 @@ python main.py scan steinzsecurity.com -c 300 --recon-concurrency 4 --company-on
 
 ## Workflows
 
-### `scan <domain>` — full pipeline
+### `scan <domain>` - full pipeline
 
 ```mermaid
 flowchart TD
@@ -161,7 +161,7 @@ flowchart TD
     RPT --> INV["Inventory delta (SQLite) + alerts"]
 ```
 
-### `enum <domain>` — subdomain enumeration
+### `enum <domain>` - subdomain enumeration
 
 ```mermaid
 flowchart TD
@@ -175,7 +175,7 @@ flowchart TD
     AR --> CSV["probe findings CSV"]
 ```
 
-### `scan --posture` — domain-posture triage (lightweight)
+### `scan --posture` - domain-posture triage (lightweight)
 
 Fast domain-level HTTP posture checks with **no** subdomain enum, port/service scanning, nuclei, or dirsearch. (Replaces the former `domain-scan` subcommand.)
 
@@ -206,28 +206,28 @@ flowchart TD
 
 VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exact per-command flags.
 
-### `scan` — full attack-surface scan
+### `scan` - full attack-surface scan
 
 | Flag | Default | Description |
 |---|---|---|
-| `target` | — | Domain, IP, CIDR, or a targets file (positional) |
+| `target` | - | Domain, IP, CIDR, or a targets file (positional) |
 | `-c`, `--concurrency` | `100` | Concurrent connections |
 | `--connect-timeout` | tool default | TCP connect timeout (seconds) |
 | `--port-retries` | tool default | Port-scan connect retries |
 | `-r`, `--resume` | off | Resume a checkpointed scan |
-| `--format` | — | Additionally emit `csv` / `json` / `sarif` / `all` (CSV + HTML are always written regardless) |
-| `--sarif FILE` | — | Write a SARIF 2.1 report to a specific path |
+| `--format` | - | Additionally emit `csv` / `json` / `sarif` / `all` (CSV + HTML are always written regardless) |
+| `--sarif FILE` | - | Write a SARIF 2.1 report to a specific path |
 | `-m`, `--module` | all | Run only one service module: `elasticsearch` `kibana` `grafana` `prometheus` `nextjs` `aem` `cpanel` `jenkins` `service_recon` |
-| `--ports` | — | Extra comma-separated ports to add to the scan |
+| `--ports` | - | Extra comma-separated ports to add to the scan |
 | `--chunk-size` | `30000` | IPs per streaming chunk for large CIDR scans |
 | `--stream-web-probe` | off | In streaming mode (>1000 hosts), also run httpx/nuclei/dirsearch/web-checks per chunk |
 | `--nmap` | off | Run `nmap --script vuln,vulners` on the open ports found |
-| `--wordlist` | — | Wordlist for ffuf VHost fuzzing |
-| `--sub-domains FILE` | — | Use an existing subdomain list instead of enumerating |
+| `--wordlist` | - | Wordlist for ffuf VHost fuzzing |
+| `--sub-domains FILE` | - | Use an existing subdomain list instead of enumerating |
 | `--recon-concurrency` | `2` | Parallel domains processed during recon |
 | `--no-subdomain-enum` | off | Skip subdomain discovery for domain targets |
 | `--no-dashboard` | off | Disable the live multi-row progress dashboard |
-| `--proxy URL` | — | Route all traffic through a proxy (sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`) |
+| `--proxy URL` | - | Route all traffic through a proxy (sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`) |
 | `--update-templates` | off | Sync latest Nuclei templates before scanning |
 | `--no-dork` | off | Skip Google dorking passive recon |
 | `--dork-method` | `auto` | Google-dork method: `api` `playwright` `html` `auto` |
@@ -241,77 +241,77 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `--no-dns-hygiene` | on | Disable default DNS wildcard-filtering of enumerated subdomains |
 | `--dns-permute` | off | Generate + resolve subdomain permutations (alterx/dnsgen) during DNS hygiene |
 | `--no-dns-takeover` | on | Disable the per-subdomain DNS-level takeover check (dangling CNAME → NXDOMAIN) |
-| `--exclude PATTERN` | — | Exclude hosts matching a glob (`customer1*.steinzsecurity.com`) or `re:` regex; repeatable. Excluded hosts are listed but never scanned |
-| `--exclude-file FILE` | — | File of `--exclude` patterns (one per line, `#` comments) |
-| `--include-only PATTERN` | — | Allowlist: scan **only** hosts matching the glob/regex; repeatable. Applied after `--exclude` |
-| `--include-only-file FILE` | — | File of `--include-only` patterns |
-| `--company-only` | off | Resolve + IP-map every subdomain, then scan **only company assets** — drop customer sites clustered on shared hosting IPs (writes `company_assets.txt` / `customer_sites.txt`) |
+| `--exclude PATTERN` | - | Exclude hosts matching a glob (`customer1*.steinzsecurity.com`) or `re:` regex; repeatable. Excluded hosts are listed but never scanned |
+| `--exclude-file FILE` | - | File of `--exclude` patterns (one per line, `#` comments) |
+| `--include-only PATTERN` | - | Allowlist: scan **only** hosts matching the glob/regex; repeatable. Applied after `--exclude` |
+| `--include-only-file FILE` | - | File of `--include-only` patterns |
+| `--company-only` | off | Resolve + IP-map every subdomain, then scan **only company assets** - drop customer sites clustered on shared hosting IPs (writes `company_assets.txt` / `customer_sites.txt`) |
 | `--shared-ip-threshold N` | `10` | For `--company-only`: an IP hosting ≥ N subdomains is treated as shared hosting |
 
-### `enum` — subdomain enumeration only
+### `enum` - subdomain enumeration only
 
 | Flag | Default | Description |
 |---|---|---|
-| `domain` | — | Apex domain to enumerate |
+| `domain` | - | Apex domain to enumerate |
 | `-c`, `--concurrency` | `20` | Concurrency |
-| `--wordlist` | — | Wordlist for ffuf VHost fuzzing |
+| `--wordlist` | - | Wordlist for ffuf VHost fuzzing |
 | `--output-dir` | `reports/` | Output directory |
 | `--probe` | off | Chain into `probe` after enumeration |
 | `--no-dashboard` | off | Disable the live progress dashboard |
 
-### `probe` — port scan + httpx web analysis
+### `probe` - port scan + httpx web analysis
 
 | Flag | Default | Description |
 |---|---|---|
-| `target` | — | Domain, IP, CIDR, or a file of targets |
-| `--ports` | — | Extra comma-separated ports |
+| `target` | - | Domain, IP, CIDR, or a file of targets |
+| `--ports` | - | Extra comma-separated ports |
 | `-c`, `--concurrency` | `50` | Concurrency |
 | `--timeout` | `10.0` | Connect timeout (seconds) |
 | `--output-dir` | `reports/` | Output directory |
 | `--no-dashboard` | off | Disable the live progress dashboard |
-| `--proxy URL` | — | Route traffic through a proxy |
+| `--proxy URL` | - | Route traffic through a proxy |
 
-### `dns` — DNS recon only
+### `dns` - DNS recon only
 
 | Flag | Default | Description |
 |---|---|---|
-| `domain [...]` | — | One or more domains |
+| `domain [...]` | - | One or more domains |
 | `-c`, `--concurrency` | `20` | Concurrency |
 | `--output-dir` | `reports/` | Output directory |
 
-### `cloud` — cloud asset enumeration
+### `cloud` - cloud asset enumeration
 
 | Flag | Default | Description |
 |---|---|---|
-| `domain` | — | Apex domain |
+| `domain` | - | Apex domain |
 | `-c`, `--concurrency` | `50` | Concurrency |
 | `--output-dir` | `reports/` | Output directory |
 
-### `js-paths` — JavaScript path/secret extraction
+### `js-paths` - JavaScript path/secret extraction
 
 | Flag | Default | Description |
 |---|---|---|
-| `target` | — | A single URL or a file of URLs |
+| `target` | - | A single URL or a file of URLs |
 | `--threads` | `20` | Worker threads |
 | `--timeout` | `10` | Request timeout (seconds) |
 | `--output-dir` | `reports/` | Output directory |
 
 > **Domain-posture triage** is now a flag on `scan`, not a separate subcommand:
 > `scan <domain|file> --posture` runs only the DomainScanner checks (classification,
-> subdomain-takeover, CORS, security headers) — see the `scan` flag table above.
+> subdomain-takeover, CORS, security headers) - see the `scan` flag table above.
 
-### `google-dork` — passive recon via Google dorking
+### `google-dork` - passive recon via Google dorking
 
 | Flag | Default | Description |
 |---|---|---|
-| `domain` | — | Target domain |
+| `domain` | - | Target domain |
 | `--google-api-key` | `$GOOGLE_API_KEY` | Google Custom Search API key |
 | `--google-cx` | `$GOOGLE_CX` | Google Custom Search engine ID |
-| `--dorks FILE` | — | Custom dork list |
+| `--dorks FILE` | - | Custom dork list |
 | `--delay` | `1.0` | Delay between queries (seconds) |
 | `--max-results` | `10` | Max results per dork |
 | `--method` | `auto` | Search method: `api` `playwright` `html` `auto` |
-| `--proxy URL` | — | Route traffic through a proxy |
+| `--proxy URL` | - | Route traffic through a proxy |
 
 
 ## Output & Reports
@@ -321,7 +321,7 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | Artifact | When | Contents |
 |---|---|---|
 | `scan_results_*.csv` | **always** | All findings: target, module, severity/status, CVE, details |
-| `scan_results_*.html` | **always** | Self-contained HTML report — severity summary + client-side filter |
+| `scan_results_*.html` | **always** | Self-contained HTML report - severity summary + client-side filter |
 | `scan_results_*.json` | `--format json` / `all` | Same findings as JSON |
 | `scan_results_*.sarif` | `--format sarif` / `all`, or `--sarif FILE` | SARIF 2.1 for GitHub/GitLab security tabs |
 | `portscan_results_*.csv` | port scan | Open ports per host |
@@ -331,7 +331,7 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `excluded_subdomains.txt` | `--exclude` | Subdomains matched by exclusion patterns (listed, not scanned) |
 | `screenshots/` | `--screenshots` | Screenshot gallery (`manifest.csv` + `index.html`) |
 
-**Asset inventory & alerting.** Findings are persisted to a SQLite inventory (`vaktscan_inventory.db`); each run prints a **delta report** ("new since last scan" vs "resolved") and an executive summary. When new findings appear, `notify.py` sends alerts via Slack, Discord, generic webhook, or email — **only if** the relevant environment variables are set; it never raises on failure. CISA KEV data is cached locally in `modules/data/cisa_kev_cache.json`.
+**Asset inventory & alerting.** Findings are persisted to a SQLite inventory (`vaktscan_inventory.db`); each run prints a **delta report** ("new since last scan" vs "resolved") and an executive summary. When new findings appear, `notify.py` sends alerts via Slack, Discord, generic webhook, or email - **only if** the relevant environment variables are set; it never raises on failure. CISA KEV data is cached locally in `modules/data/cisa_kev_cache.json`.
 
 
 ## Configuration (environment variables)
@@ -362,10 +362,10 @@ All are optional; modules degrade gracefully when they are absent.
 | `elastic` | 9200, 9300 | Log4Shell, Groovy RCE, auth bypass, info disclosure |
 | `kibana` | 5601 | LFI, Timelion RCE, XSS, info disclosure, API enum |
 | `grafana` | 3000, 3003 | SQL/path-traversal RCE, SSRF, snapshot access, XSS |
-| `prometheus` | 9090, 9100–9104 | Open redirect, stored XSS, path traversal, metrics/target exposure |
+| `prometheus` | 9090, 9100-9104 | Open redirect, stored XSS, path traversal, metrics/target exposure |
 | `react_to_shell` (`nextjs`) | 3000, 80, 443, 8080 | Next.js / React exposure and RCE indicators |
 | `aem` | 4502, 4503, 80, 443, 8080, 8443 | CRXDE Lite, Sling servlet enum, JCR content exposure |
-| `cpanel` | 2077–2096, 9998–9999, 80, 443 | Full cPanel/WHM/Webmail CVE suite, bundled-component matrix, anti-FP baselining |
+| `cpanel` | 2077-2096, 9998-9999, 80, 443 | Full cPanel/WHM/Webmail CVE suite, bundled-component matrix, anti-FP baselining |
 | `jenkins` | 8080, 8090, 8443, 8888 | Unauthenticated API, script-console RCE, user enum, CVE-2024-23897 |
 | `service_recon` | 80+ ports | FTP/SMB/Redis/Docker/etcd/Kubernetes/MongoDB/Cassandra/RabbitMQ/Vault/TeamCity/IPMI/Jupyter/Hadoop-YARN, GitLab, Jira, Confluence, ArgoCD, Rancher, OpenTelemetry, Java RMI, Nagios/Zabbix, and more |
 | `testssl_runner` (`testssl`) | 443, 8443, 465, 993, 995 | TLS protocols + Heartbleed/ROBOT/BEAST/POODLE/SWEET32/etc., weak certs/keys, HSTS |
@@ -414,7 +414,7 @@ See [`docs/adding-a-module.md`](docs/adding-a-module.md). In short: create `modu
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
 
 
 ## Disclaimer

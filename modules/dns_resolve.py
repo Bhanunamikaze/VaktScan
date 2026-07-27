@@ -19,7 +19,7 @@ module cleans and then expands that set:
    rather than crashing.
 
 Every external tool is detected with :func:`shutil.which` and skipped gracefully
-when absent — no auto-install, no crash.  The entry point always returns a
+when absent - no auto-install, no crash.  The entry point always returns a
 fully-shaped dict.
 
 Conventions mirrored from ``modules/recon.py`` / ``modules/gau_runner.py``
@@ -412,15 +412,15 @@ async def resolve_and_permute(
     """Clean (resolve + wildcard-filter) and expand (permute) a subdomain set.
 
     Returns a dict with keys:
-      * ``resolved`` — the cleaned **and** expanded set of live hosts to feed
+      * ``resolved`` - the cleaned **and** expanded set of live hosts to feed
         downstream (original survivors ∪ permutation hits).  This is the list
         callers hand to the next stage (httpx probing).
-      * ``wildcard_filtered`` — original inputs dropped during resolution
+      * ``wildcard_filtered`` - original inputs dropped during resolution
         (catch-all false positives + dead names).
-      * ``permutations_found`` — the subset of ``resolved`` newly discovered via
+      * ``permutations_found`` - the subset of ``resolved`` newly discovered via
         alterx/dnsgen (a report/visibility delta; already included in
         ``resolved``).
-      * ``findings`` — canonical INFO findings summarizing the counts.
+      * ``findings`` - canonical INFO findings summarizing the counts.
 
     Returns a fully-shaped **empty** dict (never raises) when the input is empty.
     When no resolution tool is installed it falls back to a best-effort built-in
@@ -430,7 +430,7 @@ async def resolve_and_permute(
 
     subs = _clean_hosts(subdomains)
     if not subs:
-        _info("dns_resolve: no subdomains supplied — skipping.")
+        _info("dns_resolve: no subdomains supplied - skipping.")
         return result
 
     apexes = _clean_hosts(apex_domains) or _dedupe(_apex_of(s, []) for s in subs)
@@ -461,7 +461,7 @@ async def resolve_and_permute(
             )
     else:
         backend = "builtin"
-        _skip("dns_resolve: neither puredns nor massdns found — using built-in resolver (no wildcard filtering).")
+        _skip("dns_resolve: neither puredns nor massdns found - using built-in resolver (no wildcard filtering).")
         resolved = await _fallback_resolve(subs, concurrency)
         wildcard_filtered = set()
 
@@ -478,7 +478,7 @@ async def resolve_and_permute(
 
     if permute and resolved and (have_alterx or have_dnsgen):
         if not can_resolve:
-            _skip("dns_resolve: permutation tools present but no resolver — skipping permutation resolution.")
+            _skip("dns_resolve: permutation tools present but no resolver - skipping permutation resolution.")
         else:
             tools = ", ".join(t for t, ok in (("alterx", have_alterx), ("dnsgen", have_dnsgen)) if ok)
             _info(f"dns_resolve: generating permutations from {len(resolved)} host(s) via {tools}…")
@@ -508,7 +508,7 @@ async def resolve_and_permute(
                 permutations_found = set(perm_resolved) - set(resolved)
             _ok(f"dns_resolve: permutations surfaced {len(permutations_found)} new live host(s).")
     elif resolved and not (have_alterx or have_dnsgen):
-        _skip("dns_resolve: neither alterx nor dnsgen found — skipping permutation expansion.")
+        _skip("dns_resolve: neither alterx nor dnsgen found - skipping permutation expansion.")
 
     # --- Assemble output -----------------------------------------------------
     all_resolved = sorted(set(resolved) | permutations_found)

@@ -274,7 +274,7 @@ class DiscoverParametersTests(unittest.IsolatedAsyncioTestCase):
             )
 
         # Summary finding for the seeded param URL + an aggregated gf candidate
-        # finding whose detail names the sqli category — but still only INFO.
+        # finding whose detail names the sqli category - but still only INFO.
         self.assertTrue([f for f in findings if f["vulnerability"] == "Parameterized Endpoints Discovered"])
         gf_findings = [f for f in findings if f["vulnerability"] == "Parameter Injection Test Candidates (gf)"]
         self.assertEqual(len(gf_findings), 1)

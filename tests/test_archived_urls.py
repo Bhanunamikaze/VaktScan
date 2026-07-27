@@ -4,7 +4,7 @@ All tests run WITHOUT real tools or network access: the ``uro`` subprocess, the
 httpx re-probe, and the content/JS fetches are mocked.
 
 The emphasis is the FALSE-POSITIVE discipline: a live 200 alone must NEVER
-produce an "exposed sensitive file" finding — the response CONTENT must be
+produce an "exposed sensitive file" finding - the response CONTENT must be
 validated (a catch-all/SPA that 200s every path must yield nothing), and a
 401/403 (protected) must not be reported as exposed.
 """
@@ -185,7 +185,7 @@ class ScanArchivedUrlsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(findings[0]["status"], "VULNERABLE")
 
     async def test_query_param_keyword_is_not_a_candidate(self):
-        # ?config= / ?secret= are benign query params, not path segments — they must
+        # ?config= / ?secret= are benign query params, not path segments - they must
         # NOT be selected as sensitive candidates (the catch-all INFO-noise source).
         sensitive, js = _filter_high_signal([
             "https://ex.com/page?config=1",

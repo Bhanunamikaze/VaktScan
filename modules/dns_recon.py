@@ -256,7 +256,7 @@ async def _query(server: str, name: str, qtype: int, qclass: int = QCLASS_IN, rd
     return parsed
 
 
-# ─── AXFR (zone transfer) — multi-message TCP ────────────────────────────────
+# ─── AXFR (zone transfer) - multi-message TCP ────────────────────────────────
 
 async def _try_axfr(server: str, zone: str, timeout: float = 8.0) -> list[dict]:
     """Return a list of answer records if AXFR succeeds, else []."""
@@ -280,7 +280,7 @@ async def _try_axfr(server: str, zone: str, timeout: float = 8.0) -> list[dict]:
                 break
             parsed = _parse_response(msg)
             out.extend(parsed.get('answers', []))
-            # AXFR closes after the trailing SOA — stop when we see two SOAs.
+            # AXFR closes after the trailing SOA - stop when we see two SOAs.
             soa_count = sum(1 for a in out if a.get('type') == RR_SOA)
             if soa_count >= 2:
                 break
@@ -465,7 +465,7 @@ async def check_dkim_selectors(domain: str, resolver: str) -> list[dict]:
         return [_finding(
             domain, 'INFO', 'LOW',
             f'No common DKIM selectors found for {domain}',
-            f'Probed selectors: {", ".join(COMMON_DKIM_SELECTORS)}. The domain may use a custom selector — check mail headers.',
+            f'Probed selectors: {", ".join(COMMON_DKIM_SELECTORS)}. The domain may use a custom selector - check mail headers.',
         )]
     return [_finding(
         domain, 'INFO', 'INFO',
@@ -503,7 +503,7 @@ async def check_nameservers(domain: str, nameservers: list[str]) -> list[dict]:
         except Exception:
             pass
 
-        # Open recursion test — query an unrelated zone with RD=1.
+        # Open recursion test - query an unrelated zone with RD=1.
         try:
             rec_resp = await _query(ns_ip, 'example.com', RR_A, rd=True, timeout=4.0)
             if rec_resp.get('ra') and rec_resp.get('answers'):
@@ -533,7 +533,7 @@ async def check_nameservers(domain: str, nameservers: list[str]) -> list[dict]:
 
 
 def _wildcard_findings(domain: str, txt_records: list[str], a_records: list[str]) -> list[dict]:
-    """Heuristic wildcard hint — for each NS-style domain we'd usually need a
+    """Heuristic wildcard hint - for each NS-style domain we'd usually need a
     separate probe; surface a quick signal when TXT mentions wildcards."""
     out: list[dict] = []
     for t in txt_records:
@@ -603,7 +603,7 @@ async def check_mx_banners(domain: str, resolver: str = DEFAULT_RESOLVERS[0]) ->
             findings.append(_finding(
                 domain, 'INFO', 'INFO',
                 f'Mail Server Banner ({mx_host})',
-                f'SMTP banner on {mx_host}:25 — {banner!r}. Detected server: {server_version}.',
+                f'SMTP banner on {mx_host}:25 - {banner!r}. Detected server: {server_version}.',
                 evidence=f'smtp://{mx_host}:25',
             ))
         except Exception:
@@ -657,7 +657,7 @@ async def check_smtp_relay(host: str, port: int = 25) -> list[dict]:
             await asyncio.wait_for(writer.drain(), timeout=5.0)
             await _read_response(reader)
 
-            # RCPT TO — use an unambiguously external domain.
+            # RCPT TO - use an unambiguously external domain.
             writer.write(b'RCPT TO:<test@external-domain.test>\r\n')
             await asyncio.wait_for(writer.drain(), timeout=5.0)
             rcpt_response = await _read_response(reader)
@@ -780,7 +780,7 @@ async def scan_domain(domain: str, resolver: str = DEFAULT_RESOLVERS[0]) -> list
     findings.extend(await check_dkim_selectors(domain, resolver))
     findings.extend(_wildcard_findings(domain, recovered.get('TXT', []), recovered.get('A', [])))
 
-    # NS records — strip the trailing dot before passing them in.
+    # NS records - strip the trailing dot before passing them in.
     nameservers = sorted({ns.rstrip('.') for ns in recovered.get('NS', []) if ns})
     if nameservers:
         findings.append(_finding(
@@ -791,10 +791,10 @@ async def scan_domain(domain: str, resolver: str = DEFAULT_RESOLVERS[0]) -> list
         findings.extend(await check_nameservers(domain, nameservers))
 
     # ── Email security extensions ─────────────────────────────────────────────
-    # MX banner grabbing — reveals SMTP server software and version.
+    # MX banner grabbing - reveals SMTP server software and version.
     findings.extend(await check_mx_banners(domain, resolver))
 
-    # SMTP open relay test — run against every MX host discovered.
+    # SMTP open relay test - run against every MX host discovered.
     mx_hosts: list[str] = []
     for data in recovered.get('MX', []):
         parts = data.split(' ', 1)
@@ -806,7 +806,7 @@ async def scan_domain(domain: str, resolver: str = DEFAULT_RESOLVERS[0]) -> list
     for r in relay_results:
         findings.extend(r)
 
-    # BIMI record check — brand indicator presence.
+    # BIMI record check - brand indicator presence.
     findings.extend(await check_bimi(domain, resolver))
 
     # ── Certificate transparency ──────────────────────────────────────────────
@@ -817,7 +817,7 @@ async def scan_domain(domain: str, resolver: str = DEFAULT_RESOLVERS[0]) -> list
 
 # ─── Per-subdomain dangling CNAME / DNS-level takeover ────────────────────────
 # Complements the HTTP-response-based takeover check in domain_scan.py by catching
-# subdomains whose CNAME points at a NON-EXISTENT (NXDOMAIN) target — a dangling
+# subdomains whose CNAME points at a NON-EXISTENT (NXDOMAIN) target - a dangling
 # CNAME that serves no HTTP response and so is invisible to the HTTP-based check.
 # The oracle is the NXDOMAIN response itself (a concrete DNS fact, not a weak signal).
 
@@ -883,7 +883,7 @@ async def _cname_of(host: str, resolver: str):
 
 
 async def _target_is_nxdomain(host: str, resolver: str) -> bool:
-    """True only when ``host`` genuinely does not exist — NXDOMAIN for BOTH A and
+    """True only when ``host`` genuinely does not exist - NXDOMAIN for BOTH A and
     AAAA (double-checked to avoid a flaky single lookup producing a false positive)."""
     try:
         a = await _query(resolver, host, RR_A)
@@ -909,7 +909,7 @@ async def _check_one_dangling(host: str, resolver: str, sem) -> "dict | None":
                 host, status='VULNERABLE', severity=severity,
                 vulnerability=f'Subdomain Takeover (dangling CNAME -> {vendor})',
                 details=(f'{host} has a dangling CNAME to {cname} ({vendor}) whose target is '
-                         f'NXDOMAIN — the service slot appears unclaimed and may be takeoverable. '
+                         f'NXDOMAIN - the service slot appears unclaimed and may be takeoverable. '
                          f'DNS-level detection (complements the HTTP-based takeover check).'),
                 evidence=f'dns://{host} CNAME {cname} (NXDOMAIN)',
             )
@@ -917,7 +917,7 @@ async def _check_one_dangling(host: str, resolver: str, sem) -> "dict | None":
             host, status='POTENTIAL', severity='MEDIUM',
             vulnerability='Dangling CNAME (target does not resolve)',
             details=(f'{host} has a CNAME to {cname}, which is NXDOMAIN (does not exist). '
-                     f'Review manually — may be takeoverable depending on the provider.'),
+                     f'Review manually - may be takeoverable depending on the provider.'),
             evidence=f'dns://{host} CNAME {cname} (NXDOMAIN)',
         )
 

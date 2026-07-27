@@ -1,4 +1,4 @@
-"""Tests for modules/favicon_jarm.py — favicon-hash + JARM pivot fingerprinting.
+"""Tests for modules/favicon_jarm.py - favicon-hash + JARM pivot fingerprinting.
 
 All network I/O (the httpx favicon fetch) and all JARM computation are mocked, so
 these tests run WITHOUT any network access or external tools installed.

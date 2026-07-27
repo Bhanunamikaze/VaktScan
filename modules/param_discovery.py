@@ -1,28 +1,28 @@
 """
-param_discovery.py — VaktScan Request-Parameter / Hidden-Input Discovery
+param_discovery.py - VaktScan Request-Parameter / Hidden-Input Discovery
 ========================================================================
 Injection and DAST tooling (nuclei ``-dast``, sqlmap, XSS fuzzers) is only as
 good as the parameter surface you feed it. Recon already produces a set of
 alive web URLs, but nothing mines them for *request parameters* (GET/POST keys,
-hidden inputs) — the exact surface those testers need.
+hidden inputs) - the exact surface those testers need.
 
 This module fills that gap by orchestrating best-of-breed, external tools when
 they are present (and gracefully skipping when they are not):
 
-1. ``paramspider`` — PASSIVE. Harvests historical parameterized URLs for each
+1. ``paramspider`` - PASSIVE. Harvests historical parameterized URLs for each
    in-scope host from web archives (``?id=FUZZ&cat=FUZZ`` style).
-2. ``arjun`` — ACTIVE. Brute-forces likely parameter names against each alive
+2. ``arjun`` - ACTIVE. Brute-forces likely parameter names against each alive
    URL and reports the ones the server actually reflects/accepts.
-3. ``gf`` — TAGGING. Applies grep-for patterns (xss / sqli / ssrf / redirect)
+3. ``gf`` - TAGGING. Applies grep-for patterns (xss / sqli / ssrf / redirect)
    over the aggregated URL list to flag the most interesting candidates.
 
 Alive URLs that *already* carry a query string are seeded into the aggregate as
 well, so the feed is useful even when only ``gf`` is installed.
 
 Everything is de-duplicated and written to ``<output_dir>/params/``:
-  * ``param_urls_<ts>.txt``  — the parameterized-URL feed for nuclei DAST.
-  * ``param_names_<ts>.txt``  — the unique parameter-name wordlist.
-  * ``gf_<category>_<ts>.txt`` — per-pattern tagged URLs.
+  * ``param_urls_<ts>.txt``  - the parameterized-URL feed for nuclei DAST.
+  * ``param_names_<ts>.txt``  - the unique parameter-name wordlist.
+  * ``gf_<category>_<ts>.txt`` - per-pattern tagged URLs.
 
 Canonical INFO findings are emitted (via ``modules/schema.py`` ``normalize_finding``)
 summarizing the parameterized endpoints discovered per host and the per-category
@@ -37,7 +37,7 @@ Entry point::
 Returns canonical findings. Returns ``[]`` (never crashes) on empty input or
 when every external tool is missing. Follows VaktScan conventions: async
 subprocess wrapping via ``asyncio.create_subprocess_exec``, ``shutil.which``
-detection, GRACEFUL skip (one info line, return ``[]``) when a tool is absent —
+detection, GRACEFUL skip (one info line, return ``[]``) when a tool is absent -
 never auto-install, never crash.
 """
 
@@ -71,7 +71,7 @@ GF_CATEGORIES = {
 }
 
 # Defensive caps so a pathological alive-URL set can't spawn unbounded work.
-MAX_ARJUN_TARGETS = 200      # arjun probes each URL individually (slow) — bound it.
+MAX_ARJUN_TARGETS = 200      # arjun probes each URL individually (slow) - bound it.
 MAX_FEED_URLS = 5000         # cap the DAST feed / gf input size.
 
 # Matches an http(s) URL sitting anywhere on a line, so we can pull URLs out of
@@ -99,7 +99,7 @@ def _detect_tools():
 def _parse_url_lines(text):
     """Extract http(s) URLs from arbitrary tool output text.
 
-    Tolerates banners, progress spinners, and log prefixes — anything that is
+    Tolerates banners, progress spinners, and log prefixes - anything that is
     not a URL is ignored. Returns URLs in first-seen order, de-duplicated.
     """
     if not text:
@@ -220,7 +220,7 @@ async def _run_paramspider(binary, domain, params_dir, semaphore):
                 cwd=params_dir,
             )
             stdout, stderr = await proc.communicate()
-    except Exception as exc:  # tool present but unusable — degrade, don't crash
+    except Exception as exc:  # tool present but unusable - degrade, don't crash
         print(f"{_C.GREY}[!] paramspider failed for {domain}: {exc}{_C.RESET}")
         return []
 
@@ -358,7 +358,7 @@ def _build_gf_candidate_finding(host, category_urls, feed_path):
     flagged as *candidates* for further testing.
 
     ``category_urls`` maps ``category -> set(urls)``. This is explicitly a lead,
-    NOT a confirmed vulnerability — gf is a grep heuristic, so the finding stays
+    NOT a confirmed vulnerability - gf is a grep heuristic, so the finding stays
     INFO/INFO and its wording never claims XSS/SQLi/SSRF/redirect exists.
     """
     all_urls = set()
@@ -481,7 +481,7 @@ async def discover_parameters(alive_urls: list[str], output_dir: str, concurrenc
             dashboard.add_task("param_discovery", "Parameter Discovery")
 
         try:
-            # 1. PASSIVE — paramspider per in-scope host.
+            # 1. PASSIVE - paramspider per in-scope host.
             if paramspider_bin:
                 hosts = _hosts_from_urls(cleaned)
                 if hosts:
@@ -500,7 +500,7 @@ async def discover_parameters(alive_urls: list[str], output_dir: str, concurrenc
                         elif isinstance(res, Exception):
                             print(f"{_C.GREY}[!] paramspider error: {res}{_C.RESET}")
 
-            # 2. ACTIVE — arjun over the alive URLs (bounded).
+            # 2. ACTIVE - arjun over the alive URLs (bounded).
             if arjun_bin:
                 arjun_targets = cleaned[:MAX_ARJUN_TARGETS]
                 if len(cleaned) > MAX_ARJUN_TARGETS:
@@ -548,7 +548,7 @@ async def discover_parameters(alive_urls: list[str], output_dir: str, concurrenc
             else:
                 print(f"{_C.YELLOW}[!] param_discovery: no parameterized endpoints discovered.{_C.RESET}")
 
-            # 4. TAGGING — gf patterns over the deduped feed. gf is a HEURISTIC
+            # 4. TAGGING - gf patterns over the deduped feed. gf is a HEURISTIC
             #    filter, not a confirmation: a hit only marks a URL as a candidate
             #    for that category of testing. Results are folded per-host, never
             #    turned into a per-URL or per-category finding row.
@@ -570,7 +570,7 @@ async def discover_parameters(alive_urls: list[str], output_dir: str, concurrenc
                         if host:
                             gf_by_host.setdefault(host, {}).setdefault(category, set()).add(url)
 
-            # 5. Findings — ONE aggregated INFO summary per host for the parameter
+            # 5. Findings - ONE aggregated INFO summary per host for the parameter
             #    surface, plus (only when gf tagged something) ONE aggregated INFO
             #    "candidate" finding per host. gf candidates are never VULNERABLE.
             for host in sorted(host_urls):

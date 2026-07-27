@@ -1,6 +1,6 @@
 """Tests for modules/asset_classifier.py (shared-hosting customer/company split).
 
-All DNS resolution is mocked — no network. Validates the core behavior that made
+All DNS resolution is mocked - no network. Validates the core behavior that made
 the theory hold on homestead.com: hosts crowding one shared IP are customers,
 distinct-IP and functional-named hosts are company assets.
 """

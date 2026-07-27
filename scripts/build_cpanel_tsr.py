@@ -50,7 +50,7 @@ def _branches_to_ranges(branches):
     for b in sorted(branches):
         next_b = b + 2
         if b == max_branch:
-            # Unknown upper bound for the newest branch — open-ended range.
+            # Unknown upper bound for the newest branch - open-ended range.
             ranges.append(f">=11.{b}.0.0")
         else:
             ranges.append(f">=11.{b}.0.0,<11.{next_b}.0.0")
@@ -154,7 +154,7 @@ def main():
     bulletins = parse_security_blocks(html)
 
     if not bulletins:
-        print("[!] No security update blocks parsed — refusing to overwrite existing JSON.")
+        print("[!] No security update blocks parsed - refusing to overwrite existing JSON.")
         sys.exit(3)
 
     # Preserve any hand-crafted bulletins from the existing file that have

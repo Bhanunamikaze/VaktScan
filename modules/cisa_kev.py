@@ -72,7 +72,7 @@ async def enrich_findings_with_kev(findings: list) -> list:
             seen_cves.add(cve_upper)
             kev_findings.append({
                 'status': 'CRITICAL',
-                'vulnerability': f'CISA KEV: {cve_upper} — {entry["vulnerabilityName"]}',
+                'vulnerability': f'CISA KEV: {cve_upper} - {entry["vulnerabilityName"]}',
                 'target': f.get('target', ''),
                 'resolved_ip': f.get('resolved_ip', ''),
                 'port': f.get('port', ''),

@@ -1,4 +1,4 @@
-"""Tests for modules/notify.py — alert delivery for NEW findings.
+"""Tests for modules/notify.py - alert delivery for NEW findings.
 
 Everything runs WITHOUT network: httpx.AsyncClient and smtplib are mocked.
 """

@@ -1,5 +1,5 @@
 """
-js_paths.py — VaktScan JS Paths Module
+js_paths.py - VaktScan JS Paths Module
 =======================================
 Crawls target URLs, discovers JS files, extracts embedded paths/hosts,
 probes endpoint permutations, and returns VaktScan-compatible vuln dicts
@@ -276,7 +276,7 @@ class JSRecon:
             return False
 
     # ------------------------------------------------------------------
-    # Phase 1 — collect JS URLs from each target page
+    # Phase 1 - collect JS URLs from each target page
     # ------------------------------------------------------------------
 
     def collect_js_files(self, target_url: str) -> None:
@@ -297,7 +297,7 @@ class JSRecon:
                 if 'modulepreload' in rel or ('preload' in rel and link.get('as') == 'script'):
                     self.js_urls.add(urljoin(target_url, link['href']))
 
-            # Inline <script> blocks — extract paths directly from HTML JS
+            # Inline <script> blocks - extract paths directly from HTML JS
             for inline in soup.find_all('script', src=False):
                 if inline.string:
                     self.paths.update(self._extract_paths(inline.string))
@@ -307,7 +307,7 @@ class JSRecon:
             print(f"{Colors.YELLOW}[-] Failed to fetch {target_url}: {exc}{Colors.RESET}")
 
     # ------------------------------------------------------------------
-    # Phase 2 — parse each JS file
+    # Phase 2 - parse each JS file
     # ------------------------------------------------------------------
 
     def _check_source_map(self, js_url: str) -> None:
@@ -321,7 +321,7 @@ class JSRecon:
                     map_url,
                     "Exposed JS Source Map",
                     "VULNERABLE", "HIGH",
-                    f"Source map at {map_url} — leaks original source code.",
+                    f"Source map at {map_url} - leaks original source code.",
                     http_status=200,
                 ))
         except Exception:
@@ -404,7 +404,7 @@ class JSRecon:
         )
 
     # ------------------------------------------------------------------
-    # Phase 3 — probe host × path permutations
+    # Phase 3 - probe host × path permutations
     # ------------------------------------------------------------------
 
     def probe_endpoint(self, combo: tuple) -> None:
@@ -496,7 +496,7 @@ class JSRecon:
                 raise
 
     # ------------------------------------------------------------------
-    # Orchestrator — returns VaktScan vuln dicts
+    # Orchestrator - returns VaktScan vuln dicts
     # ------------------------------------------------------------------
 
     def run(self) -> dict:
@@ -520,7 +520,7 @@ class JSRecon:
             self.execute_probing()
         except KeyboardInterrupt:
             self._stop.set()
-            print(f"\n{Colors.YELLOW}[!] Interrupted — returning partial results.{Colors.RESET}")
+            print(f"\n{Colors.YELLOW}[!] Interrupted - returning partial results.{Colors.RESET}")
 
         return self._result_dict()
 

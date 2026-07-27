@@ -1,20 +1,20 @@
 """Live-progress helpers for long-running scans shown on the LiveDashboard.
 
 Several scans previously showed a frozen ``Running... | Starting`` status because
-their dashboard task received no updates while the (long) work ran — an animated
+their dashboard task received no updates while the (long) work ran - an animated
 spinner but no count, percentage, or elapsed time, so the scan looked hung.
 
 Two helpers make liveness trivial to add without restructuring a runner:
 
-* :class:`DashboardProgress` — increments a task's ``completed`` count as
+* :class:`DashboardProgress` - increments a task's ``completed`` count as
   concurrent items finish (for ``asyncio.gather``-style fan-out over a countable
   list, e.g. one dirsearch/gau/waybackurls run per host/URL).
-* :func:`heartbeat` — an async context manager that ticks ``<label> · <n>s
+* :func:`heartbeat` - an async context manager that ticks ``<label> · <n>s
   elapsed`` on a task at a fixed interval, for an opaque single long operation
   (one subprocess / blocking call) where item-level counting is not possible.
 
 Both are safe when the dashboard is inactive (they simply no-op) and never raise
-out of the progress path — reporting progress must not be able to break a scan.
+out of the progress path - reporting progress must not be able to break a scan.
 The dashboard is a singleton, so ``LiveDashboard()`` returns the active instance.
 """
 

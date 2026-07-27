@@ -1,12 +1,12 @@
 """
-reporter.py — VaktScan output / reporting layer.
+reporter.py - VaktScan output / reporting layer.
 
 Provides all file-output helpers (CSV, JSON, SARIF) and the final
 results printer.  Kept separate from main.py so the reporting
 contract can be imported and tested without pulling in the full
 scan engine.
 """
-import asyncio  # noqa: F401 — kept for async def print_final_results
+import asyncio  # noqa: F401 - kept for async def print_final_results
 import csv
 import json
 import time
@@ -351,7 +351,7 @@ def save_results_to_html(vulnerabilities, filename=None, scan_label=None):
         doc = (
             "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-            f"<title>VaktScan Report — {label}</title>{css}</head><body><div class=\"wrap\">"
+            f"<title>VaktScan Report - {label}</title>{css}</head><body><div class=\"wrap\">"
             f"<h1>VaktScan Report</h1><div class=\"sub\">{label} &middot; {len(vulnerabilities)} finding(s) &middot; generated {generated}</div>"
             f"<div class=\"tiles\">{''.join(tiles)}</div>"
             "<input id=\"q\" type=\"search\" placeholder=\"Filter findings… (click a severity tile to toggle it)\">"
@@ -450,7 +450,7 @@ def write_sarif_output(vulnerabilities, output_path):
 
 
 # ---------------------------------------------------------------------------
-# Final results printer (async — orchestrates enrichment + file output)
+# Final results printer (async - orchestrates enrichment + file output)
 # ---------------------------------------------------------------------------
 
 async def print_final_results(all_vulnerabilities):

@@ -170,7 +170,7 @@ class HTTPXRunner:
 
         # httpx streams one JSON object per alive host to stdout, and large target
         # sets take a long time. Emit a live heartbeat (elapsed + alive count) so
-        # the task never sits at a frozen "Starting" — it is working, not hung.
+        # the task never sits at a frozen "Starting" - it is working, not hung.
         hb_interval = 2 if dashboard.active else 30
 
         async def _heartbeat():

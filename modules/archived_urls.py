@@ -1,5 +1,5 @@
 """
-archived_urls.py — VaktScan Archived-URL Weaponizer
+archived_urls.py - VaktScan Archived-URL Weaponizer
 ===================================================
 gau/waybackurls harvest thousands of historical URLs but nothing consumes
 them. This module turns that raw list into signal:
@@ -11,7 +11,7 @@ them. This module turns that raw list into signal:
 3. Re-probe the filtered URLs with the existing ``HTTPXRunner`` to find which
    are LIVE *now* (HTTP 200 or auth-required 401/403).
 4. For live archived ``.js`` URLs, scan for hardcoded secrets by REUSING the
-   secret engine in ``modules/js_paths.py`` (``JSRecon._check_secrets`` — the
+   secret engine in ``modules/js_paths.py`` (``JSRecon._check_secrets`` - the
    regexes are NOT duplicated here).
 5. Emit canonical findings via ``modules/schema.py`` ``normalize_finding``.
 
@@ -24,7 +24,7 @@ Entry point::
 Returns canonical findings. Returns ``[]`` (never crashes) on empty input or
 when the required tools/deps are missing. Follows VaktScan conventions: async
 tool wrapping, ``shutil.which`` detection, GRACEFUL skip (one info line, return
-``[]``) when a tool is absent — never auto-install, never crash.
+``[]``) when a tool is absent - never auto-install, never crash.
 """
 
 import asyncio
@@ -124,7 +124,7 @@ async def _run_uro(urls):
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, _stderr = await proc.communicate(input="\n".join(urls).encode())
-    except Exception as exc:  # uro present but unusable — degrade gracefully
+    except Exception as exc:  # uro present but unusable - degrade gracefully
         print(f"{_C.GREY}[!] uro failed ({exc}); using internal dedup.{_C.RESET}")
         return None
     out = [line.strip() for line in stdout.decode("utf-8", "ignore").splitlines() if line.strip()]
@@ -159,7 +159,7 @@ def _is_js(url):
 
 def _match_reason(url):
     """Return the first sensitive extension or path-segment keyword matched, else
-    ``None``. Keywords must be a distinct PATH SEGMENT (``/admin/``) — a substring
+    ``None``. Keywords must be a distinct PATH SEGMENT (``/admin/``) - a substring
     or query param (``?config=``) is too weak and generates catch-all noise."""
     parsed = urlparse(url.lower())
     path = parsed.path
@@ -197,7 +197,7 @@ def _filter_high_signal(urls):
 
 def _looks_like_html(body):
     """A catch-all / SPA page that returns 200 for every path is the #1 source of
-    false positives — reject any 'sensitive file' whose body is actually HTML."""
+    false positives - reject any 'sensitive file' whose body is actually HTML."""
     head = (body or "")[:2000].lower()
     return "<html" in head or "<!doctype html" in head
 
@@ -213,7 +213,7 @@ def _matched_ext(url):
 
 def _matched_keyword(url):
     """An interesting keyword appearing as a distinct PATH SEGMENT (``/admin/``),
-    NOT inside a query string or a longer word — those are too weak to report."""
+    NOT inside a query string or a longer word - those are too weak to report."""
     segments = urlparse(url.lower()).path.split("/")
     for kw in INTERESTING_KEYWORDS:
         if kw in segments:
@@ -222,7 +222,7 @@ def _matched_keyword(url):
 
 
 def _validate_exposure(ext, body, content_type, content_length):
-    """CONTENT ORACLE — confirm a 200 response body actually IS the sensitive
+    """CONTENT ORACLE - confirm a 200 response body actually IS the sensitive
     artifact, not a catch-all HTML page. Mirrors the validation in
     modules/web_checks.py so archived-URL hits get the same anti-FP discipline.
     Returns True only when the content is convincingly the claimed artifact.
@@ -246,7 +246,7 @@ def _validate_exposure(ext, body, content_type, content_length):
     if _looks_like_html(body):
         return False
     if is_binary_ct:
-        return content_length > 64  # unexpected binary for a text type — accept if sizeable
+        return content_length > 64  # unexpected binary for a text type - accept if sizeable
 
     if ext == ".git":
         return bool(re.search(r"ref:\s*refs/", body) or "[core]" in body or "[remote" in body)
@@ -262,7 +262,7 @@ def _validate_exposure(ext, body, content_type, content_length):
         return "[" in body or bool(re.search(r"(?m)^[\w.\-]+\s*=", body))
     if ext == ".log":
         return len(body.strip()) > 20
-    # .bak .old .backup .dump .swp .php~ — text-or-binary backups: substantive, non-HTML.
+    # .bak .old .backup .dump .swp .php~ - text-or-binary backups: substantive, non-HTML.
     return len(body.strip()) > 40
 
 
@@ -303,7 +303,7 @@ def _build_exposure_finding(source_url, live_url, http_status, ext):
 
 
 def _build_info_endpoint_finding(source_url, live_url, http_status, keyword):
-    """A keyword-matched archived endpoint that is live — INFO only, NOT an
+    """A keyword-matched archived endpoint that is live - INFO only, NOT an
     exposure claim (a live '/admin' path is not a confirmed exposed file)."""
     parsed = urlparse(live_url or source_url)
     port = str(parsed.port or (443 if parsed.scheme == "https" else 80))
@@ -320,7 +320,7 @@ def _build_info_endpoint_finding(source_url, live_url, http_status, keyword):
         "payload_url": source_url,
         "details": (
             f"Archived URL matching keyword '{keyword}' is live (HTTP {http_status}). "
-            f"Review manually — not a confirmed exposure. Source: {source_url}"
+            f"Review manually - not a confirmed exposure. Source: {source_url}"
         ),
         "http_status": str(http_status),
         "page_title": "N/A",
@@ -402,7 +402,7 @@ def _origin(url):
 
 
 def _is_catchall_body(base_body, base_len, body, length):
-    """True when ``body`` looks like the host's catch-all/soft-404 response —
+    """True when ``body`` looks like the host's catch-all/soft-404 response -
     i.e. it is the same content the host returns for a path that cannot exist."""
     if base_body is None:
         return False
@@ -501,7 +501,7 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
                 if not isinstance(entry, dict):
                     continue
                 status_code = _safe_int(entry.get("status_code"))
-                # 200 ONLY: a sensitive path behind 401/403 is PROTECTED, not exposed —
+                # 200 ONLY: a sensitive path behind 401/403 is PROTECTED, not exposed -
                 # emitting "exposed file" for it is a false positive.
                 if status_code != 200:
                     continue
@@ -522,13 +522,13 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
             )
 
             # 3b. CONTENT-VALIDATE sensitive candidates before claiming exposure.
-            #     A live 200 alone is not enough — catch-all/SPA servers 200 every
+            #     A live 200 alone is not enough - catch-all/SPA servers 200 every
             #     path. Fetch the body and confirm it IS the artifact.
             if live_sensitive:
                 # Soft-404 baseline per unique host: if a host answers 200 to a path
                 # that cannot exist, it is a catch-all / always-200 server. We then
                 # require a candidate's body to DIFFER from that baseline before
-                # trusting any content oracle — this defeats the non-HTML always-200
+                # trusting any content oracle - this defeats the non-HTML always-200
                 # false positive (JSON error envelopes, plain-text soft-404s, etc.).
                 origins = sorted({_origin(l) for _s, l, _c in live_sensitive})
                 base_results = await asyncio.gather(
@@ -540,7 +540,7 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
                 }
                 _catchall = {o for o, (c, _b, _l) in baselines.items() if c}
                 if _catchall:
-                    print(f"{_C.YELLOW}[!] {len(_catchall)} catch-all/always-200 host(s) detected — "
+                    print(f"{_C.YELLOW}[!] {len(_catchall)} catch-all/always-200 host(s) detected - "
                           f"suppressing unvalidated archived matches there.{_C.RESET}")
 
                 prog_s = DashboardProgress("archived_urls", total=len(live_sensitive), noun="files")
@@ -573,7 +573,7 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
                     return_exceptions=True,
                 )
 
-            # 4. Secret-scan live JS (reusing the js_paths engine — regex matches
+            # 4. Secret-scan live JS (reusing the js_paths engine - regex matches
             #    are self-validating, so no catch-all FP risk there).
             if live_js:
                 prog = DashboardProgress("archived_urls", total=len(live_js), noun="js")

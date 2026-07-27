@@ -1,6 +1,6 @@
 # Adding a Module to VaktScan
 
-VaktScan has **several kinds of modules**, and they don't all plug in the same way. Before writing any code, decide **which category** your module belongs to — that determines its entry-point signature, where it wires into the pipeline, and whether it runs by default or behind a flag.
+VaktScan has **several kinds of modules**, and they don't all plug in the same way. Before writing any code, decide **which category** your module belongs to - that determines its entry-point signature, where it wires into the pipeline, and whether it runs by default or behind a flag.
 
 > This guide avoids hard line numbers (they drift). It refers to **functions and landmarks** in `main.py`: `SERVICE_TO_MODULE`, `run_recon_followups()` (the `if alive_urls:` block), `_run_parallel_passive()`, `handle_domain()`, `_enrich_and_report()`, `cmd_scan()`, and the `extra_scans` frozenset. Search for those names.
 
@@ -23,7 +23,7 @@ Most **new** modules today are **Category B** (a check that runs over alive web 
 
 ## 1. The canonical finding schema (ALL categories)
 
-Every finding is a dict with the **15 canonical keys** in `modules/schema.py` (`CANONICAL_KEYS`). The modern, preferred way to build one is `normalize_finding()` — it fills any missing keys with `"N/A"` and stamps the timestamp, so you only supply what you have:
+Every finding is a dict with the **15 canonical keys** in `modules/schema.py` (`CANONICAL_KEYS`). The modern, preferred way to build one is `normalize_finding()` - it fills any missing keys with `"N/A"` and stamps the timestamp, so you only supply what you have:
 
 ```python
 from modules.schema import normalize_finding
@@ -41,7 +41,7 @@ f = normalize_finding({
 })
 ```
 
-During development, assert cleanliness with `validate_finding(f)` (returns a list of violations; `[]` means good). The `server` key is forbidden — use `resolved_ip`.
+During development, assert cleanliness with `validate_finding(f)` (returns a list of violations; `[]` means good). The `server` key is forbidden - use `resolved_ip`.
 
 > **Timestamps:** if you hand-roll a helper, use `datetime.now(timezone.utc)`, never the deprecated `datetime.utcnow()`. `normalize_finding` already does this for you.
 
@@ -49,7 +49,7 @@ During development, assert cleanliness with `validate_finding(f)` (returns a lis
 
 A weak oracle is the #1 way to generate hundreds of false findings. **Never** emit a vulnerability/exposure finding from a *weak signal* alone (HTTP status code, a path/name match, a single spoofable header). You must validate the response **content**, and for active checks add a **negative control**:
 
-- Exposed-file checks (`.git`, `.env`, `.sql`, backups): require the body to actually be that artifact (`ref: refs/`, `KEY=VALUE`, SQL markers, a binary content-type) and reject HTML catch-all bodies. See `web_checks.check_sensitive_files` and `archived_urls._validate_exposure` (which also runs a per-host **soft-404 baseline** — probe a bogus path; if it 200s, the host is a catch-all and matching bodies are dropped).
+- Exposed-file checks (`.git`, `.env`, `.sql`, backups): require the body to actually be that artifact (`ref: refs/`, `KEY=VALUE`, SQL markers, a binary content-type) and reject HTML catch-all bodies. See `web_checks.check_sensitive_files` and `archived_urls._validate_exposure` (which also runs a per-host **soft-404 baseline** - probe a bogus path; if it 200s, the host is a catch-all and matching bodies are dropped).
 - Default-credential / auth checks: confirm access with a positive oracle a login-page 200 can't satisfy, **and** run a deliberately-wrong credential as a negative control. See `default_creds.py`.
 - EOL/version claims: require a concrete detected version mapped to a real past EOL date. See `tech_fingerprint.py`.
 - Heuristic tags (e.g. `gf` patterns): emit **INFO "candidate"**, never a confirmed vuln. See `param_discovery.py`.
@@ -58,7 +58,7 @@ Your test suite **must** include a negative case proving the false positive does
 
 ### Live progress + graceful tool skipping (Categories B/C/D)
 
-If your module shells out to an external tool, detect it with `shutil.which` and **skip gracefully** when absent (print one info line, return `[]`/empty — never crash, never auto-install). For liveness on the dashboard, use `modules/progress.py`:
+If your module shells out to an external tool, detect it with `shutil.which` and **skip gracefully** when absent (print one info line, return `[]`/empty - never crash, never auto-install). For liveness on the dashboard, use `modules/progress.py`:
 
 ```python
 from modules.progress import DashboardProgress, heartbeat
@@ -74,7 +74,7 @@ Both no-op safely when the dashboard is inactive. See `modules/gau_runner.py` fo
 
 ---
 
-## 2. Category A — port-triggered service module
+## 2. Category A - port-triggered service module
 
 Runs automatically when the scanner finds a matching open port (and via `-m <service>`).
 
@@ -94,9 +94,9 @@ async def run_scans(target_obj, port, **_):
 
 ### 2.2 Register it (3 edits in `main.py` + `modules/__init__.py`)
 
-1. `modules/__init__.py` — add `from . import my_module`.
-2. `main.py` — add `my_module` to the `from modules import ( … )` block.
-3. `main.py` — add to `SERVICE_TO_MODULE` (the single source of truth for dispatch; the key is the `-m` value):
+1. `modules/__init__.py` - add `from . import my_module`.
+2. `main.py` - add `my_module` to the `from modules import ( … )` block.
+3. `main.py` - add to `SERVICE_TO_MODULE` (the single source of truth for dispatch; the key is the `-m` value):
 
    ```python
    SERVICE_TO_MODULE = {
@@ -108,7 +108,7 @@ async def run_scans(target_obj, port, **_):
    }
    ```
 
-4. **Port mapping** — add your service + its default ports to `get_service_ports()` in `utils.py`, or the scan loop will never auto-route traffic to your module. (The `web` and `cpanel_adjacent` pseudo-services are handled specially and are not in `SERVICE_TO_MODULE`.)
+4. **Port mapping** - add your service + its default ports to `get_service_ports()` in `utils.py`, or the scan loop will never auto-route traffic to your module. (The `web` and `cpanel_adjacent` pseudo-services are handled specially and are not in `SERVICE_TO_MODULE`.)
 
 ### 2.3 Optional: fingerprint-gated dispatch via `service_recon.py`
 
@@ -116,11 +116,11 @@ If you want an nmap-discovered / shared port to auto-invoke your check without `
 
 ---
 
-## 3. Category B — alive-URL analysis module (the common new pattern)
+## 3. Category B - alive-URL analysis module (the common new pattern)
 
 This is what `archived_urls`, `param_discovery`, `favicon_jarm`, `tech_fingerprint`, `default_creds`, and `screenshots` are. It runs over the list of alive HTTP URLs discovered by httpx.
 
-### 3.1 Entry point (a plain async function — NOT `run_scans`)
+### 3.1 Entry point (a plain async function - NOT `run_scans`)
 
 ```python
 async def analyze(alive_urls: list[str], output_dir: str, concurrency: int = 20) -> list[dict]:
@@ -137,7 +137,7 @@ Return `[]` (never raise) on empty input or a missing tool.
 
 Inside `run_recon_followups()`, find the **`if alive_urls:` block** (where `nuclei`, `web_checks`, `dirsearch`, `js_paths` already run). Add your call there. Then add its result to the module's `all_findings`. Two sub-cases:
 
-**Default-on** (cheap, low-risk) — call it directly, or gate on a dedicated boolean param like `enable_archived`:
+**Default-on** (cheap, low-risk) - call it directly, or gate on a dedicated boolean param like `enable_archived`:
 
 ```python
 if alive_urls:
@@ -146,7 +146,7 @@ if alive_urls:
     all_findings.extend(my_findings)
 ```
 
-**Opt-in** (heavy at scale, active, or tool-dependent) — use the **`extra_scans`** mechanism (this is the standard for per-URL heavy modules; a recon run can hit 60k+ alive URLs, so default-on is dangerous):
+**Opt-in** (heavy at scale, active, or tool-dependent) - use the **`extra_scans`** mechanism (this is the standard for per-URL heavy modules; a recon run can hit 60k+ alive URLs, so default-on is dangerous):
 
 ```python
 if "my_scan" in extra_scans:
@@ -159,25 +159,25 @@ if "my_scan" in extra_scans:
 ### 3.3 It also runs under `enum --probe` and `scan --posture`?
 
 - `enum <domain> --probe` chains into the same `run_recon_followups()`, so a Category-B module wired there **automatically** runs under `enum --probe` too.
-- `scan --posture` does **not** run `run_recon_followups` (it only runs `DomainScanner` + httpx), so posture triage will not include your module. That's intended — posture is deliberately lightweight.
+- `scan --posture` does **not** run `run_recon_followups` (it only runs `DomainScanner` + httpx), so posture triage will not include your module. That's intended - posture is deliberately lightweight.
 
 ---
 
-## 4. Categories C, D, E — passive recon, pre-probe expansion, enrichment
+## 4. Categories C, D, E - passive recon, pre-probe expansion, enrichment
 
-**C. Passive recon (per domain)** — runs in `_run_parallel_passive()` alongside `dns_recon`, `cloud_enum`, `ct_monitor`, concurrently, for domain targets. Return a findings list; the caller buffers it into `recon_phase_findings` (which is flushed into the report later). Entry point shape: `async def run(domain, concurrency, ...) -> list[dict]`.
+**C. Passive recon (per domain)** - runs in `_run_parallel_passive()` alongside `dns_recon`, `cloud_enum`, `ct_monitor`, concurrently, for domain targets. Return a findings list; the caller buffers it into `recon_phase_findings` (which is flushed into the report later). Entry point shape: `async def run(domain, concurrency, ...) -> list[dict]`.
 
-**D. Pre-probe recon / expansion** — runs in `handle_domain()` **before** `run_recon_followups()`, so it can clean or expand the subdomain set that gets probed (like `dns_resolve`, which feeds a wildcard-filtered list forward) or discover new scope (`horizontal_expand`). Entry point often returns a dict (`{"resolved": [...], "findings": [...]}`) so the caller can both feed hosts forward and collect findings. Gate with a flag (default-on `dns_hygiene` or opt-in `enable_horizontal`).
+**D. Pre-probe recon / expansion** - runs in `handle_domain()` **before** `run_recon_followups()`, so it can clean or expand the subdomain set that gets probed (like `dns_resolve`, which feeds a wildcard-filtered list forward) or discover new scope (`horizontal_expand`). Entry point often returns a dict (`{"resolved": [...], "findings": [...]}`) so the caller can both feed hosts forward and collect findings. Gate with a flag (default-on `dns_hygiene` or opt-in `enable_horizontal`).
 
-**E. Enrichment** — runs in `_enrich_and_report()` over the **deduplicated final findings list** (like `nvd`, `cisa_kev`, `epss`, `passive_intel`). It mutates/augments findings in place or returns additions. It does not probe targets; it decorates findings. Add your call into the enrichment `asyncio.gather` in `_enrich_and_report()`.
+**E. Enrichment** - runs in `_enrich_and_report()` over the **deduplicated final findings list** (like `nvd`, `cisa_kev`, `epss`, `passive_intel`). It mutates/augments findings in place or returns additions. It does not probe targets; it decorates findings. Add your call into the enrichment `asyncio.gather` in `_enrich_and_report()`.
 
 ---
 
-## 5. CLI flag mechanics — how a flag reaches your module
+## 5. CLI flag mechanics - how a flag reaches your module
 
 There are two flag styles. Both live in the `scan` subparser (search `sp_scan.add_argument`) and are read in `cmd_scan()`.
 
-### 5.1 Opt-in scan (the `extra_scans` set) — for Category-B heavy/active modules
+### 5.1 Opt-in scan (the `extra_scans` set) - for Category-B heavy/active modules
 
 Four small edits:
 
@@ -186,7 +186,7 @@ Four small edits:
    sp_scan.add_argument("--my-scan", action="store_true", dest="my_scan",
                         help="… (off by default; skips if tool absent)")
    ```
-2. **`cmd_scan()`** — add your name to the `extra_scans` frozenset it builds and passes to `main()`:
+2. **`cmd_scan()`** - add your name to the `extra_scans` frozenset it builds and passes to `main()`:
    ```python
    extra_scans=frozenset(name for name, on in (
        ("params", getattr(args, 'params', False)),
@@ -194,10 +194,10 @@ Four small edits:
        ("my_scan", getattr(args, 'my_scan', False)),
    ) if on),
    ```
-3. **`main()`** already forwards `extra_scans` to its `run_recon_followups()` calls — no change needed there.
-4. **`run_recon_followups()`** — check `if "my_scan" in extra_scans:` (see §3.2).
+3. **`main()`** already forwards `extra_scans` to its `run_recon_followups()` calls - no change needed there.
+4. **`run_recon_followups()`** - check `if "my_scan" in extra_scans:` (see §3.2).
 
-### 5.2 Default-on with an off-switch — for Categories B/D that reduce noise or are cheap
+### 5.2 Default-on with an off-switch - for Categories B/D that reduce noise or are cheap
 
 Use `--no-x` (store_false, default True), e.g. `--no-archived-scan`, `--no-dns-hygiene`:
 
@@ -212,13 +212,13 @@ Then thread it as an explicit `main()` parameter (like `archived_scan`, `dns_hyg
 
 ---
 
-## 6. Output / reporting — you don't write your own report
+## 6. Output / reporting - you don't write your own report
 
-Findings returned from your entry point flow into the shared tail: dedup → enrichment (NVD/KEV/EPSS/passive-intel) → **CSV + HTML always**, JSON/SARIF opt-in (`--format`, `--sarif`) → SQLite inventory delta → alerts (`notify.py`). You only *return findings*; `_enrich_and_report()` handles persistence. (A standalone `-m` mode that returns early may write its own CSV/HTML via `reporter.save_results_to_csv`/`save_results_to_html` — see the `domain-scan`/posture branch.)
+Findings returned from your entry point flow into the shared tail: dedup → enrichment (NVD/KEV/EPSS/passive-intel) → **CSV + HTML always**, JSON/SARIF opt-in (`--format`, `--sarif`) → SQLite inventory delta → alerts (`notify.py`). You only *return findings*; `_enrich_and_report()` handles persistence. (A standalone `-m` mode that returns early may write its own CSV/HTML via `reporter.save_results_to_csv`/`save_results_to_html` - see the `domain-scan`/posture branch.)
 
 ---
 
-## 7. Tests — `tests/test_<your_module>.py`
+## 7. Tests - `tests/test_<your_module>.py`
 
 Mock all subprocess/network so tests run with no tools/network. Cover:
 
@@ -232,7 +232,7 @@ Mock all subprocess/network so tests run with no tools/network. Cover:
 python -m pytest tests/ -q     # the whole suite must stay green
 ```
 
-(The suite currently has 300+ tests across ~36 files — all must continue to pass.)
+(The suite currently has 300+ tests across ~36 files - all must continue to pass.)
 
 ---
 
@@ -258,7 +258,7 @@ python -m pytest tests/ -q     # the whole suite must stay green
 
 ---
 
-## Appendix — adding a check to an *existing* module
+## Appendix - adding a check to an *existing* module
 
 When the finding belongs inside an existing module (a new CVE for Grafana, a new sensitive path for `web_checks`, a new record type in `dns_recon`):
 

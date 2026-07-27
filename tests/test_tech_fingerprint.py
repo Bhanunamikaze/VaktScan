@@ -152,7 +152,7 @@ class TechFingerprintTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(_by_version(infos, "2.4.7"), "apache version not parsed")
         self.assertTrue(_by_version(infos, "5.6.40"), "php version not parsed")
 
-        # EOL flagging: exactly one EOL finding — PHP 5.6.40 — NOT Apache 2.4.7.
+        # EOL flagging: exactly one EOL finding - PHP 5.6.40 - NOT Apache 2.4.7.
         eols = _eol_findings(findings)
         self.assertEqual(len(eols), 1, f"expected 1 EOL finding, got {eols}")
         php_eol = eols[0]
@@ -302,7 +302,7 @@ class TechFingerprintTests(unittest.IsolatedAsyncioTestCase):
             if "endoflife.date" in url:
                 queried.append(url)
                 return FakeResponse(200, json_data=WORDPRESS_CYCLES)
-            # WordPress detected via marker only — NO version available.
+            # WordPress detected via marker only - NO version available.
             return FakeResponse(
                 200, headers={},
                 text="<html><body><img src='/wp-content/x.png'></body></html>",

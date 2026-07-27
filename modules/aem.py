@@ -528,13 +528,13 @@ DISPATCHER_BYPASS_PATHS = [
     "/system\\console",
     "/crx\\de\\index.jsp",
     # ── Semicolon Bypass (CVE-2016-0957 variants) ──────────────────────────────
-    # Sling parses URLs differently from Apache — semicolons can fool Dispatcher regex
+    # Sling parses URLs differently from Apache - semicolons can fool Dispatcher regex
     "/content/sitename/..;/..;/..;/crx/de/index.jsp",
     "/system/console.configMgr/..;/..;/",
     "/crx/de/index.jsp;%0a",
     "/crx/de/index.jsp;.html",
     # ── Extension Fuzzing ──────────────────────────────────────────────────────
-    # Dispatcher often passes .html/.css/.ico — Sling resolves the real path first
+    # Dispatcher often passes .html/.css/.ico - Sling resolves the real path first
     "/system/console.css",
     "/system/console.ico",
     "/crx/packmgr/index.jsp.html",
@@ -583,7 +583,7 @@ ANONYMOUS_PII_KEYS = [
 # Common patterns for unauthenticated JCR/content-serving endpoints
 # These are paths that custom AEM servlets or BFF layers often expose
 JCR_PROBE_PATHS = [
-    # Standard Sling GET servlet — appending .json to any JCR path returns raw node data
+    # Standard Sling GET servlet - appending .json to any JCR path returns raw node data
     "/content.json",
     "/content/dam.json",
     "/content/we-retail.json",
@@ -596,7 +596,7 @@ JCR_PROBE_PATHS = [
     "/home.json",
     "/home/users.json",
     "/home/groups.json",
-    # Infinity selectors — dump entire subtree recursively
+    # Infinity selectors - dump entire subtree recursively
     "/content.infinity.json",
     "/content/dam.infinity.json",
     "/etc.infinity.json",
@@ -607,7 +607,7 @@ JCR_PROBE_PATHS = [
     "/content/dam.1.json",
     "/content/dam.2.json",
     # Common BFF / headless API proxy patterns
-    # These proxy AEM JCR paths behind a custom route — same leak, different URL shape
+    # These proxy AEM JCR paths behind a custom route - same leak, different URL shape
     "/api/content.json",
     "/api/jcr/content.json",
     "/getContent/content",
@@ -1030,7 +1030,7 @@ async def check_default_credentials(target_url):
             pass
 
     # ── HTTP Basic Auth bypass ─────────────────────────────────────────────────────
-    # OSGi console and WebDAV accept Basic Auth directly — bypasses the login form flow
+    # OSGi console and WebDAV accept Basic Auth directly - bypasses the login form flow
     basic_auth_targets = [
         "/system/console",
         "/system/console/bundles",
@@ -1088,7 +1088,7 @@ async def check_sensitive_paths(target_url):
                 ):
                     return path
             # ── Follow redirects and verify the FINAL destination ─────────
-            # A bare 301/302 is not proof — Cloudflare/Dispatcher often
+            # A bare 301/302 is not proof - Cloudflare/Dispatcher often
             # strips .html or adds trailing slashes.  We must confirm the
             # final page is actually AEM admin content, not a 404 soft page.
             if r.status_code in (301, 302):
@@ -1334,7 +1334,7 @@ async def check_log4shell(target_url, version_info=None):
     """
     Probe for Log4Shell (CVE-2021-44228).
     Only fires when version is unknown or in the affected range (AEM 6.5 <= 6.5.10).
-    Cannot confirm without an OAST/callback server — reports as POTENTIAL only.
+    Cannot confirm without an OAST/callback server - reports as POTENTIAL only.
     """
     # ── Version gate: skip if we know the version is patched ─────────────
     if version_info:
@@ -1360,7 +1360,7 @@ async def check_log4shell(target_url, version_info=None):
         "X-Api-Version": jndi_payload,
         "Accept-Language": jndi_payload,
     }
-    # Test multiple endpoints — Log4j may log different paths differently
+    # Test multiple endpoints - Log4j may log different paths differently
     test_paths = [
         "/",
         "/content.json",
@@ -1562,7 +1562,7 @@ async def check_information_disclosure(target_url, version_info, extra_probe_url
                     "status": "VULNERABLE",
                     "vulnerability": "AEM Geometrixx Sample Content Exposed",
                     "target": f"{target_url}/content/geometrixx/en/toolbar.html",
-                    "details": "Default Geometrixx demo content is present. Known XSS and info-disclosure vector — must be removed from production.",
+                    "details": "Default Geometrixx demo content is present. Known XSS and info-disclosure vector - must be removed from production.",
                 })
     except Exception:
         pass
@@ -1597,7 +1597,7 @@ async def check_jcr_exposure(target_url, extra_probe_urls=None):
 
     Finding: if the response is JSON and contains any JCR fingerprint key
     (jcr:primaryType, sling:resourceType, cq:*, dam:*, etc.) the node is
-    being served unauthenticated — this is always a misconfiguration.
+    being served unauthenticated - this is always a misconfiguration.
     """
     vulns = []
     exposed_paths = []
@@ -1643,14 +1643,14 @@ async def check_jcr_exposure(target_url, extra_probe_urls=None):
             else:
                 jcr_payload_urls.append(f"{target_url}{p}")
 
-        # Group into one finding — list paths and the JCR keys that proved it
+        # Group into one finding - list paths and the JCR keys that proved it
         path_summary = ', '.join(
             f"{p} ({', '.join(keys)})" for p, keys, _ in exposed_paths[:6]
         )
         extra = f" (+ {len(exposed_paths) - 6} more)" if len(exposed_paths) > 6 else ""
         vulns.append({
             "status": "VULNERABLE",
-            "vulnerability": "AEM JCR Node Data Exposure — Unauthenticated Content Servlet",
+            "vulnerability": "AEM JCR Node Data Exposure - Unauthenticated Content Servlet",
             "target": target_url,
             "payload_url": " | ".join(jcr_payload_urls),
             "details": (
@@ -1666,7 +1666,7 @@ async def check_jcr_exposure(target_url, extra_probe_urls=None):
             ),
         })
 
-        # Also flag if config/feature-flag nodes were specifically hit — higher severity
+        # Also flag if config/feature-flag nodes were specifically hit - higher severity
         config_hits = [
             p for p, _, _ in exposed_paths
             if any(kw in p for kw in ['config', 'feature', 'flag', 'secret', 'logging', 'storefront', 'app-'])
@@ -1715,7 +1715,7 @@ async def check_jcr_exposure(target_url, extra_probe_urls=None):
 async def check_sling_post_servlet(target_url):
     """
     Test for unauthenticated write access via the Sling POST Servlet.
-    AEM exposes the Sling POST Servlet on every JCR path — if anonymous users
+    AEM exposes the Sling POST Servlet on every JCR path - if anonymous users
     have write permissions, an attacker can create/modify/delete content nodes.
     """
     vulns = []
@@ -1733,11 +1733,11 @@ async def check_sling_post_servlet(target_url):
             if r.status_code in (200, 201):
                 vulns.append({
                     "status": "VULNERABLE",
-                    "vulnerability": "AEM Sling POST Servlet — Unauthenticated Node Creation",
+                    "vulnerability": "AEM Sling POST Servlet - Unauthenticated Node Creation",
                     "target": f"{target_url}{test_node}",
                     "details": (
                         f"Anonymous POST to {test_node} returned HTTP {r.status_code}. "
-                        "Arbitrary JCR nodes can be created without authentication — "
+                        "Arbitrary JCR nodes can be created without authentication - "
                         "enables stored XSS, content defacement, and privilege escalation."
                     ),
                 })
@@ -1749,7 +1749,7 @@ async def check_sling_post_servlet(target_url):
     except Exception:
         pass
 
-    # 2. Asset deletion test (non-destructive check — just test if the endpoint is reachable)
+    # 2. Asset deletion test (non-destructive check - just test if the endpoint is reachable)
     try:
         async with httpx.AsyncClient(verify=False, timeout=10) as client:
             r = await client.post(
@@ -1761,7 +1761,7 @@ async def check_sling_post_servlet(target_url):
             if r.status_code in (200, 201):
                 vulns.append({
                     "status": "VULNERABLE",
-                    "vulnerability": "AEM Sling POST Servlet — Unauthenticated Asset Deletion",
+                    "vulnerability": "AEM Sling POST Servlet - Unauthenticated Asset Deletion",
                     "target": f"{target_url}/content/dam/",
                     "details": "Unauthenticated POST with :operation=delete succeeded. DAM assets can be deleted by anonymous users.",
                 })
@@ -1780,7 +1780,7 @@ async def check_webdav_wsdl_graphql(target_url):
     """
     vulns = []
 
-    # WebDAV paths — expose the JCR repository over HTTP/WebDAV
+    # WebDAV paths - expose the JCR repository over HTTP/WebDAV
     webdav_paths = [
         "/crx/repository/workspaces/default",
         "/crx/server/crx.default/jcr:root/",
@@ -1799,7 +1799,7 @@ async def check_webdav_wsdl_graphql(target_url):
                         "target": f"{target_url}{path}",
                         "details": (
                             f"WebDAV PROPFIND on {path} returned HTTP {r.status_code}. "
-                            "The JCR repository is accessible via WebDAV without authentication — "
+                            "The JCR repository is accessible via WebDAV without authentication - "
                             "allows direct read/write of repository content using standard WebDAV clients."
                         ),
                     })
@@ -1868,7 +1868,7 @@ async def check_webdav_wsdl_graphql(target_url):
                     if "data" in body or "__schema" in body or "types" in body:
                         vulns.append({
                             "status": "VULNERABLE",
-                            "vulnerability": "AEM GraphQL Endpoint Exposed — Schema Introspection Enabled",
+                            "vulnerability": "AEM GraphQL Endpoint Exposed - Schema Introspection Enabled",
                             "target": f"{target_url}{path}",
                             "details": (
                                 f"GraphQL endpoint {path} is publicly accessible and responds to introspection queries. "
@@ -1919,11 +1919,11 @@ async def check_groovy_console_rce(target_url):
                     elif r2.status_code == 200:
                         return {
                             "status": "VULNERABLE",
-                            "vulnerability": "AEM Groovy Console Accessible — RCE Possible",
+                            "vulnerability": "AEM Groovy Console Accessible - RCE Possible",
                             "target": exec_url,
                             "details": (
                                 "Groovy Console execution endpoint responded to POST requests. "
-                                "Code execution likely possible — manual confirmation recommended. "
+                                "Code execution likely possible - manual confirmation recommended. "
                                 "Remove the Groovy Console package from production immediately."
                             ),
                         }
@@ -1950,7 +1950,7 @@ async def check_static_asset_fingerprint(target_url):
     """
     Fingerprint AEM version via static asset hashing.
     Static assets (CSS/JS/favicons) are served by Dispatcher and change
-    between AEM service packs — allows version detection even when all
+    between AEM service packs - allows version detection even when all
     admin endpoints are blocked.
     """
     vulns = []
@@ -2011,7 +2011,7 @@ async def check_static_asset_fingerprint(target_url):
 async def check_header_manipulation_bypass(target_url):
     """
     Test if Dispatcher passes internal headers that grant access to
-    restricted endpoints — X-Forwarded-For spoofing, X-Original-URL
+    restricted endpoints - X-Forwarded-For spoofing, X-Original-URL
     rewriting, and similar header-based bypass techniques.
     """
     bypass_headers_tests = [
@@ -2019,7 +2019,7 @@ async def check_header_manipulation_bypass(target_url):
         {"X-Forwarded-For": "127.0.0.1"},
         {"X-Forwarded-For": "10.0.0.1"},
         {"X-Forwarded-Host": "localhost"},
-        # URL rewrite headers — if Dispatcher or a reverse proxy trusts these,
+        # URL rewrite headers - if Dispatcher or a reverse proxy trusts these,
         # the path in the header overrides the request path
         {"X-Original-URL": "/system/console"},
         {"X-Rewrite-URL": "/system/console"},
@@ -2157,7 +2157,7 @@ async def run_scans(target_obj, port):
         # instead of the base domain URL for enrichment.
         payload = vuln.get('payload_url', '')
         if payload and payload != 'N/A':
-            # payload_url may be pipe-delimited — use the first one
+            # payload_url may be pipe-delimited - use the first one
             enrich_url = payload.split(' | ')[0].strip()
         else:
             enrich_url = vuln.get('url') or vuln.get('target', target_url)

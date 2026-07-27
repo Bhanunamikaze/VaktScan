@@ -323,7 +323,7 @@ def sync_nuclei_templates(force=False):
             stderr_snippet = (result.stderr or "").strip()[:200]
             print(f"\033[93m[!] Nuclei template sync failed: {stderr_snippet}\033[0m")
     except FileNotFoundError:
-        print("\033[93m[!] nuclei binary not found — cannot sync templates.\033[0m")
+        print("\033[93m[!] nuclei binary not found - cannot sync templates.\033[0m")
     except subprocess.TimeoutExpired:
         print("\033[93m[!] Nuclei template sync timed out after 60 seconds.\033[0m")
     except Exception as e:

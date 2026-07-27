@@ -29,7 +29,7 @@ def _f(**kwargs):
 class DedupAndValidateTests(unittest.TestCase):
 
     def test_vague_row_dropped(self):
-        # Missing details — vague → dropped (§11 rule 7).
+        # Missing details - vague → dropped (§11 rule 7).
         findings = [_f(details='')]
         self.assertEqual(cpanel._dedup_and_validate(findings), [])
 

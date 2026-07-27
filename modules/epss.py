@@ -91,7 +91,7 @@ async def enrich_findings_with_epss(findings: list) -> list:
         if epss_val >= 0.7:
             f['details'] = (
                 f.get('details', '') +
-                f' | EPSS: {epss_val:.1%} ({percentile:.1%} percentile) — HIGH exploitation probability'
+                f' | EPSS: {epss_val:.1%} ({percentile:.1%} percentile) - HIGH exploitation probability'
             )
             # Upgrade status to CRITICAL if not already
             if f.get('status') not in ('CRITICAL',):

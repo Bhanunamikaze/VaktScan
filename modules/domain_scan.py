@@ -41,7 +41,7 @@ DEFAULT_PAGE_SIGNATURES = {
 
 # Subdomain-takeover fingerprints. Each entry is (vendor, body_marker,
 # trigger_status_codes, severity). A finding fires when a 404/200 response
-# body contains the marker — the dangling DNS still resolves but the
+# body contains the marker - the dangling DNS still resolves but the
 # back-end service has been deprovisioned, so an attacker who re-claims the
 # vendor slot inherits the subdomain.
 #
@@ -221,7 +221,7 @@ class DomainScanner:
                 (
                     f"HTTP {status_code} response body matches a known {vendor} takeover fingerprint "
                     f"('{marker[:80]}'). DNS still resolves to {vendor} but the back-end service is "
-                    "deprovisioned — re-registering the slot lets an attacker serve content on this hostname."
+                    "deprovisioned - re-registering the slot lets an attacker serve content on this hostname."
                 ),
             )
         return None
@@ -411,12 +411,12 @@ class DomainScanner:
         """
         Orchestrate all domain scan checks.
         NOTE: Callers are responsible for calling save_classification_csv() if they
-        want the classification CSV — this method only prints the summary to avoid
+        want the classification CSV - this method only prints the summary to avoid
         double-writing when integrated into run_recon_followups().
         """
         print(f"{Colors.BRIGHT_CYAN}[*] Starting domain checks on {len(domains)} targets...{Colors.RESET}")
 
-        # 1. Classify (no CSV here — caller does it once before calling run())
+        # 1. Classify (no CSV here - caller does it once before calling run())
         classified = self.classify_domains(domains)
         print(f"{Colors.GRAY}[*] Domain mix: {len(classified['INTERNAL'])} INTERNAL, {len(classified['EXTERNAL'])} EXTERNAL{Colors.RESET}")
 

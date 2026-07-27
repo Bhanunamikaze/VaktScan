@@ -1,5 +1,5 @@
 """
-modules/notify.py — Alert delivery for NEW findings (continuous monitoring).
+modules/notify.py - Alert delivery for NEW findings (continuous monitoring).
 
 Continuous monitoring (inventory delta in ``modules.inventory`` +
 new-certificate detection in ``modules.ct_monitor``) discovers NEW findings but
@@ -11,7 +11,7 @@ fans those NEW findings out to a human via one or more channels:
     never blocks the event loop).
 
 Every channel is configured purely through environment variables and is used
-**only if configured** — otherwise it is skipped silently. Alerts are only
+**only if configured** - otherwise it is skipped silently. Alerts are only
 delivered when there are NEW findings at or above a configurable minimum
 severity (default: HIGH / CRITICAL / VULNERABLE).
 
@@ -163,7 +163,7 @@ def _build_text(alertable: list[dict], summary: dict, scan_label: str, top_n: in
     lines: list[str] = []
     header = "VaktScan alert"
     if scan_label:
-        header += f" — {scan_label}"
+        header += f" - {scan_label}"
     lines.append(header)
     lines.append(f"{len(alertable)} new finding(s) at/above alert threshold")
 
@@ -175,7 +175,7 @@ def _build_text(alertable: list[dict], summary: dict, scan_label: str, top_n: in
     for f in _top_findings(alertable, top_n):
         sev = str(f.get("severity", "") or "N/A").upper()
         vuln = str(f.get("vulnerability", "") or "N/A")
-        lines.append(f"[{sev}] {vuln} — {_target_of(f)}")
+        lines.append(f"[{sev}] {vuln} - {_target_of(f)}")
 
     remaining = len(alertable) - min(len(alertable), top_n)
     if remaining > 0:
@@ -214,7 +214,7 @@ def _payload_for(name: str, text: str, alertable: list[dict],
 def _subject(alertable: list[dict], scan_label: str) -> str:
     base = f"[VaktScan] {len(alertable)} new finding(s)"
     if scan_label:
-        base += f" — {scan_label}"
+        base += f" - {scan_label}"
     return base
 
 
@@ -234,10 +234,10 @@ async def _deliver_webhooks(webhooks, alertable, summary, scan_label, text, top_
                     resp = await client.post(url, json=payload)
                     resp.raise_for_status()
                     report["channels_sent"].append(name)
-                except Exception as exc:  # noqa: BLE001 — never propagate
+                except Exception as exc:  # noqa: BLE001 - never propagate
                     _log.warning("notify: %s webhook delivery failed: %s", name, exc)
                     report["errors"].append(f"{name}: {exc}")
-    except Exception as exc:  # noqa: BLE001 — client construction failure
+    except Exception as exc:  # noqa: BLE001 - client construction failure
         _log.warning("notify: webhook client error: %s", exc)
         report["errors"].append(f"webhook: {exc}")
 
@@ -245,7 +245,7 @@ async def _deliver_webhooks(webhooks, alertable, summary, scan_label, text, top_
 # ─── Delivery: email ────────────────────────────────────────────────────────────
 
 def _send_email_blocking(subject: str, body: str) -> None:
-    """Synchronous SMTP send — invoked inside a thread executor."""
+    """Synchronous SMTP send - invoked inside a thread executor."""
     host = _env("SMTP_HOST")
     try:
         port = int(_env("SMTP_PORT") or "587")
@@ -271,7 +271,7 @@ def _send_email_blocking(subject: str, body: str) -> None:
         if port != 465:
             try:
                 server.starttls()
-            except Exception:  # noqa: BLE001 — server may not offer STARTTLS
+            except Exception:  # noqa: BLE001 - server may not offer STARTTLS
                 pass
         if user:
             server.login(user, password)
@@ -279,7 +279,7 @@ def _send_email_blocking(subject: str, body: str) -> None:
     finally:
         try:
             server.quit()
-        except Exception:  # noqa: BLE001 — best-effort teardown
+        except Exception:  # noqa: BLE001 - best-effort teardown
             pass
 
 
@@ -289,7 +289,7 @@ async def _deliver_email(subject: str, body: str, report: dict) -> None:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _send_email_blocking, subject, body)
         report["channels_sent"].append("email")
-    except Exception as exc:  # noqa: BLE001 — never propagate
+    except Exception as exc:  # noqa: BLE001 - never propagate
         _log.warning("notify: email delivery failed: %s", exc)
         report["errors"].append(f"email: {exc}")
 
@@ -324,7 +324,7 @@ async def send_alerts(new_findings: list[dict], summary: dict, scan_label: str =
         alertable = [f for f in findings if _is_alertable(f, min_sev)]
         if not alertable:
             report["skipped"].append(
-                f"no NEW findings at/above {min_sev} (or VULNERABLE) — "
+                f"no NEW findings at/above {min_sev} (or VULNERABLE) - "
                 f"{len(findings)} new total"
             )
             return report
@@ -350,7 +350,7 @@ async def send_alerts(new_findings: list[dict], summary: dict, scan_label: str =
         else:
             report["skipped"].append("email: not configured")
 
-    except Exception as exc:  # noqa: BLE001 — send_alerts must never raise
+    except Exception as exc:  # noqa: BLE001 - send_alerts must never raise
         _log.warning("notify: unexpected error while sending alerts: %s", exc)
         report["errors"].append(f"notify: {exc}")
 

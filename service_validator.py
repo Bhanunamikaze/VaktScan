@@ -428,7 +428,7 @@ async def validate_jenkins(scan_address, port, timeout=5):
 
 async def validate_service_recon(scan_address, port, timeout=3):
     """
-    service_recon handles its own per-port dispatch logic — any open port
+    service_recon handles its own per-port dispatch logic - any open port
     in its list is worth running against. Skip the TCP probe and just
     return True so run_scans is always invoked.
     """

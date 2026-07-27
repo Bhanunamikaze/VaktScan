@@ -123,7 +123,7 @@ async def lookup_cves(
                 findings.append({
                     "status":          status,
                     "severity":        severity,
-                    "vulnerability":   f"{cve_id} — {product} {version}",
+                    "vulnerability":   f"{cve_id} - {product} {version}",
                     "target":          target,
                     "resolved_ip":     resolved_ip,
                     "port":            str(port),
@@ -139,7 +139,7 @@ async def lookup_cves(
                 })
 
     except Exception as e:
-        # NVD API is best-effort — never crash the scan if it's unreachable
+        # NVD API is best-effort - never crash the scan if it's unreachable
         print(f"  [!] NVD lookup failed for {product} {version}: {e}")
 
     return findings

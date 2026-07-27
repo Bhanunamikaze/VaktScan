@@ -78,7 +78,7 @@ def main():
 
     # 2. TSR archive non-empty.
     if not cpanel.CPANEL_SECURITY_BULLETINS:
-        failures.append("[tsr] CPANEL_SECURITY_BULLETINS is empty — cpanel_tsr.json failed to load")
+        failures.append("[tsr] CPANEL_SECURITY_BULLETINS is empty - cpanel_tsr.json failed to load")
 
     # 3. Must-call-out CVEs in bundled table.
     all_bundled = set()
@@ -152,7 +152,7 @@ def main():
         for fl in failures:
             print(f"  - {fl}")
         sys.exit(1)
-    print("OK — cPanel + domain-scan + DNS coverage verified.")
+    print("OK - cPanel + domain-scan + DNS coverage verified.")
     print(f"  TSR bulletins:        {len(cpanel.CPANEL_SECURITY_BULLETINS)}")
     print(f"  Bundled components:   {len(cpanel.BUNDLED_COMPONENT_CVES)}")
     print(f"  Bundled CVEs:         {len(all_bundled)}")

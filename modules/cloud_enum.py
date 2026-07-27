@@ -6,7 +6,7 @@ Permutation-based bucket/storage enumeration for:
   - Azure Blob Storage (blob.core.windows.net)
   - GCP Google Cloud Storage (storage.googleapis.com)
 
-No API keys required — pure public HTTP probes.
+No API keys required - pure public HTTP probes.
 """
 
 import asyncio
@@ -527,7 +527,7 @@ async def _detect_cloudfront(client: httpx.AsyncClient, domain: str) -> list[dic
 
     findings.append(_finding(
         status, severity,
-        f'CloudFront Distribution Detected — {domain}',
+        f'CloudFront Distribution Detected - {domain}',
         ' '.join(details_parts),
         url=url,
     ))
@@ -541,7 +541,7 @@ async def enumerate_cloud_assets(domain: str, concurrency: int = 50) -> list[dic
     Enumerate publicly accessible cloud storage assets for *domain*.
 
     Probes AWS S3, Azure Blob Storage, GCP GCS, and CloudFront.
-    No API keys required — pure public HTTP/DNS probes.
+    No API keys required - pure public HTTP/DNS probes.
 
     Returns a list of finding dicts in VaktScan canonical format.
     """

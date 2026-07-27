@@ -1,5 +1,5 @@
 """
-VaktScan Jenkins Module — ported and improved from JenkinsVulnFinder
+VaktScan Jenkins Module - ported and improved from JenkinsVulnFinder
 (https://github.com/Bhanunamikaze/JenkinsVulnFinder)
 
 Checks: anonymous access, script console RCE, stored credentials, plugin enum,
@@ -215,7 +215,7 @@ async def check_unauthenticated_endpoints(client, origin):
 
 async def check_cve_2024_23897(client, origin):
     """
-    CVE-2024-23897 — Jenkins CLI arbitrary file read.
+    CVE-2024-23897 - Jenkins CLI arbitrary file read.
     Detects by checking X-Jenkins / X-Instance-Identity headers on /cli endpoint.
     """
     for path in ('/cli', '/jenkins/cli'):
@@ -307,7 +307,7 @@ async def run_scans(target_obj, port, **_):
         if cli_vuln:
             findings.append(_finding(
                 'VULNERABLE', 'CRITICAL',
-                'CVE-2024-23897 — Jenkins CLI Arbitrary File Read',
+                'CVE-2024-23897 - Jenkins CLI Arbitrary File Read',
                 f'Jenkins CLI endpoint reachable at {origin}{cli_path}. '
                 f'CVE-2024-23897 allows unauthenticated arbitrary file read via the Jenkins CLI '
                 f'remoting protocol (affects Jenkins < 2.442, LTS < 2.426.3).',

@@ -132,7 +132,7 @@ async def check_port_with_progress(
     if connect_host.startswith(('http://', 'https://')):
         import urllib.parse
         connect_host = urllib.parse.urlparse(connect_host).hostname or connect_host
-    # Strip brackets from IPv6 addresses — asyncio.open_connection handles bare IPv6 without brackets
+    # Strip brackets from IPv6 addresses - asyncio.open_connection handles bare IPv6 without brackets
     connect_host = connect_host.strip('[]')
 
     async with semaphore:

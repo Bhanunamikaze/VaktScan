@@ -1,5 +1,5 @@
 """
-tech_fingerprint.py — Technology + version fingerprinting for VaktScan.
+tech_fingerprint.py - Technology + version fingerprinting for VaktScan.
 
 Entry point:
     async def fingerprint_tech(
@@ -16,13 +16,13 @@ Detection strategy
 ------------------
 1. If ``webanalyze`` (the Wappalyzer engine) is present on ``PATH`` (or pointed at
    by ``VAKT_WEBANALYZE_BIN``) it is invoked per-URL with ``-output json`` and its
-   results are parsed. No auto-install — if it is missing we simply fall back.
+   results are parsed. No auto-install - if it is missing we simply fall back.
 2. Otherwise (or if webanalyze yields nothing for a URL) a lightweight built-in
    detector inspects the ``Server`` / ``X-Powered-By`` response headers plus a
    couple of common HTML markers (``<meta name="generator">``, WordPress paths)
    via httpx. It never raises.
 
-EOL cross-reference (false-positive disciplined — see TODO.md §1)
+EOL cross-reference (false-positive disciplined - see TODO.md §1)
 ----------------------------------------------------------------
 A "Software End-of-Life" (VULNERABLE) finding is emitted ONLY when ALL hold:
   1. a concrete PRODUCT *and* a specific VERSION were detected (never guessed
@@ -33,24 +33,24 @@ A "Software End-of-Life" (VULNERABLE) finding is emitted ONLY when ALL hold:
   4. that cycle carries an actual ``eol`` DATE that is in the past.
 If any condition fails (unknown product, partial/absent version, no matching
 cycle, boolean/undated ``eol``, or a future date) at most an INFO tech-detection
-finding is produced — never a VULNERABLE/EOL one. Network failure simply skips
-the EOL step and keeps the plain fingerprint — never a crash.
+finding is produced - never a VULNERABLE/EOL one. Network failure simply skips
+the EOL step and keeps the plain fingerprint - never a crash.
 
 Relationship to modules/web_checks.py
 -------------------------------------
 ``web_checks.py`` already carries a *heuristic* EOL check (``_check_eol_version``
-— hardcoded thresholds for php/nginx/apache/openssl, read from the ``Server`` /
+- hardcoded thresholds for php/nginx/apache/openssl, read from the ``Server`` /
 ``X-Powered-By`` headers). It does NOT query endoflife.date. This module reuses
 that exact product vocabulary and the same header sources, but replaces the
 hardcoded thresholds with live endoflife.date cycle data. To avoid double-report
 / conflict the two are meant to be reconciled at wiring time (dedup by
-(target, product) or retire the heuristic check) — see the wiring note returned
+(target, product) or retire the heuristic check) - see the wiring note returned
 by this task.
 
 Findings emitted (canonical schema, see modules/schema.py)
 ---------------------------------------------------------
-* INFO  — "Technology Detected: <name> <version>"
-* MEDIUM/HIGH — "Software End-of-Life: <name> <version>" (includes the EOL date)
+* INFO  - "Technology Detected: <name> <version>"
+* MEDIUM/HIGH - "Software End-of-Life: <name> <version>" (includes the EOL date)
 """
 
 from __future__ import annotations
@@ -362,7 +362,7 @@ def _eol_status(cycle: dict, today: datetime.date) -> tuple[bool, str | None]:
     False-positive prevention: an EOL finding is only warranted when the cycle
     carries a CONCRETE end-of-life *date* that is in the past. A boolean ``eol``
     (true/false), a missing value, an unparseable value, or a future date is NOT
-    treated as EOL — at most an INFO tech-detection finding is emitted for those.
+    treated as EOL - at most an INFO tech-detection finding is emitted for those.
     This guarantees every EOL finding can cite an actual date.
     """
     eol = cycle.get("eol")

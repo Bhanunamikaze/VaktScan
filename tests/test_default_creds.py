@@ -1,5 +1,5 @@
 """
-Tests for modules/default_creds.py — the default-credential confirmation
+Tests for modules/default_creds.py - the default-credential confirmation
 module. All HTTP is mocked; nothing touches the network.
 
 The suite enforces the false-positive discipline required of this module:

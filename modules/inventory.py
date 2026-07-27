@@ -1,5 +1,5 @@
 """
-modules/inventory.py — SQLite-backed persistent asset inventory.
+modules/inventory.py - SQLite-backed persistent asset inventory.
 
 Enables delta reports (new vs resolved findings) across scan runs.
 Uses only Python stdlib: sqlite3, json, os, time, hashlib.
@@ -181,7 +181,7 @@ def save_findings(run_id: int, findings: list) -> dict:
                 )
                 new_findings.append(finding)
             else:
-                # Seen before — update run_id, last_seen, clear resolved_at
+                # Seen before - update run_id, last_seen, clear resolved_at
                 conn.execute(
                     """
                     UPDATE findings
