@@ -14,6 +14,8 @@ Every external tool it drives is **optional**: if a binary is missing, that stag
 - **Subdomain enumeration** — amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys, crt.sh, plus ffuf VHost fuzzing.
 - **Passive recon in parallel** — DNS recon, cloud-asset enumeration, and certificate-transparency monitoring run concurrently per domain, alongside Google dorking.
 - **DNS hygiene (on by default)** — wildcard-filters enumerated hosts (puredns/massdns) to drop catch-all false positives; optional permutation expansion (alterx/dnsgen).
+- **Scope control** — `--exclude` / `--include-only` (glob or `re:` regex, inline or from a file) plus `--company-only`, which resolves every subdomain, maps IPs, and scans **only the company's own assets** — dropping customer sites that crowd a shared hosting IP (validated on a real 22,413-subdomain website-builder domain: **99% reduction**, 22,259 customer sites excluded, ~154 company assets kept).
+- **DNS-level subdomain takeover (on by default)** — flags dangling CNAMEs (`CNAME → NXDOMAIN`, double-checked A+AAAA) across all discovered subdomains, catching takeovers that serve no HTTP response and so are invisible to the HTTP-based signatures.
 - **Web analysis** — httpx alive-probing then dirsearch, nuclei, `web_checks` (security headers, exposed `.git`/`.env`, CORS, cookie flags, WAF detection, GraphQL/Swagger exposure, EOL software), and a domain scanner (internal/external classification, 62 subdomain-takeover signatures, CORS, header anomalies).
 - **Archived-URL weaponization** — gau + waybackurls harvest, dedup, high-signal filter, live re-probe, and archived-JS secret scan.
 - **JavaScript analysis** — hardcoded secrets, source maps, internal IPs, endpoint extraction and probing.
@@ -55,7 +57,7 @@ python scripts/setup_recon_tools.py --install --tools amass httpx nuclei
 
 ```bash
 # Full scan of a single domain (subdomain enum + all modules)
-python main.py scan example.com
+python main.py scan steinzsecurity.com
 
 # Scan an IP or CIDR (skips subdomain enum / passive recon, goes straight to port scan)
 python main.py scan 192.168.1.0/24
@@ -64,7 +66,7 @@ python main.py scan 192.168.1.0/24
 python main.py scan targets.txt
 
 # Skip subdomain enumeration for a domain target
-python main.py scan example.com --no-subdomain-enum
+python main.py scan steinzsecurity.com --no-subdomain-enum
 
 # Resume an interrupted scan
 python main.py scan targets.txt --resume
@@ -73,7 +75,36 @@ python main.py scan targets.txt --resume
 python main.py scan targets.txt -c 500 --nmap --format all
 
 # Subdomain enum only, then chain into probing
-python main.py enum example.com --probe
+python main.py enum steinzsecurity.com --probe
+```
+
+### Scope control & advanced examples
+
+```bash
+# Company assets only — drop customer sites on shared hosting (raise the shared-IP
+# cutoff to 15), run Nmap CVE scripts on open ports, and skip any *blog* hosts
+python main.py scan steinzsecurity.com --nmap --company-only --shared-ip-threshold 15 --exclude "*blog*.steinzsecurity.com"
+
+# Exclude multiple customer/partner patterns (repeatable), glob or regex
+python main.py scan steinzsecurity.com --exclude "customer*.steinzsecurity.com" --exclude "re:^partner-"
+
+# Exclude patterns from a file (one per line, # comments allowed)
+python main.py scan steinzsecurity.com --exclude-file skip_customers.txt
+
+# Allowlist: scan ONLY the hosts you care about
+python main.py scan steinzsecurity.com --include-only "*.corp.steinzsecurity.com"
+
+# Company-only triage + screenshots + tech/EOL fingerprint, with JSON + SARIF output
+python main.py scan steinzsecurity.com --company-only --screenshots --tech --format all
+
+# Everything on: horizontal expansion, params, favicon/JARM pivots, default-cred checks
+python main.py scan steinzsecurity.com --company-only --horizontal --params --favicon --default-creds
+
+# Lightweight domain-posture triage only (takeover / CORS / headers — no heavy scanning)
+python main.py scan steinzsecurity.com --posture
+
+# Use an existing subdomain list, company-only, alert on new findings (env-configured)
+python main.py scan steinzsecurity.com --sub-domains subs.txt --company-only
 ```
 
 
@@ -94,7 +125,8 @@ flowchart TD
         DORK["Google Dork<br/>(--no-dork to skip)"]
     end
 
-    REC --> HYG["DNS hygiene · wildcard filter<br/>(--dns-permute to expand)"]
+    REC --> SCOPE["Scope filter (in order)<br/>--exclude → --include-only → --company-only<br/>(shared-hosting customer sites dropped)"]
+    SCOPE --> HYG["DNS hygiene · wildcard filter<br/>+ dangling-CNAME takeover<br/>(--dns-permute to expand)"]
     HYG --> HZ["Horizontal expand (--horizontal)<br/>asnmap · reverse-DNS · amass intel"]
     HZ --> PROBE["Web-port scan -> httpx probe -> alive URLs"]
 
@@ -204,6 +236,13 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `--default-creds` | off | Confirmed default-credential checks (Tomcat/Jenkins/Grafana/Basic-Auth) |
 | `--no-dns-hygiene` | on | Disable default DNS wildcard-filtering of enumerated subdomains |
 | `--dns-permute` | off | Generate + resolve subdomain permutations (alterx/dnsgen) during DNS hygiene |
+| `--no-dns-takeover` | on | Disable the per-subdomain DNS-level takeover check (dangling CNAME → NXDOMAIN) |
+| `--exclude PATTERN` | — | Exclude hosts matching a glob (`customer1*.steinzsecurity.com`) or `re:` regex; repeatable. Excluded hosts are listed but never scanned |
+| `--exclude-file FILE` | — | File of `--exclude` patterns (one per line, `#` comments) |
+| `--include-only PATTERN` | — | Allowlist: scan **only** hosts matching the glob/regex; repeatable. Applied after `--exclude` |
+| `--include-only-file FILE` | — | File of `--include-only` patterns |
+| `--company-only` | off | Resolve + IP-map every subdomain, then scan **only company assets** — drop customer sites clustered on shared hosting IPs (writes `company_assets.txt` / `customer_sites.txt`) |
+| `--shared-ip-threshold N` | `10` | For `--company-only`: an IP hosting ≥ N subdomains is treated as shared hosting |
 
 ### `enum` — subdomain enumeration only
 
@@ -284,6 +323,8 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `portscan_results_*.csv` | port scan | Open ports per host |
 | `httpx_*.csv` | probing | Alive URLs: status, title, tech |
 | `domain_scan_vulns_*.csv` | `scan --posture` | Classification / takeover / CORS / header findings |
+| `company_assets.txt` / `customer_sites.txt` | `--company-only` | The company-vs-customer subdomain split |
+| `excluded_subdomains.txt` | `--exclude` | Subdomains matched by exclusion patterns (listed, not scanned) |
 | `screenshots/` | `--screenshots` | Screenshot gallery (`manifest.csv` + `index.html`) |
 
 **Asset inventory & alerting.** Findings are persisted to a SQLite inventory (`vaktscan_inventory.db`); each run prints a **delta report** ("new since last scan" vs "resolved") and an executive summary. When new findings appear, `notify.py` sends alerts via Slack, Discord, generic webhook, or email — **only if** the relevant environment variables are set; it never raises on failure. CISA KEV data is cached locally in `modules/data/cisa_kev_cache.json`.
@@ -330,8 +371,9 @@ All are optional; modules degrade gracefully when they are absent.
 | Module | Entry point | What it does |
 |---|---|---|
 | `recon` | `enum` / `scan` | Subdomain enumeration orchestrator (amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys, crt.sh, ffuf) |
-| `dns_recon` | `dns` / `scan` | SPF/DMARC/DKIM, AXFR, open recursion, DNSSEC, CAA, email-security posture |
+| `dns_recon` | `dns` / `scan` | SPF/DMARC/DKIM, AXFR, open recursion, DNSSEC, CAA, email-security posture, and per-subdomain **dangling-CNAME takeover** (CNAME → NXDOMAIN) |
 | `dns_resolve` | `scan` | DNS hygiene: wildcard filtering (puredns/massdns) + optional permutations (alterx/dnsgen) |
+| `asset_classifier` | `--company-only` | Resolves + IP-maps subdomains; splits company assets from shared-hosting customer sites (functional-name whitelist rescue) |
 | `cloud_enum` | `cloud` / `scan` | S3/Azure Blob/GCS bucket permutation + existence, CloudFront detection |
 | `ct_monitor` | `scan` | Certificate-transparency baseline + new-cert diffing per domain |
 | `google_dork` | `google-dork` / `scan` | Operator-crafted dorks via Custom Search API or Playwright/HTML fallback |
