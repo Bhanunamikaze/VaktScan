@@ -26,3 +26,7 @@ reports_test/
 .pytest_cache
 .ruff_cache
 ASM_plan.md
+
+# Local-only helpers imported from other applications (never track/push)
+runcommand.py
+logger.py
