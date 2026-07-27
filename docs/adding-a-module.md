@@ -1,612 +1,275 @@
-# Adding a Scanner Module to VaktScan
+# Adding a Module to VaktScan
 
-This guide walks through every file that must be touched when adding a new first-class scanner module (one that is dispatched by `-m <service>` and participates in the automatic port-based scan loop).
+VaktScan has **several kinds of modules**, and they don't all plug in the same way. Before writing any code, decide **which category** your module belongs to — that determines its entry-point signature, where it wires into the pipeline, and whether it runs by default or behind a flag.
 
-For lightweight service checks that piggyback on existing port discovery without their own top-level `-m` flag, see the [service_recon.py section](#4-modulesservice_reconpy--port-triggered-checks) below.
-
----
-
-## Overview of files to touch
-
-| File | Change |
-|------|--------|
-| `modules/<your_module>.py` | New file — the module itself |
-| `modules/__init__.py` | One-line import |
-| `main.py` | Two edits: import block + `SERVICE_TO_MODULE` dict |
-| `modules/service_recon.py` | Optional — if you want nmap-discovered ports to auto-invoke your checks |
-| `tests/test_<your_module>.py` | New test file |
-| `TODO.md` | Add to the relevant section for tracking |
+> This guide avoids hard line numbers (they drift). It refers to **functions and landmarks** in `main.py`: `SERVICE_TO_MODULE`, `run_recon_followups()` (the `if alive_urls:` block), `_run_parallel_passive()`, `handle_domain()`, `_enrich_and_report()`, `cmd_scan()`, and the `extra_scans` frozenset. Search for those names.
 
 ---
 
-## 1. Create `modules/<your_module>.py`
+## 0. Pick a category
 
-### Required entry point
+| Category | Runs on | Wires into | Example modules | Default / flag |
+|---|---|---|---|---|
+| **A. Port-triggered service module** | one open port | `SERVICE_TO_MODULE` + `get_service_ports()` | elastic, kibana, grafana, jenkins, cpanel, testssl, service_recon | auto when the port is open; `-m <service>` isolates |
+| **B. Alive-URL analysis module** | the alive HTTP URLs | `run_recon_followups()` → `if alive_urls:` block | web_checks, domain_scan, dirsearch, nuclei, js_paths, **archived_urls, param_discovery, favicon_jarm, tech_fingerprint, default_creds, screenshots** | some default; heavy/active ones **opt-in** via a flag (the `extra_scans` mechanism) |
+| **C. Passive recon module** | a domain | `_run_parallel_passive()` | dns_recon, cloud_enum, ct_monitor | default for domain targets |
+| **D. Pre-probe recon / expansion** | domain + enumerated subs | `handle_domain()` (before `run_recon_followups`) | horizontal_expand, dns_resolve | flag: default-on (`--no-dns-hygiene`) or opt-in (`--horizontal`) |
+| **E. Enrichment module** | the final findings list | `_enrich_and_report()` | nvd, cisa_kev, epss, passive_intel | default |
+| **F. Reporter / output** | findings → file | `reporter.py` + `_enrich_and_report()` | reporter (CSV/HTML/JSON/SARIF) | CSV+HTML always; JSON/SARIF opt-in |
 
-Every module must expose a single coroutine with this exact signature:
+Most **new** modules today are **Category B** (a check that runs over alive web URLs). Category A is the classic port-triggered service check.
+
+---
+
+## 1. The canonical finding schema (ALL categories)
+
+Every finding is a dict with the **15 canonical keys** in `modules/schema.py` (`CANONICAL_KEYS`). The modern, preferred way to build one is `normalize_finding()` — it fills any missing keys with `"N/A"` and stamps the timestamp, so you only supply what you have:
 
 ```python
-async def run_scans(target_obj, port, **_):
+from modules.schema import normalize_finding
+
+f = normalize_finding({
+    "target": host,
+    "resolved_ip": ip,
+    "port": str(port),
+    "vulnerability": "MyService Unauthenticated API Access",
+    "status": "VULNERABLE",       # CRITICAL | VULNERABLE | POTENTIAL | INFO
+    "severity": "HIGH",           # CRITICAL | HIGH | MEDIUM | LOW | INFO
+    "module": "my_module",
+    "url": f"https://{host}:{port}/api/status",
+    "details": "…",
+})
 ```
 
-`target_obj` is a dict with three keys:
+During development, assert cleanliness with `validate_finding(f)` (returns a list of violations; `[]` means good). The `server` key is forbidden — use `resolved_ip`.
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `scan_address` | `str` | The address actually connected to (IP or hostname) |
-| `display_target` | `str` | Human-readable label used in reports |
-| `resolved_ip` | `str` | Resolved IPv4/IPv6, falls back to `scan_address` |
+> **Timestamps:** if you hand-roll a helper, use `datetime.now(timezone.utc)`, never the deprecated `datetime.utcnow()`. `normalize_finding` already does this for you.
 
-`run_scans` must return `list[dict]`, where every dict contains all 15 canonical keys (see schema section below).
+### ⚠️ False-positive discipline (read this before emitting any VULNERABLE finding)
 
-### The `_finding()` helper
+A weak oracle is the #1 way to generate hundreds of false findings. **Never** emit a vulnerability/exposure finding from a *weak signal* alone (HTTP status code, a path/name match, a single spoofable header). You must validate the response **content**, and for active checks add a **negative control**:
 
-Every module defines a local `_finding()` helper that builds a schema-conformant dict. Copy this pattern:
+- Exposed-file checks (`.git`, `.env`, `.sql`, backups): require the body to actually be that artifact (`ref: refs/`, `KEY=VALUE`, SQL markers, a binary content-type) and reject HTML catch-all bodies. See `web_checks.check_sensitive_files` and `archived_urls._validate_exposure` (which also runs a per-host **soft-404 baseline** — probe a bogus path; if it 200s, the host is a catch-all and matching bodies are dropped).
+- Default-credential / auth checks: confirm access with a positive oracle a login-page 200 can't satisfy, **and** run a deliberately-wrong credential as a negative control. See `default_creds.py`.
+- EOL/version claims: require a concrete detected version mapped to a real past EOL date. See `tech_fingerprint.py`.
+- Heuristic tags (e.g. `gf` patterns): emit **INFO "candidate"**, never a confirmed vuln. See `param_discovery.py`.
+
+Your test suite **must** include a negative case proving the false positive does not fire (catch-all → no finding).
+
+### Live progress + graceful tool skipping (Categories B/C/D)
+
+If your module shells out to an external tool, detect it with `shutil.which` and **skip gracefully** when absent (print one info line, return `[]`/empty — never crash, never auto-install). For liveness on the dashboard, use `modules/progress.py`:
 
 ```python
-"""
-VaktScan <ServiceName> Module
+from modules.progress import DashboardProgress, heartbeat
 
-Checks: <brief list of what this module checks>
-"""
-
-import asyncio
-from datetime import datetime, timezone
-
-import httpx
-
-MODULE_NAME = "<ServiceName>"
-
-DEFAULT_PORTS = [<port1>, <port2>]
-
-
-def _finding(status, severity, vulnerability, details, target, resolved_ip, port,
-             url="", payload_url="", service_version="",
-             http_status="N/A", page_title="N/A", content_length="N/A"):
-    return {
-        "status": status,
-        "severity": severity,
-        "vulnerability": vulnerability,
-        "target": target,
-        "resolved_ip": resolved_ip,
-        "port": port,
-        "url": url or f"http://{target}:{port}",
-        "payload_url": payload_url or url or f"http://{target}:{port}",
-        "module": MODULE_NAME,
-        "service_version": service_version,
-        "details": details,
-        "http_status": str(http_status),
-        "page_title": page_title,
-        "content_length": str(content_length),
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    }
+prog = DashboardProgress("my_module", total=len(items), noun="hosts")
+results = await asyncio.gather(*(prog.wrap(_do(i)) for i in items), return_exceptions=True)
+# or, for one opaque long op:
+async with heartbeat("my_module", "Doing the thing"):
+    await long_running()
 ```
 
-**Timestamp note**: Use `datetime.now(timezone.utc)` rather than `datetime.utcnow()`. The `utcnow()` method is deprecated in Python 3.12 and five existing modules are already flagged for this migration. All new modules must use the timezone-aware form.
+Both no-op safely when the dashboard is inactive. See `modules/gau_runner.py` for the tool-wrap + `shutil.which` + graceful-skip pattern to copy.
 
-### Protocol detection helper
+---
 
-Most HTTP-based modules need to probe for HTTPS vs HTTP before issuing checks:
+## 2. Category A — port-triggered service module
 
-```python
-async def _detect_protocol(host, port, timeout=5):
-    for scheme in ("https", "http"):
-        try:
-            async with httpx.AsyncClient(timeout=timeout, verify=False) as c:
-                r = await c.get(f"{scheme}://{host}:{port}/")
-                if r.status_code < 600:
-                    return scheme
-        except Exception:
-            continue
-    return "http"
-```
+Runs automatically when the scanner finds a matching open port (and via `-m <service>`).
 
-### Complete minimal module
+### 2.1 Entry point
 
 ```python
-"""
-VaktScan MyService Module
-
-Checks: unauthenticated access, default credentials
-"""
-
-import asyncio
-from datetime import datetime, timezone
-
-import httpx
-
-MODULE_NAME = "MyService"
-
-DEFAULT_PORTS = [8765]
-
-
-def _finding(status, severity, vulnerability, details, target, resolved_ip, port,
-             url="", payload_url="", service_version="",
-             http_status="N/A", page_title="N/A", content_length="N/A"):
-    return {
-        "status": status,
-        "severity": severity,
-        "vulnerability": vulnerability,
-        "target": target,
-        "resolved_ip": resolved_ip,
-        "port": port,
-        "url": url or f"http://{target}:{port}",
-        "payload_url": payload_url or url or f"http://{target}:{port}",
-        "module": MODULE_NAME,
-        "service_version": service_version,
-        "details": details,
-        "http_status": str(http_status),
-        "page_title": page_title,
-        "content_length": str(content_length),
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    }
-
-
-async def _detect_protocol(host, port, timeout=5):
-    for scheme in ("https", "http"):
-        try:
-            async with httpx.AsyncClient(timeout=timeout, verify=False) as c:
-                r = await c.get(f"{scheme}://{host}:{port}/")
-                if r.status_code < 600:
-                    return scheme
-        except Exception:
-            continue
-    return "http"
-
-
-async def _check_unauthenticated_access(client, base_url, target, resolved_ip, port):
-    findings = []
-    try:
-        r = await client.get(f"{base_url}/api/status")
-        if r.status_code == 200 and "myservice" in r.text.lower():
-            findings.append(_finding(
-                status="VULNERABLE",
-                severity="HIGH",
-                vulnerability="MyService Unauthenticated API Access",
-                details=f"API accessible without authentication at /api/status",
-                target=target,
-                resolved_ip=resolved_ip,
-                port=port,
-                url=f"{base_url}/api/status",
-                http_status=r.status_code,
-            ))
-    except Exception:
-        pass
-    return findings
-
-
 async def run_scans(target_obj, port, **_):
     host = target_obj["scan_address"]
     resolved_ip = target_obj.get("resolved_ip", host)
     display = target_obj.get("display_target", host)
     findings = []
-
-    scheme = await _detect_protocol(host, port)
-    base_url = f"{scheme}://{host}:{port}"
-
-    async with httpx.AsyncClient(
-        timeout=10, verify=False, follow_redirects=True
-    ) as client:
-        tasks = [
-            _check_unauthenticated_access(client, base_url, display, resolved_ip, port),
-            # add more check coroutines here
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for r in results:
-            if isinstance(r, list):
-                findings.extend(r)
-            elif isinstance(r, dict):
-                findings.append(r)
-
-    return findings
+    # ... probe host:port, build findings via normalize_finding ...
+    return findings   # list[dict]
 ```
 
-### Allowed field values
+`target_obj` keys: `scan_address` (what to connect to), `display_target` (report label), `resolved_ip`.
 
-`status` must be one of: `CRITICAL`, `VULNERABLE`, `POTENTIAL`, `INFO`
+### 2.2 Register it (3 edits in `main.py` + `modules/__init__.py`)
 
-`severity` must be one of: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`
+1. `modules/__init__.py` — add `from . import my_module`.
+2. `main.py` — add `my_module` to the `from modules import ( … )` block.
+3. `main.py` — add to `SERVICE_TO_MODULE` (the single source of truth for dispatch; the key is the `-m` value):
+
+   ```python
+   SERVICE_TO_MODULE = {
+       "elasticsearch": elastic, "kibana": kibana, "grafana": grafana,
+       "prometheus": prometheus, "nextjs": react_to_shell, "aem": aem,
+       "cpanel": cpanel, "service_recon": service_recon, "jenkins": jenkins,
+       "testssl": testssl_runner,
+       "my_service": my_module,      # <-- add; "my_service" is the -m value
+   }
+   ```
+
+4. **Port mapping** — add your service + its default ports to `get_service_ports()` in `utils.py`, or the scan loop will never auto-route traffic to your module. (The `web` and `cpanel_adjacent` pseudo-services are handled specially and are not in `SERVICE_TO_MODULE`.)
+
+### 2.3 Optional: fingerprint-gated dispatch via `service_recon.py`
+
+If you want an nmap-discovered / shared port to auto-invoke your check without `-m`, add a `check_*` function to `service_recon.py`, map it in `PORT_DISPATCH`, and (for shared ports like 8080) add the port to `SHARED_PORTS`, add your check to `CHECK_REQUIRES_TAG`, and add a `('my_tag', ['keyword', …])` entry to the `_fingerprint()` markers list so a real service is confirmed before your check runs (anti-false-positive gate).
 
 ---
 
-## 2. `modules/__init__.py`
+## 3. Category B — alive-URL analysis module (the common new pattern)
 
-Add one import line alongside the existing 19 module imports (line ~21):
+This is what `archived_urls`, `param_discovery`, `favicon_jarm`, `tech_fingerprint`, `default_creds`, and `screenshots` are. It runs over the list of alive HTTP URLs discovered by httpx.
 
-```python
-# modules/__init__.py  (current last line is line 20: `from . import cisa_kev`)
-from . import my_module
-```
-
-The current file ends at line 21. Append your import after `from . import cisa_kev`.
-
----
-
-## 3. `main.py` — two edits
-
-### Edit 1: the explicit import block (lines 43–70)
-
-The block starting at line 43 imports every module by name. Add your module to the list:
+### 3.1 Entry point (a plain async function — NOT `run_scans`)
 
 ```python
-from modules import (
-    elastic,
-    kibana,
-    grafana,
-    prometheus,
-    react_to_shell,
-    recon,
-    httpx_runner,
-    nuclei_runner,
-    nmap_runner,
-    dir_enum,
-    gau_runner,
-    waybackurls_runner,
-    domain_scan,
-    js_paths,
-    aem,
-    cpanel,
-    dns_recon,
-    service_recon,
-    web_checks,
-    cisa_kev,
-    epss,
-    jenkins,
-    passive_intel,
-    inventory,
-    cloud_enum,
-    nvd,
-    my_module,      # <-- add here
-)
-```
-
-### Edit 2: the `SERVICE_TO_MODULE` dict (lines 73–83)
-
-This dict is the single source of truth for dispatch. It is consumed at lines 1157, 1162, 1164, 1436, 1440, and 1442 — all reads go through the same dict, so one new entry covers all call sites:
-
-```python
-SERVICE_TO_MODULE = {
-    "elasticsearch": elastic,
-    "kibana":        kibana,
-    "grafana":       grafana,
-    "prometheus":    prometheus,
-    "nextjs":        react_to_shell,
-    "aem":           aem,
-    "cpanel":        cpanel,
-    "service_recon": service_recon,
-    "jenkins":       jenkins,
-    "my_service":    my_module,   # <-- add here; key is the -m flag value
-}
-```
-
-The key you choose here is exactly what users pass to `-m my_service` and what the scan loop matches against `service_ports` (the port-to-service mapping). Make sure the key also appears in the `service_ports` dict (defined nearby in `main.py`) with the correct port list, or the scan loop will never automatically route traffic to your module.
-
----
-
-## 4. `modules/service_recon.py` — port-triggered checks
-
-This section is only needed if you want nmap-discovered ports to automatically invoke your checks through the `service_recon` dispatcher, without requiring users to pass `-m my_service` explicitly.
-
-### 4a. Define the check function
-
-Check functions in `service_recon.py` follow this convention:
-
-```python
-async def check_my_service(host, port, target, resolved_ip):
-    """Check MyService for unauthenticated access."""
+async def analyze(alive_urls: list[str], output_dir: str, concurrency: int = 20) -> list[dict]:
+    if not alive_urls:
+        return []
     findings = []
-    # ... probe logic ...
+    # ... work concurrently; use normalize_finding; validate content (no FPs!) ...
     return findings
 ```
 
-Note the argument order: `host, port, target, resolved_ip` — this is what `run_scans()` at line 3054 passes to every check function.
+Return `[]` (never raise) on empty input or a missing tool.
 
-### 4b. `PORT_DISPATCH` (line 2906)
+### 3.2 Wire it into `run_recon_followups()`
 
-Map the service's default TCP port to the check function:
+Inside `run_recon_followups()`, find the **`if alive_urls:` block** (where `nuclei`, `web_checks`, `dirsearch`, `js_paths` already run). Add your call there. Then add its result to the module's `all_findings`. Two sub-cases:
 
-```python
-PORT_DISPATCH = {
-    # ... existing entries ...
-    8765: check_my_service,
-}
-```
-
-If the port is already used by other services (i.e., it is a shared port), use a list:
+**Default-on** (cheap, low-risk) — call it directly, or gate on a dedicated boolean param like `enable_archived`:
 
 ```python
-8765: [check_existing_service, check_my_service],
+if alive_urls:
+    ...
+    my_findings = await my_module.analyze(alive_urls, output_dir, concurrency)
+    all_findings.extend(my_findings)
 ```
 
-### 4c. `SHARED_PORTS` and `CHECK_REQUIRES_TAG` (lines 2998–3027)
-
-If your service shares a port with others, add the port to `SHARED_PORTS` and add your check function to `CHECK_REQUIRES_TAG` so the fingerprinter gates it:
+**Opt-in** (heavy at scale, active, or tool-dependent) — use the **`extra_scans`** mechanism (this is the standard for per-URL heavy modules; a recon run can hit 60k+ alive URLs, so default-on is dangerous):
 
 ```python
-SHARED_PORTS = {80, 443, 8080, ..., 8765}  # add your port
-
-CHECK_REQUIRES_TAG = {
-    # ... existing entries ...
-    check_my_service: 'my_service_tag',
-}
+if "my_scan" in extra_scans:
+    my_findings = await my_module.analyze(alive_urls, output_dir, concurrency)
+    all_findings.extend(my_findings)
 ```
 
-### 4d. `_fingerprint` markers list (line 2862)
+`run_recon_followups()` already takes `extra_scans=frozenset()`. See §5 for how the flag reaches it.
 
-Add a fingerprint entry inside the `_fingerprint()` coroutine so the dispatcher can identify the service by response body/header keywords. The list is inside a `for tag, markers in [...]` loop:
+### 3.3 It also runs under `enum --probe` and `scan --posture`?
 
-```python
-('my_service_tag', ['myservice', 'my-service-keyword']),
-```
-
-The fingerprinter checks `Server` header + `X-Powered-By` header + the first 4096 bytes of the response body. Pick keywords that are reliably present in genuine responses but unlikely in other services.
+- `enum <domain> --probe` chains into the same `run_recon_followups()`, so a Category-B module wired there **automatically** runs under `enum --probe` too.
+- `scan --posture` does **not** run `run_recon_followups` (it only runs `DomainScanner` + httpx), so posture triage will not include your module. That's intended — posture is deliberately lightweight.
 
 ---
 
-## 5. Schema validation
+## 4. Categories C, D, E — passive recon, pre-probe expansion, enrichment
 
-Import `validate_finding` from `modules.schema` and call it on every finding before returning, especially during development:
+**C. Passive recon (per domain)** — runs in `_run_parallel_passive()` alongside `dns_recon`, `cloud_enum`, `ct_monitor`, concurrently, for domain targets. Return a findings list; the caller buffers it into `recon_phase_findings` (which is flushed into the report later). Entry point shape: `async def run(domain, concurrency, ...) -> list[dict]`.
 
-```python
-from modules.schema import validate_finding
+**D. Pre-probe recon / expansion** — runs in `handle_domain()` **before** `run_recon_followups()`, so it can clean or expand the subdomain set that gets probed (like `dns_resolve`, which feeds a wildcard-filtered list forward) or discover new scope (`horizontal_expand`). Entry point often returns a dict (`{"resolved": [...], "findings": [...]}`) so the caller can both feed hosts forward and collect findings. Gate with a flag (default-on `dns_hygiene` or opt-in `enable_horizontal`).
 
-async def run_scans(target_obj, port, **_):
-    # ... build findings ...
-    for f in findings:
-        violations = validate_finding(f)
-        if violations:
-            # log or raise during development; remove in production
-            print(f"[!] Schema violation in {MODULE_NAME}: {violations}")
-    return findings
-```
-
-The 15 canonical keys are defined in `modules/schema.py:CANONICAL_KEYS` (lines 6–22). Missing any key will fail validation downstream in the reporter. The `server` key is explicitly forbidden (line 54 in schema.py) — use `resolved_ip` instead.
-
-`normalize_finding()` in the same file can be used to fill missing keys with `"N/A"` defaults as a fallback, but it is better to emit complete findings from the start.
+**E. Enrichment** — runs in `_enrich_and_report()` over the **deduplicated final findings list** (like `nvd`, `cisa_kev`, `epss`, `passive_intel`). It mutates/augments findings in place or returns additions. It does not probe targets; it decorates findings. Add your call into the enrichment `asyncio.gather` in `_enrich_and_report()`.
 
 ---
 
-## 6. Tests — `tests/test_<your_module>.py`
+## 5. CLI flag mechanics — how a flag reaches your module
 
-Place tests in the `tests/` directory. The existing suite uses `unittest.TestCase` throughout. Follow this pattern:
+There are two flag styles. Both live in the `scan` subparser (search `sp_scan.add_argument`) and are read in `cmd_scan()`.
+
+### 5.1 Opt-in scan (the `extra_scans` set) — for Category-B heavy/active modules
+
+Four small edits:
+
+1. **argparse** (`sp_scan`):
+   ```python
+   sp_scan.add_argument("--my-scan", action="store_true", dest="my_scan",
+                        help="… (off by default; skips if tool absent)")
+   ```
+2. **`cmd_scan()`** — add your name to the `extra_scans` frozenset it builds and passes to `main()`:
+   ```python
+   extra_scans=frozenset(name for name, on in (
+       ("params", getattr(args, 'params', False)),
+       ...
+       ("my_scan", getattr(args, 'my_scan', False)),
+   ) if on),
+   ```
+3. **`main()`** already forwards `extra_scans` to its `run_recon_followups()` calls — no change needed there.
+4. **`run_recon_followups()`** — check `if "my_scan" in extra_scans:` (see §3.2).
+
+### 5.2 Default-on with an off-switch — for Categories B/D that reduce noise or are cheap
+
+Use `--no-x` (store_false, default True), e.g. `--no-archived-scan`, `--no-dns-hygiene`:
 
 ```python
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-import asyncio
-import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
-
-from modules.schema import CANONICAL_KEYS, validate_finding
-import modules.my_module as my_module
-
-
-class TestMyModuleFinding(unittest.TestCase):
-    """Unit tests for _finding() helper — no network required."""
-
-    def test_finding_has_all_canonical_keys(self):
-        f = my_module._finding(
-            status="INFO",
-            severity="INFO",
-            vulnerability="Test",
-            details="details",
-            target="example.com",
-            resolved_ip="1.2.3.4",
-            port=8765,
-        )
-        for key in CANONICAL_KEYS:
-            self.assertIn(key, f, f"Missing canonical key: {key}")
-
-    def test_finding_passes_schema_validation(self):
-        f = my_module._finding(
-            status="VULNERABLE",
-            severity="HIGH",
-            vulnerability="Test",
-            details="details",
-            target="example.com",
-            resolved_ip="1.2.3.4",
-            port=8765,
-        )
-        violations = validate_finding(f)
-        self.assertEqual(violations, [], f"Schema violations: {violations}")
-
-    def test_finding_timestamp_format(self):
-        f = my_module._finding(
-            status="INFO", severity="INFO",
-            vulnerability="T", details="d",
-            target="h", resolved_ip="1.2.3.4", port=8765,
-        )
-        self.assertTrue(f["timestamp"].endswith("Z"))
-
-    def test_finding_module_name(self):
-        f = my_module._finding(
-            status="INFO", severity="INFO",
-            vulnerability="T", details="d",
-            target="h", resolved_ip="1.2.3.4", port=8765,
-        )
-        self.assertEqual(f["module"], my_module.MODULE_NAME)
-
-
-class TestRunScans(unittest.IsolatedAsyncioTestCase):
-    """Integration-style tests with mocked HTTP."""
-
-    async def test_run_scans_returns_list(self):
-        target_obj = {
-            "scan_address": "127.0.0.1",
-            "display_target": "example.com",
-            "resolved_ip": "127.0.0.1",
-        }
-        # Patch httpx to avoid real network calls
-        with patch("modules.my_module.httpx.AsyncClient") as mock_client_cls:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 403
-            mock_resp.text = ""
-            mock_client = AsyncMock()
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            mock_client_cls.return_value = mock_client
-
-            result = await my_module.run_scans(target_obj, 8765)
-            self.assertIsInstance(result, list)
-
-
-if __name__ == "__main__":
-    unittest.main()
+sp_scan.add_argument("--no-my-thing", action="store_false", dest="my_thing", default=True,
+                     help="Disable … (on by default).")
 ```
 
-Run the full suite to confirm nothing is broken:
+Then thread it as an explicit `main()` parameter (like `archived_scan`, `dns_hygiene`) → into `run_recon_followups()` / `handle_domain()`, and pass `my_thing=getattr(args, 'my_thing', True)` from `cmd_scan()`.
 
-```
-python -m pytest tests/ -q
-```
-
-The suite currently contains 94 tests across 15 test files. All must continue to pass after your addition.
+> Rule of thumb: **default-on** for anything that improves quality or is cheap and passthrough-safe (wildcard filtering, archived-URL analysis). **Opt-in** for anything that is per-URL heavy (favicon/tech/params/screenshots), active (default-creds), or scope-expanding (horizontal).
 
 ---
 
-## 7. `TODO.md` — tracking
+## 6. Output / reporting — you don't write your own report
 
-Add your new service to the appropriate section in `TODO.md`. The file uses these sections:
-
-- **Section 2: Missing Service Checks** — CI/CD, Cloud-Native, Infrastructure & Monitoring sub-tables. Add a row to the relevant sub-table:
-
-```markdown
-| **MyService** | 8765 | Unauthenticated access, default credentials, CVE-XXXX-YYYY |
-```
-
-- **Section 3: Missing Recon / Discovery** — for passive/recon-oriented modules rather than active service checks.
-
-If the check is already fully implemented, mark the section header with `✅ DONE` (matching the existing convention for Sections 1 and 2).
+Findings returned from your entry point flow into the shared tail: dedup → enrichment (NVD/KEV/EPSS/passive-intel) → **CSV + HTML always**, JSON/SARIF opt-in (`--format`, `--sarif`) → SQLite inventory delta → alerts (`notify.py`). You only *return findings*; `_enrich_and_report()` handles persistence. (A standalone `-m` mode that returns early may write its own CSV/HTML via `reporter.save_results_to_csv`/`save_results_to_html` — see the `domain-scan`/posture branch.)
 
 ---
 
-## Quick checklist
+## 7. Tests — `tests/test_<your_module>.py`
 
-```
-[ ] modules/my_module.py created
-      [ ] run_scans(target_obj, port, **_) defined
-      [ ] _finding() returns all 15 canonical keys
-      [ ] timestamp uses datetime.now(timezone.utc), not utcnow()
-      [ ] status is one of CRITICAL/VULNERABLE/POTENTIAL/INFO
-      [ ] severity is one of CRITICAL/HIGH/MEDIUM/LOW/INFO
-[ ] modules/__init__.py — from . import my_module added
-[ ] main.py edit 1 — my_module added to the from modules import (...) block
-[ ] main.py edit 2 — "my_service": my_module added to SERVICE_TO_MODULE
-[ ] modules/service_recon.py (if port-triggered)
-      [ ] check_my_service() defined
-      [ ] PORT_DISPATCH entry added
-      [ ] SHARED_PORTS updated (if port is shared)
-      [ ] CHECK_REQUIRES_TAG entry added (if port is shared)
-      [ ] _fingerprint markers tuple added
-[ ] tests/test_my_module.py created
-      [ ] _finding() canonical key coverage test
-      [ ] schema validation test
-      [ ] run_scans() returns list test
-[ ] python -m pytest tests/ -q passes (all 94+ tests green)
-[ ] TODO.md updated
-```
+Mock all subprocess/network so tests run with no tools/network. Cover:
 
----
-
-## Adding a Check to an Existing Module
-
-Use this when the new finding belongs logically inside an existing module (e.g. a new CVE for Grafana, a new sensitive path for `web_checks`, a new DNS record type in `dns_recon`).
-
-### When to extend vs. create new
-
-| Situation | Action |
-|-----------|--------|
-| New CVE / technique for a service already in a module | Add a new `check_*()` function inside that module |
-| New port or protocol for a wholly different service | Create a new module (see above) |
-| New class of HTTP check that applies to all alive URLs | Add to `web_checks.py` |
-| New DNS record or validation rule | Add to `dns_recon.py` |
-
-### Step-by-step: adding a CVE check to an existing module
-
-**Example: adding CVE-2024-99999 to `modules/grafana.py`**
-
-#### 1. Write the check function
-
-Add a new `async def check_*` function inside the module file. Follow the existing pattern — use the shared `_finding()` helper, validate before firing, and return a list:
-
-```python
-async def check_cve_2024_99999(client, host, port):
-    """CVE-2024-99999 — Grafana unauthenticated config read."""
-    url = f"https://{host}:{port}/api/config"
-    try:
-        resp = await client.get(url, timeout=5)
-        if resp.status_code == 200 and "database" in resp.text.lower():
-            return [_finding(
-                host, port,
-                status="VULNERABLE",
-                severity="HIGH",
-                vulnerability="CVE-2024-99999 — Grafana Unauthenticated Config Read",
-                url=url,
-                details="GET /api/config returned 200 with database config without authentication.",
-            )]
-    except Exception:
-        pass
-    return []
-```
-
-Key rules:
-- Always `try/except` — network errors must not crash the scan
-- Validate the response body, not just the status code (no false positives)
-- Return `[]` when the check does not fire
-
-#### 2. Wire it into `run_scans()`
-
-Find the existing `run_scans()` in the module and add your check to the gathered tasks:
-
-```python
-async def run_scans(target_obj, port, **_):
-    host = target_obj.get('display_target') or target_obj.get('scan_address')
-    findings = []
-    async with httpx.AsyncClient(verify=False) as client:
-        results = await asyncio.gather(
-            check_existing_cve(client, host, port),
-            check_another_cve(client, host, port),
-            check_cve_2024_99999(client, host, port),  # ← add here
-            return_exceptions=True,
-        )
-    for r in results:
-        if isinstance(r, list):
-            findings.extend(r)
-    return findings
-```
-
-#### 3. Add a test
-
-Open (or create) `tests/test_grafana.py` and add a test for the new check. Mock the HTTP response and assert the finding fires when expected and does not fire on non-matching responses:
-
-```python
-class TestCVE202499999(unittest.TestCase):
-    def _run(self, coro):
-        return asyncio.run(coro)
-
-    def test_fires_on_200_with_database_keyword(self):
-        mock_resp = MagicMock(status_code=200, text='{"database": "sqlite3"}')
-        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)):
-            async with httpx.AsyncClient() as client:
-                findings = self._run(grafana.check_cve_2024_99999(client, "10.0.0.1", 3000))
-        self.assertEqual(len(findings), 1)
-        self.assertEqual(findings[0]["status"], "VULNERABLE")
-
-    def test_does_not_fire_on_401(self):
-        mock_resp = MagicMock(status_code=401, text="Unauthorized")
-        with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=mock_resp)):
-            async with httpx.AsyncClient() as client:
-                findings = self._run(grafana.check_cve_2024_99999(client, "10.0.0.1", 3000))
-        self.assertEqual(findings, [])
-```
-
-#### 4. Run the suite
+- **Canonical schema**: every emitted finding passes `validate_finding` (`[]` violations).
+- **Positive case**: a genuine hit produces the expected finding/severity.
+- **Negative case (required for anything making a claim)**: a catch-all / always-200 / wrong-credential / supported-version input yields **no** finding.
+- **Graceful skip**: with the tool absent (`shutil.which` → None), returns `[]` and spawns no subprocess.
+- **Empty input** → `[]`.
 
 ```bash
-python -m pytest tests/ -q
+python -m pytest tests/ -q     # the whole suite must stay green
 ```
 
-All existing tests must stay green. Only add the new check — do not refactor surrounding code unless it is directly required.
+(The suite currently has 300+ tests across ~36 files — all must continue to pass.)
+
+---
+
+## 8. Quick checklist
+
+```
+[ ] Category chosen (A port-service / B alive-URL / C passive / D pre-probe / E enrichment)
+[ ] Findings built via schema.normalize_finding (15 canonical keys, no `server` key)
+[ ] CONTENT/response oracle for any VULNERABLE claim (+ negative control for active checks)
+[ ] External tool detected via shutil.which and skipped gracefully if absent
+[ ] Live progress via modules/progress.py (DashboardProgress / heartbeat)
+[ ] Wired into the right place:
+      A -> modules/__init__.py + main.py import + SERVICE_TO_MODULE + get_service_ports()
+      B -> run_recon_followups() `if alive_urls:` block (+ extra_scans gate if opt-in)
+      C -> _run_parallel_passive()
+      D -> handle_domain() before run_recon_followups()
+      E -> _enrich_and_report() enrichment gather
+[ ] Flag added if opt-in/default-off (extra_scans) or default-on off-switch (--no-x), threaded main()->cmd_scan
+[ ] tests/test_<module>.py: schema + positive + NEGATIVE(no-FP) + graceful-skip + empty
+[ ] python -m pytest tests/ -q passes
+[ ] README.md + TODO.md updated
+```
+
+---
+
+## Appendix — adding a check to an *existing* module
+
+When the finding belongs inside an existing module (a new CVE for Grafana, a new sensitive path for `web_checks`, a new record type in `dns_recon`):
+
+1. Add an `async def check_*` function that uses the module's `_finding()`/`normalize_finding`, **validates the response body (not just status)**, wraps everything in `try/except`, and returns `[]` when it does not fire.
+2. Add it to the module's `run_scans()` (or its internal `asyncio.gather`).
+3. Add a test with a **fires** case and a **does-not-fire** case.
+4. Run the full suite. Don't refactor surrounding code unless required.
+
+| Situation | Action |
+|---|---|
+| New CVE/technique for a service already in a module | Add a `check_*()` inside that module |
+| New port/protocol, wholly different service | New Category-A module |
+| New HTTP check for all alive URLs | Add to `web_checks.py` (or a new Category-B module) |
+| New DNS record / validation rule | Add to `dns_recon.py` |
