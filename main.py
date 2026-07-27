@@ -76,6 +76,9 @@ from modules import (
     google_dork,
     ct_monitor,
     testssl_runner,
+    archived_urls,
+    horizontal_expand,
+    screenshots,
 )
 
 # Exceptions that indicate a programming bug rather than an environmental,
@@ -202,6 +205,8 @@ async def run_recon_followups(
     wordlist=None,
     connect_timeout=DEFAULT_CONNECT_TIMEOUT,
     port_retries=DEFAULT_PORT_RETRIES,
+    enable_archived=True,
+    enable_screenshots=False,
 ):
     """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
     all_findings = []
@@ -474,6 +479,19 @@ async def run_recon_followups(
             print(f"{Colors.GREEN}[+] JS paths: {len(js_findings)} finding(s).{Colors.RESET}")
             all_findings.extend(js_findings)
 
+        # Visual triage: screenshot alive URLs (opt-in via --screenshots; capped,
+        # since a recon run can yield tens of thousands of alive hosts). Gracefully
+        # skips when gowitness/aquatone isn't installed.
+        if enable_screenshots:
+            _cap = 500
+            _shot_urls = alive_urls[:_cap]
+            if len(alive_urls) > _cap:
+                print(f"{Colors.YELLOW}[*] Screenshotting first {_cap} of {len(alive_urls)} alive URL(s).{Colors.RESET}")
+            _shot_findings = await screenshots.capture_screenshots(_shot_urls, output_dir, concurrency)
+            if _shot_findings:
+                print(f"{Colors.GREEN}[+] Screenshots: {len(_shot_findings)} finding(s).{Colors.RESET}")
+                all_findings.extend(_shot_findings)
+
     # GAU + waybackurls in parallel
     domain_hosts = collect_domain_hosts(alive_urls)
     if domain_hosts:
@@ -488,7 +506,7 @@ async def run_recon_followups(
             dashboard.add_task("wayback", "Wayback Archival")
 
         try:
-            await asyncio.gather(
+            gau_result, wayback_result = await asyncio.gather(
                 gau_inst.run(domain_hosts),
                 wayback_inst.run(domain_hosts),
                 return_exceptions=True,
@@ -497,6 +515,22 @@ async def run_recon_followups(
             if dashboard.active:
                 dashboard.complete_task("gau")
                 dashboard.complete_task("wayback")
+
+        # Weaponize the harvested archive: dedup → filter high-signal → re-probe
+        # for live endpoints → secret-scan archived JS. Reuses the URLs gau/wayback
+        # already produced (previously discarded).
+        if enable_archived:
+            _archived_urls = []
+            for _res in (gau_result, wayback_result):
+                if isinstance(_res, dict):
+                    for _urls in _res.values():
+                        _archived_urls.extend(_urls or [])
+            _archived_urls = sorted(set(_archived_urls))
+            if _archived_urls:
+                _arch_findings = await archived_urls.scan_archived_urls(_archived_urls, output_dir, concurrency)
+                if _arch_findings:
+                    print(f"{Colors.GREEN}[+] Archived-URL analysis: {len(_arch_findings)} finding(s).{Colors.RESET}")
+                    all_findings.extend(_arch_findings)
     else:
         print(f"{Colors.YELLOW}[!] No hostname targets available for gau/waybackurls.{Colors.RESET}")
 
@@ -768,6 +802,9 @@ async def main(
     no_dork=False,
     dork_method='auto',
     stream_web_probe=False,
+    archived_scan=True,
+    enable_screenshots=False,
+    enable_horizontal=False,
 ):
     """
     Main orchestrator for the scanning tool.
@@ -1109,6 +1146,8 @@ async def main(
             wordlist,
             connect_timeout,
             port_retries,
+            enable_archived=archived_scan,
+            enable_screenshots=enable_screenshots,
         )
         if recon_findings:
             print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {safe_label}{Colors.RESET}")
@@ -1193,6 +1232,8 @@ async def main(
                 wordlist,
                 connect_timeout,
                 port_retries,
+                enable_archived=archived_scan,
+                enable_screenshots=enable_screenshots,
             )
             if recon_findings:
                 print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {recon_domain}{Colors.RESET}")
@@ -1264,6 +1305,19 @@ async def main(
                     print(f"{Colors.YELLOW}[!] Recon completed for {domain} but no subdomains were discovered.{Colors.RESET}")
                     return None
                 domain_output_dir = os.path.dirname(results_file)
+
+                # Horizontal / infrastructure expansion (opt-in via --horizontal):
+                # asnmap → CIDRs, reverse-DNS sweep, amass intel → related domains.
+                # Gracefully skips when the tools aren't installed.
+                if enable_horizontal:
+                    _expansion = await horizontal_expand.expand_horizontal([domain], domain_output_dir)
+                    for _hf in _expansion.get("findings", []):
+                        recon_phase_findings.append(_hf)
+                    _rh, _rd = len(_expansion.get("reverse_hosts", [])), len(_expansion.get("related_domains", []))
+                    if _rh or _rd:
+                        print(f"{Colors.GREEN}[+] Horizontal expansion: {_rd} related domain(s), "
+                              f"{_rh} reverse-DNS host(s) discovered for {domain}.{Colors.RESET}")
+
                 if scan_found:
                     recon_findings = await run_recon_followups(
                         subdomains,
@@ -1274,6 +1328,8 @@ async def main(
                         wordlist,
                         connect_timeout,
                         port_retries,
+                        enable_archived=archived_scan,
+                        enable_screenshots=enable_screenshots,
                     )
                     if recon_findings:
                         print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {domain}{Colors.RESET}")
@@ -1574,10 +1630,20 @@ async def main(
                 state_manager.add_vulnerability(_wf)
         else:
             print(f"[*] Using previously scanned port results...")
-            open_ports_results = {}
+            # Rebuild as (target_obj, data) tuples from `targets` (which retains the
+            # hostname/display_target), pulling persisted open ports by resolved IP.
+            # This preserves hostname attribution on resume instead of collapsing
+            # every finding to a bare IP. De-dup by IP (targets has hostname+IP objects).
+            open_ports_results = []
+            _resume_seen_ips = set()
             for target in targets:
-                resolved_ip = target['resolved_ip']
-                open_ports_results[resolved_ip] = {'open_ports': state_manager.state["open_ports"].get(resolved_ip, [])}
+                resolved_ip = target.get('resolved_ip')
+                if not resolved_ip or resolved_ip in _resume_seen_ips:
+                    continue
+                _resume_seen_ips.add(resolved_ip)
+                open_ports_results.append(
+                    (target, {'open_ports': state_manager.state["open_ports"].get(resolved_ip, [])})
+                )
     
     except KeyboardInterrupt:
         print(f"\n[!] Scan interrupted. Saving final state...")
@@ -2060,6 +2126,9 @@ async def cmd_scan(args):
             no_dork=getattr(args, 'no_dork', False),
             dork_method=getattr(args, 'dork_method', 'auto'),
             stream_web_probe=getattr(args, 'stream_web_probe', False),
+            archived_scan=getattr(args, 'archived_scan', True),
+            enable_screenshots=getattr(args, 'screenshots', False),
+            enable_horizontal=getattr(args, 'horizontal', False),
         )
     except KeyboardInterrupt:
         if _partial_findings:
@@ -2276,6 +2345,16 @@ if __name__ == "__main__":
                          help="In streaming mode (large target sets >1000 hosts), also run "
                               "httpx/nuclei/dirsearch/web-checks on open web ports per chunk "
                               "(off by default — can expand to a very large number of URLs)")
+    sp_scan.add_argument("--no-archived-scan", action="store_false", dest="archived_scan", default=True,
+                         help="Skip weaponizing gau/waybackurls archived URLs (dedup → filter → "
+                              "re-probe live → secret-scan archived JS). On by default.")
+    sp_scan.add_argument("--screenshots", action="store_true", dest="screenshots",
+                         help="Screenshot alive web URLs for visual triage via gowitness/aquatone "
+                              "(off by default; capped; skips if the tool isn't installed)")
+    sp_scan.add_argument("--horizontal", action="store_true", dest="horizontal",
+                         help="Horizontal/infra expansion for domain targets: asnmap → CIDRs, "
+                              "reverse-DNS sweep, amass intel → related domains (off by default; "
+                              "skips tools that aren't installed)")
     sp_scan.add_argument("--wordlist")
     # --scan-found removed: the scan subcommand always probes discovered subdomains
     sp_scan.add_argument("--nmap", action="store_true")

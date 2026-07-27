@@ -319,7 +319,7 @@ Findings from a multi-agent audit of the scan pipeline. Progress-feedback is shi
 - [x] **B5 [MED] Nmap no longer runs twice** for domain+`--nmap` — the main-scan Nmap CVE block is skipped when recon already ran it (gated on `recon_web_probed`).
 - [x] **B6 [LOW] Cloud enum overlap** — DONE. Phase 3b now enumerates **once per registrable domain** (`_registrable_domain()`) instead of per-subdomain, and skips any apex already enumerated during passive recon (tracked in `cloud_enumerated_domains`) — reuses the existing data instead of repeating the work.
 - [x] **B7 [LOW] Custom `--ports` serving HTTP now get httpx/nuclei/web_checks** — custom ports are merged into the web-probe port set.
-- [ ] **B8 [LOW] Resume loses hostname attribution and skips web probing** (rebuilds IP-keyed targets; web block gated behind the port-scan phase). (remaining)
+- [x] **B8 [LOW] Resume hostname attribution** — DONE. On resume, targets are rebuilt as `(target_obj, data)` tuples from `targets` (which retains hostnames), de-duped by resolved IP — findings keep hostname attribution instead of collapsing to bare IPs. (Remaining sub-item: making an *interrupted* web-probe itself resumable needs a new resumable phase — deferred as it's disproportionate for a LOW item.)
 
 ---
 
@@ -328,9 +328,9 @@ Findings from a multi-agent audit of the scan pipeline. Progress-feedback is shi
 Not missing detectors — the highest-leverage work is connecting data already collected.
 
 ### HIGH
-- [ ] **H1 Weaponize the archived-URL corpus.** gau/waybackurls output is a dead-end; pipe → `uro` dedupe → live re-probe → extension/keyword filter → feed archived `.js` into the existing `js_paths` secret engine.
-- [ ] **H2 Horizontal / infrastructure expansion.** Turn per-IP ASN enrichment into discovery: `asnmap` (org→ASN→CIDR), reverse-DNS sweep, `amass intel` (registrant→related roots).
-- [ ] **H3 Screenshotting / visual triage** (`gowitness`/aquatone) over alive URLs; thumbnails in report.
+- [x] **H1 Weaponize the archived-URL corpus** — DONE. `modules/archived_urls.py` (`scan_archived_urls`): `uro`/internal dedup → extension+keyword high-signal filter → httpx live re-probe → archived `.js` secret scan reusing the `js_paths` engine → canonical findings. Wired into `run_recon_followups` (consumes the gau/waybackurls output that was discarded); on by default, `--no-archived-scan` to disable. Tests: `tests/test_archived_urls.py` (11).
+- [x] **H2 Horizontal / infrastructure expansion** — DONE. `modules/horizontal_expand.py` (`expand_horizontal`): `asnmap` (org/domain→ASN→CIDR), bounded `dnsx -ptr` reverse-DNS sweep (skips >/20, caps 8192 IPs), `amass intel` (→related roots). Wired into the recon phase per domain; opt-in `--horizontal`; tools skip gracefully if absent. Tests: `tests/test_horizontal_expand.py` (17). *(Follow-up: feed reverse_hosts/related_domains back into the live-host pipeline to compound scope.)*
+- [x] **H3 Screenshotting / visual triage** — DONE. `modules/screenshots.py` (`capture_screenshots`): `gowitness` (modern+legacy CLI) / `aquatone` fallback over alive URLs → `screenshots/manifest.csv` + `index.html` gallery → canonical INFO findings. Wired after httpx alive-URL discovery; opt-in `--screenshots`, capped at 500 URLs. Tests: `tests/test_screenshots.py` (6).
 
 ### MEDIUM
 - [ ] Parameter discovery (`arjun`/paramspider + `gf`) → nuclei DAST.
