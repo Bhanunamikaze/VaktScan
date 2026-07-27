@@ -24,7 +24,7 @@ Every external tool it drives is **optional**: if a binary is missing, that stag
 - **Enrichment** - NVD CVE lookup, CISA KEV cross-reference, EPSS exploit-probability scoring, and Shodan/Censys passive intel.
 - **Reporting & state** - CSV + HTML reports are **always** written to `reports/`; JSON and SARIF 2.1 are opt-in. A SQLite inventory tracks assets and emits "new vs resolved" deltas, and `notify.py` sends Slack/Discord/webhook/email alerts on new findings (env-gated).
 - **Opt-in expansions** - screenshots, parameter discovery, favicon (mmh3) + JARM pivots, tech fingerprint + EOL, confirmed default-credential checks, and horizontal/infra expansion (asnmap, reverse-DNS, amass intel).
-- **Scale features** - streaming mode for large CIDRs, resumable scans, IPv6, proxy support, and a live multi-row progress dashboard.
+- **Scale features** - streaming mode for large CIDRs, **resumable scans** (auto-resume for any target type - domain/IP/CIDR/file - with graceful Ctrl+C shutdown that checkpoints progress to `.vaktscan/state/` and cleanly terminates every running tool), IPv6, proxy support, and a live multi-row progress dashboard.
 
 
 ## Requirements & Installation
@@ -68,8 +68,11 @@ python main.py scan targets.txt
 # Skip subdomain enumeration for a domain target
 python main.py scan steinzsecurity.com --no-subdomain-enum
 
-# Resume an interrupted scan
-python main.py scan targets.txt --resume
+# Resume: re-running the same command auto-resumes where it left off
+# (works for domain / IP / CIDR / file targets, not just files)
+python main.py scan targets.txt
+python main.py scan targets.txt --fresh   # ignore prior state, start over
+python main.py scan --list-resumable      # list resumable scans, then exit
 
 # High concurrency with Nmap CVE scripts and JSON + SARIF output
 python main.py scan targets.txt -c 500 --nmap --format all
@@ -214,7 +217,10 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `-c`, `--concurrency` | `100` | Concurrent connections |
 | `--connect-timeout` | tool default | TCP connect timeout (seconds) |
 | `--port-retries` | tool default | Port-scan connect retries |
-| `-r`, `--resume` | off | Resume a checkpointed scan |
+| `-r`, `--resume` | off | Require + resume an existing checkpointed scan (errors if none). Scans **auto-resume by target** by default |
+| `--fresh`, `--no-resume` | off | Ignore + overwrite any existing resumable state for this target |
+| `--resume-id SCAN_ID` | - | Resume a specific saved scan by id (see `--list-resumable`) |
+| `--list-resumable` | off | List resumable scans (id, target, phase, progress, age) and exit |
 | `--format` | - | Additionally emit `csv` / `json` / `sarif` / `all` (CSV + HTML are always written regardless) |
 | `--sarif FILE` | - | Write a SARIF 2.1 report to a specific path |
 | `-m`, `--module` | all | Run only one service module: `elasticsearch` `kibana` `grafana` `prometheus` `nextjs` `aem` `cpanel` `jenkins` `service_recon` |
