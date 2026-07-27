@@ -4,10 +4,17 @@ Utility script to set up the external binaries required by VaktScan's recon
 modules.
 
 It focuses on the tooling consumed by:
-  * modules/recon.py          → amass, subfinder, assetfinder, findomain, etc.
-  * modules/dir_enum.py       → ffuf
-  * modules/httpx_runner.py   → httpx
-  * modules/nmap_runner.py    → nmap
+  * modules/recon.py           → amass, subfinder, assetfinder, findomain, gau,
+                                 waybackurls, crtsh, sublist3r, knockpy, bbot, censys
+  * modules/dns_resolve.py     → puredns, massdns, dnsx, alterx, asnmap, dnsgen
+  * modules/dir_enum.py        → ffuf, dirsearch
+  * modules/httpx_runner.py    → httpx
+  * modules/nmap_runner.py     → nmap
+  * modules/nuclei_runner.py   → nuclei
+  * modules/param_discovery.py → paramspider, arjun, gf, uro
+  * modules/tech_fingerprint.py→ webanalyze
+  * modules/favicon_jarm.py    → jarm / pyjarm
+  * modules/testssl_runner.py  → testssl / testssl.sh
 
 Usage:
     python scripts/setup_recon_tools.py            # Just report tool status
@@ -37,7 +44,18 @@ class ToolSpec:
     requires_go: bool = False
 
 
-GO_BASED_TOOLS = {"assetfinder", "ffuf", "httpx"}
+GO_BASED_TOOLS = {
+    "assetfinder",
+    "ffuf",
+    "httpx",
+    "dnsx",
+    "asnmap",
+    "alterx",
+    "gf",
+    "gowitness",
+    "puredns",
+    "webanalyze",
+}
 
 TOOL_SPECS: Dict[str, ToolSpec] = {
     "amass": ToolSpec(
@@ -263,6 +281,135 @@ TOOL_SPECS: Dict[str, ToolSpec] = {
             "rm -rf \"$tmpdir\""
         ),
         description="ProjectDiscovery nuclei v3.6.2 binary download (architecture-aware).",
+    ),
+    "dnsx": ToolSpec(
+        name="dnsx",
+        binary="dnsx",
+        install_cmd=(
+            "go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest && "
+            "sudo install -m 755 \"$(go env GOPATH)/bin/dnsx\" /usr/local/bin/dnsx"
+        ),
+        description="ProjectDiscovery dnsx fast multi-purpose DNS toolkit used by dns_resolve.",
+        requires_go=True,
+    ),
+    "asnmap": ToolSpec(
+        name="asnmap",
+        binary="asnmap",
+        install_cmd=(
+            "go install -v github.com/projectdiscovery/asnmap/cmd/asnmap@latest && "
+            "sudo install -m 755 \"$(go env GOPATH)/bin/asnmap\" /usr/local/bin/asnmap"
+        ),
+        description="ProjectDiscovery asnmap for ASN/CIDR-to-IP mapping during recon.",
+        requires_go=True,
+    ),
+    "alterx": ToolSpec(
+        name="alterx",
+        binary="alterx",
+        install_cmd=(
+            "go install -v github.com/projectdiscovery/alterx/cmd/alterx@latest && "
+            "sudo install -m 755 \"$(go env GOPATH)/bin/alterx\" /usr/local/bin/alterx"
+        ),
+        description="ProjectDiscovery alterx permutation-based subdomain wordlist generator.",
+        requires_go=True,
+    ),
+    "gf": ToolSpec(
+        name="gf",
+        binary="gf",
+        install_cmd=(
+            "go install -v github.com/tomnomnom/gf@latest && "
+            "sudo install -m 755 \"$(go env GOPATH)/bin/gf\" /usr/local/bin/gf"
+        ),
+        description="Tomnomnom gf grep-pattern helper used by param_discovery.",
+        requires_go=True,
+    ),
+    "gowitness": ToolSpec(
+        name="gowitness",
+        binary="gowitness",
+        install_cmd=(
+            "go install -v github.com/sensepost/gowitness@latest && "
+            "sudo install -m 755 \"$(go env GOPATH)/bin/gowitness\" /usr/local/bin/gowitness"
+        ),
+        description="Sensepost gowitness web screenshot utility for alive HTTP targets.",
+        requires_go=True,
+    ),
+    "puredns": ToolSpec(
+        name="puredns",
+        binary="puredns",
+        install_cmd=(
+            "go install -v github.com/d3mondev/puredns/v2@latest && "
+            "sudo install -m 755 \"$(go env GOPATH)/bin/puredns\" /usr/local/bin/puredns"
+        ),
+        description="puredns fast wildcard-aware DNS resolver (preferred dns_resolve backend).",
+        requires_go=True,
+    ),
+    "webanalyze": ToolSpec(
+        name="webanalyze",
+        binary="webanalyze",
+        install_cmd=(
+            "go install -v github.com/rverton/webanalyze/cmd/webanalyze@latest && "
+            "sudo install -m 755 \"$(go env GOPATH)/bin/webanalyze\" /usr/local/bin/webanalyze"
+        ),
+        description="rverton webanalyze (Wappalyzer engine) used by tech_fingerprint.",
+        requires_go=True,
+    ),
+    "arjun": ToolSpec(
+        name="arjun",
+        binary="arjun",
+        install_cmd="pip3 install --user arjun --break-system-packages",
+        description="Arjun HTTP parameter discovery suite (active param mining in param_discovery).",
+    ),
+    "paramspider": ToolSpec(
+        name="paramspider",
+        binary="paramspider",
+        install_cmd=(
+            "pip3 install --user "
+            "git+https://github.com/devanshbatham/paramspider "
+            "--break-system-packages"
+        ),
+        description="ParamSpider passive parameter harvester (installed from git; PyPI name is a placeholder).",
+    ),
+    "uro": ToolSpec(
+        name="uro",
+        binary="uro",
+        install_cmd="pip3 install --user uro --break-system-packages",
+        description="uro URL-list declutter helper used by param_discovery.",
+    ),
+    "dnsgen": ToolSpec(
+        name="dnsgen",
+        binary="dnsgen",
+        install_cmd="pip3 install --user dnsgen --break-system-packages",
+        description="dnsgen DNS permutation wordlist generator used on the dns_resolve path.",
+    ),
+    "jarm": ToolSpec(
+        name="jarm",
+        binary="pyjarm",
+        install_cmd="pip3 install --user pyjarm --break-system-packages",
+        description="pyjarm JARM TLS fingerprinting CLI/library (binary `pyjarm`, import `jarm`) for favicon_jarm.",
+    ),
+    "testssl": ToolSpec(
+        name="testssl",
+        binary="testssl.sh",
+        install_cmd=(
+            "if [ ! -x /opt/testssl.sh/testssl.sh ]; then "
+            "sudo rm -rf /opt/testssl.sh && "
+            "sudo git clone --depth 1 https://github.com/drwetter/testssl.sh /opt/testssl.sh; "
+            "fi && "
+            "sudo ln -sf /opt/testssl.sh/testssl.sh /usr/local/bin/testssl.sh && "
+            "sudo ln -sf /opt/testssl.sh/testssl.sh /usr/local/bin/testssl"
+        ),
+        description="testssl.sh TLS/SSL scanner (git clone into /opt, symlinked as testssl/testssl.sh).",
+    ),
+    "massdns": ToolSpec(
+        name="massdns",
+        binary="massdns",
+        install_cmd=(
+            "tmpdir=$(mktemp -d) && "
+            "git clone --depth 1 https://github.com/blechschmidt/massdns \"$tmpdir/massdns\" && "
+            "make -C \"$tmpdir/massdns\" && "
+            "sudo install -m 755 \"$tmpdir/massdns/bin/massdns\" /usr/local/bin/massdns && "
+            "rm -rf \"$tmpdir\""
+        ),
+        description="massdns high-performance DNS resolver (built from source; wildcard-filter fallback for dns_resolve).",
     ),
 }
 
