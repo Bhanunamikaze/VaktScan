@@ -1,0 +1,22 @@
+Retire.js client-side vulnerability database (vendored)
+=======================================================
+
+File:    retirejs_db.json
+Source:  https://raw.githubusercontent.com/RetireJS/retire.js/master/repository/jsrepository-v4.json
+Project: RetireJS / retire.js community vulnerability repository
+         https://github.com/RetireJS/retire.js
+License: Apache License 2.0
+         https://github.com/RetireJS/retire.js/blob/master/LICENSE.md
+
+This is the RetireJS community-maintained CLIENT-SIDE (browser / served-JS
+detection) repository. It is the jsrepository-v4 variant, chosen because it is
+the most complete client-side detection database available upstream: it carries
+the full set of vulnerability entries and detection extractors (uri, filename,
+filecontent, filecontentreplace, func, hashes, ast) in a flat
+library-name -> {licenses, vulnerabilities, extractors} shape.
+
+It is NOT npmrepository.json (that file contains server-side npm advisories that
+are not detectable from served JavaScript).
+
+This copy was vendored from upstream. No build-time retrieval timestamp is
+recorded here.

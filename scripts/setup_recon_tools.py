@@ -16,6 +16,11 @@ It focuses on the tooling consumed by:
   * modules/favicon_jarm.py    → jarm / pyjarm
   * modules/testssl_runner.py  → testssl / testssl.sh
 
+This script only handles external binaries. The vendored Retire.js client-side
+CVE database (modules/data/retirejs_db.json) is refreshed separately by
+`python scripts/update_js_cve_db.py` (run automatically at the end of
+requirements.sh; safe to run standalone with --force).
+
 Usage:
     python scripts/setup_recon_tools.py            # Just report tool status
     python scripts/setup_recon_tools.py --install  # Attempt to install missing tools

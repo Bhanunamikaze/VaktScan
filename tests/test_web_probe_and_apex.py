@@ -94,6 +94,117 @@ class ProbeWebUrlsTest(unittest.TestCase):
     def test_no_urls_returns_empty(self):
         self.assertEqual(asyncio.run(main._probe_web_urls([], "reports", "lbl", 10)), [])
 
+    def test_js_cve_runs_in_direct_target_path(self):
+        # Regression: js_cve previously only ran in recon mode. The direct-target
+        # web-probe path must feed its discovered JS to js_cve too.
+        js_cve_finding = {"vulnerability": "CVE-2011-4969 - jquery 1.6.2"}
+
+        class FakeHttpx:
+            def __init__(self, output_dir=None):
+                pass
+
+            async def run_httpx(self, urls, concurrency):
+                return [{"url": "http://a/app.js"}]
+
+            def save_csv(self, data, label):
+                pass
+
+        class FakeNuclei:
+            def __init__(self, output_dir=None):
+                pass
+
+            async def run_nuclei(self, urls):
+                return []
+
+        class FakeDir:
+            def __init__(self, label, output_dir=None):
+                pass
+
+            async def run_dirsearch(self, urls):
+                return "reports"
+
+        class FakeJS:
+            def __init__(self, urls, output_dir=None):
+                pass
+
+            async def run(self):
+                return {"findings": [], "js_urls": ["http://a/jquery-1.6.2.min.js"],
+                        "absolute_urls": []}
+
+        async def fake_wc(urls, concurrency):
+            return []
+
+        captured = {}
+
+        async def fake_scan(corpus, output_dir=None, concurrency=20):
+            captured["corpus"] = list(corpus)
+            return [js_cve_finding]
+
+        with ExitStack() as es:
+            es.enter_context(mock.patch.object(main.httpx_runner, "HTTPXRunner", FakeHttpx))
+            es.enter_context(mock.patch.object(main.nuclei_runner, "NucleiRunner", FakeNuclei))
+            es.enter_context(mock.patch.object(main.web_checks, "run_checks", fake_wc))
+            es.enter_context(mock.patch.object(main.dir_enum, "DirEnumerator", FakeDir))
+            es.enter_context(mock.patch.object(main.js_paths, "JSPathsScanner", FakeJS))
+            es.enter_context(mock.patch.object(main.js_cve, "scan_js_cves", fake_scan))
+            findings = asyncio.run(main._probe_web_urls(["http://a:80"], "reports", "lbl", 10))
+
+        self.assertIn(js_cve_finding, findings)
+        # Both the js_paths-discovered JS URL and the alive .js URL are in the corpus.
+        self.assertIn("http://a/jquery-1.6.2.min.js", captured["corpus"])
+        self.assertIn("http://a/app.js", captured["corpus"])
+
+    def test_js_cve_skipped_when_disabled(self):
+        class FakeHttpx:
+            def __init__(self, output_dir=None):
+                pass
+
+            async def run_httpx(self, urls, concurrency):
+                return [{"url": "http://a/app.js"}]
+
+            def save_csv(self, data, label):
+                pass
+
+        class FakeNuclei:
+            def __init__(self, output_dir=None):
+                pass
+
+            async def run_nuclei(self, urls):
+                return []
+
+        class FakeDir:
+            def __init__(self, label, output_dir=None):
+                pass
+
+            async def run_dirsearch(self, urls):
+                return "reports"
+
+        class FakeJS:
+            def __init__(self, urls, output_dir=None):
+                pass
+
+            async def run(self):
+                return {"findings": [], "js_urls": ["http://a/jquery-1.6.2.min.js"]}
+
+        async def fake_wc(urls, concurrency):
+            return []
+
+        scan = mock.AsyncMock(return_value=[{"vulnerability": "should-not-appear"}])
+
+        with ExitStack() as es:
+            es.enter_context(mock.patch.object(main.httpx_runner, "HTTPXRunner", FakeHttpx))
+            es.enter_context(mock.patch.object(main.nuclei_runner, "NucleiRunner", FakeNuclei))
+            es.enter_context(mock.patch.object(main.web_checks, "run_checks", fake_wc))
+            es.enter_context(mock.patch.object(main.dir_enum, "DirEnumerator", FakeDir))
+            es.enter_context(mock.patch.object(main.js_paths, "JSPathsScanner", FakeJS))
+            es.enter_context(mock.patch.object(main.js_cve, "scan_js_cves", scan))
+            findings = asyncio.run(
+                main._probe_web_urls(["http://a:80"], "reports", "lbl", 10, enable_js_cve=False)
+            )
+
+        scan.assert_not_called()
+        self.assertEqual(findings, [])
+
 
 class StreamingWebProbeOptInTest(unittest.TestCase):
     def _run(self, web_probe):
@@ -108,9 +219,10 @@ class StreamingWebProbeOptInTest(unittest.TestCase):
         async def fake_chunk_services(*args, **kwargs):
             return []
 
-        async def fake_probe(urls, output_dir, label, concurrency):
+        async def fake_probe(urls, output_dir, label, concurrency, enable_js_cve=True):
             calls["n"] += 1
             calls["urls"] = urls
+            calls["enable_js_cve"] = enable_js_cve
             return []
 
         async def fake_enrich(findings, run_id, output_dir, sarif_output, output_format=None):

@@ -64,6 +64,7 @@ from modules import (
     waybackurls_runner,
     domain_scan,
     js_paths,
+    js_cve,
     aem,
     cpanel,
     dns_recon,
@@ -206,6 +207,17 @@ def print_logo():
     LOGO_PRINTED = True
 
 
+def _looks_like_js(url):
+    """True when a URL's path points at a JavaScript file (.js/.mjs), ignoring
+    any query string/fragment. Used to build the js_cve corpus from URLs VaktScan
+    already discovered."""
+    try:
+        from urllib.parse import urlparse as _urlparse
+        return _urlparse((url or "").lower()).path.endswith((".js", ".mjs"))
+    except Exception:
+        return False
+
+
 async def run_recon_followups(
     subdomains,
     recon_domain,
@@ -218,9 +230,14 @@ async def run_recon_followups(
     enable_archived=True,
     enable_screenshots=False,
     extra_scans=frozenset(),
+    enable_js_cve=True,
 ):
     """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
     all_findings = []
+    # JS corpus for the client-side CVE scan (js_cve). We REUSE the JS VaktScan
+    # already discovers - JS URLs from js_paths, JS-looking alive/absolute URLs,
+    # and archived .js URLs - rather than adding a second crawl/download pass.
+    js_cve_corpus = set()
 
     if not subdomains:
         print(f"{Colors.YELLOW}[!] No subdomains discovered to probe further.{Colors.RESET}")
@@ -440,6 +457,21 @@ async def run_recon_followups(
             print(f"{Colors.GREEN}[+] JS paths: {len(js_findings)} finding(s).{Colors.RESET}")
             all_findings.extend(js_findings)
 
+        # Harvest the JS that js_paths already discovered (JS file URLs + any
+        # JS-looking absolute URLs it extracted) for the client-side CVE scan.
+        if enable_js_cve and isinstance(js_result, dict):
+            for _u in js_result.get('js_urls', []) or []:
+                if _u:
+                    js_cve_corpus.add(_u)
+            for _u in js_result.get('absolute_urls', []) or []:
+                if _u and _looks_like_js(_u):
+                    js_cve_corpus.add(_u)
+        # Also fold in any JS that httpx probed directly as an alive URL.
+        if enable_js_cve:
+            for _u in alive_urls:
+                if _looks_like_js(_u):
+                    js_cve_corpus.add(_u)
+
         # Visual triage: screenshot alive URLs (opt-in via --screenshots; capped,
         # since a recon run can yield tens of thousands of alive hosts). Gracefully
         # skips when gowitness/aquatone isn't installed.
@@ -510,6 +542,11 @@ async def run_recon_followups(
                     for _urls in _res.values():
                         _archived_urls.extend(_urls or [])
             _archived_urls = sorted(set(_archived_urls))
+            # Fold archived .js URLs into the client-side CVE corpus too.
+            if enable_js_cve:
+                for _u in _archived_urls:
+                    if _looks_like_js(_u):
+                        js_cve_corpus.add(_u)
             if _archived_urls:
                 _arch_findings = await archived_urls.scan_archived_urls(_archived_urls, output_dir, concurrency)
                 if _arch_findings:
@@ -517,6 +554,14 @@ async def run_recon_followups(
                     all_findings.extend(_arch_findings)
     else:
         print(f"{Colors.YELLOW}[!] No hostname targets available for gau/waybackurls.{Colors.RESET}")
+
+    # Client-side JS CVE scan (js_cve) over the JS VaktScan already discovered.
+    # Default-ON; --no-js-cve opts out; silently no-ops if the Retire.js DB is
+    # absent. Reuses the collected corpus - no extra crawl pass.
+    if enable_js_cve and js_cve_corpus:
+        all_findings.extend(
+            await _run_js_cve_over_corpus(js_cve_corpus, output_dir, concurrency)
+        )
 
     await _await_nmap_task()
     return all_findings
@@ -644,7 +689,8 @@ WEB_PROBE_CHECKPOINT_BATCH = 50
 
 
 async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
-                          completed_urls=None, record_completed=None, batch_size=None):
+                          completed_urls=None, record_completed=None, batch_size=None,
+                          enable_js_cve=True):
     """httpx-probe the given URLs, then run nuclei + web_checks + dirsearch + JS
     path extraction on the alive ones. Returns the collected findings (dirsearch
     writes its own reports). Shared by the normal scan and (opt-in) streaming mode.
@@ -679,16 +725,72 @@ async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
         batches = [web_probe_urls]
 
     for batch in batches:
-        findings.extend(await _run_web_probe_batch(batch, output_dir, domain_label, concurrency))
+        findings.extend(await _run_web_probe_batch(
+            batch, output_dir, domain_label, concurrency, enable_js_cve=enable_js_cve))
         if record_completed is not None:
             # Mark the batch done only after its full pipeline finished.
             record_completed(batch)
     return findings
 
 
-async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurrency):
-    """Run the full web-probe pipeline (httpx→nuclei→web_checks→dirsearch→JS) on
-    one batch of URLs and return the collected findings."""
+async def _run_js_cve_over_corpus(js_cve_corpus, output_dir, concurrency):
+    """Run the client-side JS CVE scan (js_cve) over a pre-collected corpus of JS
+    URLs and return the findings. Shared by the recon, direct-target, and streaming
+    web-probe paths so js_cve fires in ALL of them (not only recon mode).
+
+    No-ops (returns ``[]``) when the corpus is empty or the Retire.js DB is absent,
+    and never raises (fail-open) - a js_cve failure must not break the pipeline.
+    """
+    findings = []
+    if not js_cve_corpus or not os.path.exists(js_cve.DB_PATH):
+        return findings
+    _js_corpus = sorted(js_cve_corpus)
+    print(f"{Colors.CYAN}[*] Scanning {len(_js_corpus)} JS artifact(s) for vulnerable "
+          f"client-side libraries (js_cve)...{Colors.RESET}")
+    from modules.dashboard import LiveDashboard
+    dashboard = LiveDashboard()
+    if dashboard.active:
+        dashboard.add_task("js_cve", "JS CVE Scan")
+    try:
+        findings = await js_cve.scan_js_cves(
+            _js_corpus, output_dir=output_dir, concurrency=concurrency
+        )
+    except Exception as exc:
+        _reraise_if_bug(exc)
+        print(f"{Colors.YELLOW}[!] js_cve error: {exc}{Colors.RESET}")
+        findings = []
+    finally:
+        if dashboard.active:
+            dashboard.complete_task(
+                "js_cve",
+                f"Found {len(findings) if isinstance(findings, list) else 0} CVEs",
+            )
+    if findings:
+        print(f"{Colors.GREEN}[+] js_cve: {len(findings)} client-side CVE finding(s).{Colors.RESET}")
+    return findings
+
+
+def _js_cve_corpus_from_web(js_result, alive_urls):
+    """Build a js_cve corpus (set of JS URLs) from a js_paths result and the alive
+    URLs - the JS VaktScan already discovered, reused with no extra crawl pass."""
+    corpus = set()
+    if isinstance(js_result, dict):
+        for _u in js_result.get('js_urls', []) or []:
+            if _u:
+                corpus.add(_u)
+        for _u in js_result.get('absolute_urls', []) or []:
+            if _u and _looks_like_js(_u):
+                corpus.add(_u)
+    for _u in alive_urls or []:
+        if _looks_like_js(_u):
+            corpus.add(_u)
+    return corpus
+
+
+async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurrency,
+                               enable_js_cve=True):
+    """Run the full web-probe pipeline (httpx→nuclei→web_checks→dirsearch→JS→js_cve)
+    on one batch of URLs and return the collected findings."""
     findings = []
     if not web_probe_urls:
         return findings
@@ -722,6 +824,14 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
     js_result = await js_scanner.run()
     js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
     findings.extend(js_findings)
+
+    # Client-side JS CVE scan (js_cve) over the JS this probe just discovered.
+    # Previously only ran in recon-domain mode; wiring it here makes it fire in the
+    # direct-target (-f targets.txt) and streaming web-probe paths too. Reuses the
+    # discovered JS - no extra crawl pass. Default-ON; --no-js-cve opts out.
+    if enable_js_cve:
+        corpus = _js_cve_corpus_from_web(js_result, alive_urls)
+        findings.extend(await _run_js_cve_over_corpus(corpus, output_dir, concurrency))
     return findings
 
 
@@ -872,6 +982,7 @@ async def main(
     enable_screenshots=False,
     enable_horizontal=False,
     extra_scans=frozenset(),
+    js_cve_scan=True,
     output_format=None,
     dns_hygiene=True,
     dns_permute=False,
@@ -1232,6 +1343,7 @@ async def main(
             enable_archived=archived_scan,
             enable_screenshots=enable_screenshots,
             extra_scans=extra_scans,
+            enable_js_cve=js_cve_scan,
         )
         if recon_findings:
             print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {safe_label}{Colors.RESET}")
@@ -1319,6 +1431,7 @@ async def main(
                 enable_archived=archived_scan,
                 enable_screenshots=enable_screenshots,
                 extra_scans=extra_scans,
+                enable_js_cve=js_cve_scan,
             )
             if recon_findings:
                 print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {recon_domain}{Colors.RESET}")
@@ -1487,6 +1600,7 @@ async def main(
                         enable_archived=archived_scan,
                         enable_screenshots=enable_screenshots,
                         extra_scans=extra_scans,
+                        enable_js_cve=js_cve_scan,
                     )
                     if recon_findings:
                         print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {domain}{Colors.RESET}")
@@ -1640,6 +1754,7 @@ async def main(
                 sarif_output=sarif_output,
                 web_probe=stream_web_probe,
                 output_format=output_format,
+                enable_js_cve=js_cve_scan,
             )
 
         if not is_resume or state_manager.state["phase"] == "initializing":
@@ -1836,6 +1951,7 @@ async def main(
                 completed_urls=state_manager.get_completed_web_urls(),
                 record_completed=state_manager.add_completed_web_urls,
                 batch_size=WEB_PROBE_CHECKPOINT_BATCH,
+                enable_js_cve=js_cve_scan,
             )
             for _wf in web_findings:
                 state_manager.add_vulnerability(_wf)
@@ -2049,6 +2165,7 @@ async def process_streaming_scan(
     sarif_output=None,
     web_probe=False,
     output_format=None,
+    enable_js_cve=True,
 ):
     print(f"{Colors.CYAN}[*] Calculating total targets for progress estimation...{Colors.RESET}")
     total_targets = 0
@@ -2117,7 +2234,9 @@ async def process_streaming_scan(
                                 chunk_web_urls.append(format_url(scheme, host, port))
                 chunk_web_urls = sorted(set(chunk_web_urls))
                 if chunk_web_urls:
-                    web_findings = await _probe_web_urls(chunk_web_urls, "reports", "streaming", concurrency)
+                    web_findings = await _probe_web_urls(
+                        chunk_web_urls, "reports", "streaming", concurrency,
+                        enable_js_cve=enable_js_cve)
                     for _wf in web_findings:
                         state_manager.add_vulnerability(_wf)
                     chunk_vulnerabilities.extend(web_findings)
@@ -2355,6 +2474,7 @@ async def cmd_scan(args):
                     ("default_creds", getattr(args, 'default_creds', False)),
                 ) if on
             ),
+            js_cve_scan=getattr(args, 'js_cve', True),
             output_format=getattr(args, 'format', None),
             dns_hygiene=getattr(args, 'dns_hygiene', True),
             dns_permute=getattr(args, 'dns_permute', False),
@@ -2572,6 +2692,10 @@ if __name__ == "__main__":
     sp_scan.add_argument("--no-archived-scan", action="store_false", dest="archived_scan", default=True,
                          help="Skip weaponizing gau/waybackurls archived URLs (dedup → filter → "
                               "re-probe live → secret-scan archived JS). On by default.")
+    sp_scan.add_argument("--no-js-cve", action="store_false", dest="js_cve", default=True,
+                         help="Skip the client-side JavaScript CVE scan (Retire.js engine) over the "
+                              "JS VaktScan already discovers. On by default; silently no-ops if the "
+                              "bundled vulnerability DB is absent.")
     sp_scan.add_argument("--screenshots", action="store_true", dest="screenshots",
                          help="Screenshot alive web URLs for visual triage via gowitness/aquatone "
                               "(off by default; capped; skips if the tool isn't installed)")

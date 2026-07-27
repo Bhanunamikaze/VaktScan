@@ -216,6 +216,18 @@ done
     echo "${green} [*] testssl.sh is already installed ${reset}"
     fi
 
+#Refreshing the vendored Retire.js client-side CVE DB (modules/data/retirejs_db.json)
+#Fail-safe: keeps the bundled copy if offline. Never aborts setup.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if command -v python3 > /dev/null && [ -f "$REPO_ROOT/scripts/update_js_cve_db.py" ]; then
+    echo -e "\n${cyan} [**] Refreshing Retire.js JS CVE database... ${reset}"
+    if python3 "$REPO_ROOT/scripts/update_js_cve_db.py"; then
+        echo -e "${magenta} [+] Retire.js JS CVE database is up to date ${reset}"
+    else
+        echo -e "${red} [-] Could not refresh Retire.js DB; keeping bundled copy ${reset}"
+    fi
+fi
+
 echo -e "\n${green}########## Completed ########## ${reset} \n"
 echo -e "\n${green} [*] All required tools have been checked and installed if necessary."
 

@@ -13,6 +13,7 @@ from . import gau_runner
 from . import waybackurls_runner
 from . import domain_scan
 from . import js_paths
+from . import js_cve
 from . import aem
 from . import cpanel
 from . import dns_recon
