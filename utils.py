@@ -42,9 +42,9 @@ def _normalize_target_token(raw: str) -> str:
         # Could be IPv6 (multiple colons) or host:port (single colon)
         parts = t.split(':')
         if len(parts) == 2:
-            # host:port — strip the port
+            # host:port - strip the port
             t = parts[0]
-        # else IPv6 address — keep as-is
+        # else IPv6 address - keep as-is
     # Strip trailing dot (FQDN notation)
     t = t.rstrip('.')
     return t.lower().strip()
@@ -154,7 +154,7 @@ def parse_targets_file(filepath: str) -> list:
         # Also split on whitespace runs IF neither token looks like it needs spaces
         tokens = re.split(r'[,\t]+', line)
         if len(tokens) == 1:
-            # No comma/tab — try splitting on whitespace only if it produces
+            # No comma/tab - try splitting on whitespace only if it produces
             # valid-looking tokens (avoids splitting "sub domain.com" incorrectly)
             ws_tokens = line.split()
             if len(ws_tokens) > 1:
@@ -487,11 +487,24 @@ def get_service_ports():
             953,                       # BIND control / dnsadmin
         ],
         "jenkins": [8080, 8090, 8443, 8888],
-        "testssl": [443, 8443, 465, 993, 995],
+        "testssl": [
+            443, 8443, 9443, 10443, 4443,   # HTTPS (standard + common alternates)
+            465, 587,                        # SMTPS / submission (STARTTLS auto-detected)
+            993, 995,                        # IMAPS / POP3S
+            636, 3269,                       # LDAPS / LDAP global-catalog over SSL
+            989, 990,                        # FTPS (data / control)
+            992, 563,                        # telnet-over-TLS / NNTPS
+            5061,                            # SIP-TLS
+            6443,                            # Kubernetes API server
+            2376,                            # Docker daemon TLS
+            5986,                            # WinRM over HTTPS
+            8834,                            # Nessus
+            2083, 2087, 2096,                # cPanel / WHM / Webmail over SSL
+        ],
         "service_recon": [
             # FTP / SSH / SMTP / DNS / Kerberos / RPC / NTP
             21, 22, 25, 26, 53, 88, 111, 123, 135,
-            # POP3 / IMAP (plain + TLS) — also covers cPanel mail stack
+            # POP3 / IMAP (plain + TLS) - also covers cPanel mail stack
             110, 143, 993, 995,
             # SMB / SNMP / LDAP / spamd / BIND control / PowerDNS web UI
             139, 161, 389, 445, 465, 587, 593, 636, 783, 953,
