@@ -28,6 +28,7 @@ tool wrapping, ``shutil.which`` detection, GRACEFUL skip (one info line, return
 """
 
 import asyncio
+import re
 import shutil
 from urllib.parse import parse_qsl, urlparse
 
@@ -193,40 +194,96 @@ def _filter_high_signal(urls):
 # 5. Finding construction
 # ---------------------------------------------------------------------------
 
-def _classify(url):
-    """Return ``(vulnerability, status, severity)`` for a live sensitive URL."""
-    low = url.lower()
-    parsed = urlparse(low)
-    path = parsed.path
-    path_query = path + (("?" + parsed.query) if parsed.query else "")
+def _looks_like_html(body):
+    """A catch-all / SPA page that returns 200 for every path is the #1 source of
+    false positives — reject any 'sensitive file' whose body is actually HTML."""
+    head = (body or "")[:2000].lower()
+    return "<html" in head or "<!doctype html" in head
 
-    for ext in HIGH_EXTENSIONS:
+
+def _matched_ext(url):
+    """The sensitive file extension matched by this URL's path, or None."""
+    path = urlparse(url.lower()).path
+    for ext in SENSITIVE_EXTENSIONS:
         if _ext_match(path, ext):
-            return (f"Exposed Sensitive File ({ext})", "VULNERABLE", "HIGH")
-    for kw in HIGH_KEYWORDS:
-        if kw in path_query:
-            return (f"Exposed Backup/Dump Artifact ({kw})", "VULNERABLE", "HIGH")
-    for ext in MEDIUM_EXTENSIONS:
-        if _ext_match(path, ext):
-            return (f"Exposed Config/Data File ({ext})", "POTENTIAL", "MEDIUM")
-    for kw in MEDIUM_KEYWORDS:
-        if kw in path_query:
-            return (f"Sensitive Keyword Endpoint ({kw})", "POTENTIAL", "MEDIUM")
-    for kw in INFO_KEYWORDS:
-        if kw in path_query:
-            return (f"Interesting Archived Endpoint ({kw})", "INFO", "INFO")
-    return ("Archived Sensitive URL", "INFO", "INFO")
+            return ext
+    return None
 
 
-def _build_exposure_finding(source_url, live_url, http_status):
-    vuln, status_val, severity = _classify(source_url)
+def _matched_keyword(url):
+    """The interesting path keyword matched by this URL, or None."""
+    parsed = urlparse(url.lower())
+    path_query = parsed.path + (("?" + parsed.query) if parsed.query else "")
+    for kw in INTERESTING_KEYWORDS:
+        if kw in path_query:
+            return kw
+    return None
+
+
+def _validate_exposure(ext, body, content_type, content_length):
+    """CONTENT ORACLE — confirm a 200 response body actually IS the sensitive
+    artifact, not a catch-all HTML page. Mirrors the validation in
+    modules/web_checks.py so archived-URL hits get the same anti-FP discipline.
+    Returns True only when the content is convincingly the claimed artifact.
+    """
+    body = body or ""
+    ctype = (content_type or "").lower()
+    _binary_types = (
+        "application/zip", "application/x-tar", "application/gzip",
+        "application/x-gzip", "application/octet-stream",
+    )
+    is_binary_ct = any(t in ctype for t in _binary_types)
+
+    # Binary archives: require a binary content-type or substantial size, and the
+    # body must not be an HTML error/catch-all page.
+    if ext in (".zip", ".tar.gz", ".tgz"):
+        if "text/html" in ctype or _looks_like_html(body):
+            return False
+        return is_binary_ct or content_length > 1024
+
+    # A text artifact served as HTML is a catch-all false positive.
+    if _looks_like_html(body):
+        return False
+    if is_binary_ct:
+        return content_length > 64  # unexpected binary for a text type — accept if sizeable
+
+    if ext == ".git":
+        return bool(re.search(r"ref:\s*refs/", body) or "[core]" in body or "[remote" in body)
+    if ext == ".env":
+        return bool(re.search(r"(?m)^[A-Z_][A-Z0-9_]*=.+", body))
+    if ext == ".sql":
+        return bool(re.search(r"(?i)(create table|insert into|drop table|alter table|--\s|/\*)", body))
+    if ext == ".json":
+        return body.lstrip()[:1] in ("{", "[")
+    if ext in (".yml", ".yaml"):
+        return bool(re.search(r"(?m)^[\w.\-]+:\s", body))
+    if ext in (".ini", ".config"):
+        return "[" in body or bool(re.search(r"(?m)^[\w.\-]+\s*=", body))
+    if ext == ".log":
+        return len(body.strip()) > 20
+    # .bak .old .backup .dump .swp .php~ — text-or-binary backups: substantive, non-HTML.
+    return len(body.strip()) > 40
+
+
+def _classify_ext(ext):
+    """(vulnerability, status, severity) for a CONTENT-VALIDATED exposed file."""
+    if ext in HIGH_EXTENSIONS:
+        return (f"Exposed Sensitive File ({ext})", "VULNERABLE", "HIGH")
+    if ext in MEDIUM_EXTENSIONS:
+        return (f"Exposed Config/Data File ({ext})", "POTENTIAL", "MEDIUM")
+    return (f"Exposed Archived File ({ext})", "POTENTIAL", "MEDIUM")
+
+
+def _build_exposure_finding(source_url, live_url, http_status, ext):
+    vuln, status_val, severity = _classify_ext(ext)
     parsed = urlparse(live_url or source_url)
     port = str(parsed.port or (443 if parsed.scheme == "https" else 80))
     detail = (
-        f"Archived URL is live now (HTTP {http_status}) and exposes a sensitive "
-        f"artifact. Harvested source: {source_url}"
+        f"Archived URL is live (HTTP {http_status}) and its response CONTENT was "
+        f"validated as a real {ext} artifact (not a catch-all page). "
+        f"Harvested source: {source_url}"
     )
-    finding = {
+    return normalize_finding({
         "target": parsed.hostname or source_url,
         "resolved_ip": "N/A",
         "port": port,
@@ -241,8 +298,33 @@ def _build_exposure_finding(source_url, live_url, http_status):
         "http_status": str(http_status),
         "page_title": "N/A",
         "content_length": "N/A",
-    }
-    return normalize_finding(finding)
+    })
+
+
+def _build_info_endpoint_finding(source_url, live_url, http_status, keyword):
+    """A keyword-matched archived endpoint that is live — INFO only, NOT an
+    exposure claim (a live '/admin' path is not a confirmed exposed file)."""
+    parsed = urlparse(live_url or source_url)
+    port = str(parsed.port or (443 if parsed.scheme == "https" else 80))
+    return normalize_finding({
+        "target": parsed.hostname or source_url,
+        "resolved_ip": "N/A",
+        "port": port,
+        "vulnerability": f"Live Archived Endpoint ({keyword})",
+        "status": "INFO",
+        "severity": "INFO",
+        "module": "archived_urls",
+        "service_version": "N/A",
+        "url": live_url or source_url,
+        "payload_url": source_url,
+        "details": (
+            f"Archived URL matching keyword '{keyword}' is live (HTTP {http_status}). "
+            f"Review manually — not a confirmed exposure. Source: {source_url}"
+        ),
+        "http_status": str(http_status),
+        "page_title": "N/A",
+        "content_length": "N/A",
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +372,24 @@ async def _fetch_text(url, timeout=10.0):
             return resp.text
     except Exception:
         return None
+
+
+async def _fetch_meta(url, timeout=10.0):
+    """Fetch ``(text, content_type, content_length_bytes)`` for content validation.
+
+    Returns ``(None, "", 0)`` on any failure/missing dep. Isolated so tests can
+    mock it without real network access.
+    """
+    try:
+        import httpx as _httpx
+    except Exception:
+        return None, "", 0
+    try:
+        async with _httpx.AsyncClient(timeout=timeout, verify=False, follow_redirects=True) as client:
+            resp = await client.get(url)
+            return resp.text, resp.headers.get("content-type", ""), len(resp.content)
+    except Exception:
+        return None, "", 0
 
 
 # ---------------------------------------------------------------------------
@@ -367,14 +467,14 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
             known = set(probe_targets)
             live_js = []
 
+            live_sensitive = []  # (source, live_url, status) with a sensitive ext or keyword
             for entry in probe_results or []:
                 if not isinstance(entry, dict):
                     continue
-                try:
-                    status_code = int(entry.get("status_code") or 0)
-                except (TypeError, ValueError):
-                    status_code = 0
-                if status_code not in LIVE_STATUS_CODES:
+                status_code = _safe_int(entry.get("status_code"))
+                # 200 ONLY: a sensitive path behind 401/403 is PROTECTED, not exposed —
+                # emitting "exposed file" for it is a false positive.
+                if status_code != 200:
                     continue
 
                 source = _resolve_source(entry, known)
@@ -382,21 +482,43 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
                 if not source:
                     continue
 
-                # Exposed sensitive file (not a .js — those get secret-scanned).
-                if source in sensitive_set or (not _is_js(source) and _match_reason(source)):
-                    findings.append(_build_exposure_finding(source, live_url, status_code))
-
-                # Live JS → queue for secret scanning.
                 if source in js_set or _is_js(source):
                     live_js.append((source, live_url, status_code))
+                elif source in sensitive_set or _match_reason(source):
+                    live_sensitive.append((source, live_url, status_code))
 
-            live_count = sum(
-                1 for e in (probe_results or [])
-                if isinstance(e, dict) and _safe_int(e.get("status_code")) in LIVE_STATUS_CODES
+            print(
+                f"{_C.GREEN}[+] {len(live_sensitive)} live sensitive candidate(s), "
+                f"{len(live_js)} live JS to secret-scan.{_C.RESET}"
             )
-            print(f"{_C.GREEN}[+] {live_count} archived URL(s) live now; {len(live_js)} live JS to scan.{_C.RESET}")
 
-            # 4. Secret-scan live JS (reusing the js_paths engine).
+            # 3b. CONTENT-VALIDATE sensitive candidates before claiming exposure.
+            #     A live 200 alone is not enough — catch-all/SPA servers 200 every
+            #     path. Fetch the body and confirm it IS the artifact.
+            if live_sensitive:
+                prog_s = DashboardProgress("archived_urls", total=len(live_sensitive), noun="files")
+
+                async def _validate_one(src, lurl, code):
+                    ext = _matched_ext(src)
+                    if ext:
+                        body, ctype, clen = await _fetch_meta(lurl)
+                        if body is None:
+                            return
+                        if _validate_exposure(ext, body, ctype, clen):
+                            findings.append(_build_exposure_finding(src, lurl, code, ext))
+                        # else: content did not validate → catch-all FP → drop silently
+                    else:
+                        kw = _matched_keyword(src)
+                        if kw:
+                            findings.append(_build_info_endpoint_finding(src, lurl, code, kw))
+
+                await asyncio.gather(
+                    *(prog_s.wrap(_validate_one(s, l, c)) for s, l, c in live_sensitive),
+                    return_exceptions=True,
+                )
+
+            # 4. Secret-scan live JS (reusing the js_paths engine — regex matches
+            #    are self-validating, so no catch-all FP risk there).
             if live_js:
                 prog = DashboardProgress("archived_urls", total=len(live_js), noun="js")
 

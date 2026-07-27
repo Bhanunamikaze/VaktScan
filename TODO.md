@@ -332,13 +332,21 @@ Not missing detectors — the highest-leverage work is connecting data already c
 - [x] **H2 Horizontal / infrastructure expansion** — DONE. `modules/horizontal_expand.py` (`expand_horizontal`): `asnmap` (org/domain→ASN→CIDR), bounded `dnsx -ptr` reverse-DNS sweep (skips >/20, caps 8192 IPs), `amass intel` (→related roots). Wired into the recon phase per domain; opt-in `--horizontal`; tools skip gracefully if absent. Tests: `tests/test_horizontal_expand.py` (17). *(Follow-up: feed reverse_hosts/related_domains back into the live-host pipeline to compound scope.)*
 - [x] **H3 Screenshotting / visual triage** — DONE. `modules/screenshots.py` (`capture_screenshots`): `gowitness` (modern+legacy CLI) / `aquatone` fallback over alive URLs → `screenshots/manifest.csv` + `index.html` gallery → canonical INFO findings. Wired after httpx alive-URL discovery; opt-in `--screenshots`, capped at 500 URLs. Tests: `tests/test_screenshots.py` (6).
 
-### MEDIUM
-- [ ] Parameter discovery (`arjun`/paramspider + `gf`) → nuclei DAST.
-- [ ] DNS resolution hygiene (`puredns`/massdns wildcard filter) + permutations (`alterx`/dnsgen).
-- [ ] Favicon hashing (mmh3) + JARM → Shodan/Censys pivots (keys already wired).
-- [ ] Deeper tech fingerprinting (`webanalyze`/Wappalyzer) + EOL cross-ref → better NVD/KEV mapping.
-- [ ] Alerting/notification delivery (Slack/webhook/email on inventory delta + CT new-certs).
-- [ ] Active default-credential breadth (Tomcat Manager, Jenkins, Grafana admin/admin).
+### MEDIUM — ✅ DONE (built with false-positive oracles, opt-in flags, wired)
+- [x] **Parameter discovery** — `modules/param_discovery.py` (`--params`). arjun/paramspider/gf; INFO-only (gf = "candidates", never vuln claims). Tests assert gf-tagged never become VULNERABLE.
+- [x] **DNS resolution hygiene** — `modules/dns_resolve.py` (`--dns-hygiene`). puredns/massdns wildcard filter + alterx/dnsgen permutations (50k cap); feeds cleaned set forward. Wildcard filtering IS the FP-reducing oracle.
+- [x] **Favicon (mmh3) + JARM** — `modules/favicon_jarm.py` (`--favicon`). Shodan/Censys pivot hashes (facts, no vuln claim).
+- [x] **Tech fingerprint + EOL** — `modules/tech_fingerprint.py` (`--tech`). webanalyze + endoflife.date; EOL finding ONLY when product+version+past-EOL-date all confirmed (4 negative paths tested).
+- [x] **Alerting** — `modules/notify.py` (on by default, env-gated). Slack/Discord/webhook/email on inventory `delta['new']`; min-severity gated; never raises.
+- [x] **Default-credential breadth** — `modules/default_creds.py` (`--default-creds`). Tomcat/Jenkins/Grafana/Basic-Auth; CRITICAL only on a positive oracle a login-page 200 can't satisfy, **plus a wrong-credential negative control** to suppress always-authenticated catch-alls.
+
+### Oracle / false-positive hardening (2026-07)
+- [x] **archived_urls.py hardened** — was emitting HIGH/VULNERABLE on status code alone (200/401/403). Now: **200-only** (401/403 = protected, not exposed) + **content oracle** per type (`.git`→`ref: refs/`, `.env`→`KEY=value`, `.sql`→SQL markers, backups→binary content-type/size, reject HTML catch-all bodies), mirroring `web_checks` §1. Keyword-only paths downgraded to INFO. Tests assert catch-all HTML `.env` → NO finding.
+
+### HTML report ✅ DONE
+- [x] `reporter.save_results_to_html` — self-contained, HTML-escaped, severity summary + client-side filter; written alongside CSV/JSON/SARIF in `_enrich_and_report`.
+
+### MEDIUM (remaining)
 
 ### LOW
 - [ ] Integrate raw dirsearch/gau/wayback outputs into the unified findings/inventory/SARIF pipeline.

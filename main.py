@@ -25,6 +25,7 @@ from reporter import (
     save_port_scan_csv,
     save_results_to_csv,
     save_results_to_json,
+    save_results_to_html,
     write_sarif_output,
     print_final_results,
 )
@@ -79,6 +80,12 @@ from modules import (
     archived_urls,
     horizontal_expand,
     screenshots,
+    param_discovery,
+    dns_resolve,
+    favicon_jarm,
+    tech_fingerprint,
+    default_creds,
+    notify,
 )
 
 # Exceptions that indicate a programming bug rather than an environmental,
@@ -207,6 +214,7 @@ async def run_recon_followups(
     port_retries=DEFAULT_PORT_RETRIES,
     enable_archived=True,
     enable_screenshots=False,
+    extra_scans=frozenset(),
 ):
     """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
     all_findings = []
@@ -492,6 +500,29 @@ async def run_recon_followups(
                 print(f"{Colors.GREEN}[+] Screenshots: {len(_shot_findings)} finding(s).{Colors.RESET}")
                 all_findings.extend(_shot_findings)
 
+        # Optional alive-URL analyses (opt-in — each can be heavy at recon scale;
+        # all gracefully skip when their external tool isn't installed).
+        if "params" in extra_scans:
+            _pf = await param_discovery.discover_parameters(alive_urls, output_dir, concurrency)
+            if _pf:
+                print(f"{Colors.GREEN}[+] Parameter discovery: {len(_pf)} finding(s).{Colors.RESET}")
+                all_findings.extend(_pf)
+        if "favicon" in extra_scans:
+            _ff = await favicon_jarm.fingerprint_favicon_jarm(alive_urls, output_dir, concurrency)
+            if _ff:
+                print(f"{Colors.GREEN}[+] Favicon/JARM pivots: {len(_ff)} finding(s).{Colors.RESET}")
+                all_findings.extend(_ff)
+        if "tech" in extra_scans:
+            _tf = await tech_fingerprint.fingerprint_tech(alive_urls, output_dir, concurrency)
+            if _tf:
+                print(f"{Colors.GREEN}[+] Tech/EOL fingerprint: {len(_tf)} finding(s).{Colors.RESET}")
+                all_findings.extend(_tf)
+        if "default_creds" in extra_scans:
+            _dcf = await default_creds.check_default_credentials(alive_urls, output_dir, concurrency)
+            if _dcf:
+                print(f"{Colors.BRIGHT_RED}[!] Default credentials: {len(_dcf)} confirmed finding(s).{Colors.RESET}")
+                all_findings.extend(_dcf)
+
     # GAU + waybackurls in parallel
     domain_hosts = collect_domain_hosts(alive_urls)
     if domain_hosts:
@@ -761,6 +792,14 @@ async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_ou
         inventory.complete_scan_run(run_id, len(final_vulnerabilities))
         inventory.print_delta_report(delta)
         inventory.print_executive_summary(run_id, len(final_vulnerabilities))
+        # Alert on NEW findings (Slack/Discord/webhook/email). No-ops silently
+        # when no *_WEBHOOK_URL / SMTP env vars are configured.
+        try:
+            _new = list(delta.get("new", [])) if isinstance(delta, dict) else []
+            if _new:
+                await notify.send_alerts(_new, {}, scan_label=str(output_dir or ""))
+        except Exception as _exc:
+            print(f"{Colors.YELLOW}[!] Alert delivery skipped: {_exc}{Colors.RESET}")
 
     # Always write CSV (even at 0 findings — a clean empty report).
     csv_file = save_results_to_csv(
@@ -772,6 +811,9 @@ async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_ou
     if final_vulnerabilities:
         json_path = os.path.join(output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.json") if output_dir else None
         save_results_to_json(final_vulnerabilities, filename=json_path)
+    # Always write the self-contained HTML report (shareable, even at 0 findings).
+    html_path = os.path.join(output_dir, f"scan_results_{time.strftime('%Y%m%d_%H%M%S')}.html") if output_dir else None
+    save_results_to_html(final_vulnerabilities, filename=html_path, scan_label=os.path.basename(output_dir) if output_dir else None)
     if sarif_output:
         write_sarif_output(final_vulnerabilities, sarif_output)
 
@@ -805,6 +847,7 @@ async def main(
     archived_scan=True,
     enable_screenshots=False,
     enable_horizontal=False,
+    extra_scans=frozenset(),
 ):
     """
     Main orchestrator for the scanning tool.
@@ -1148,6 +1191,7 @@ async def main(
             port_retries,
             enable_archived=archived_scan,
             enable_screenshots=enable_screenshots,
+            extra_scans=extra_scans,
         )
         if recon_findings:
             print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {safe_label}{Colors.RESET}")
@@ -1234,6 +1278,7 @@ async def main(
                 port_retries,
                 enable_archived=archived_scan,
                 enable_screenshots=enable_screenshots,
+                extra_scans=extra_scans,
             )
             if recon_findings:
                 print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {recon_domain}{Colors.RESET}")
@@ -1318,6 +1363,19 @@ async def main(
                         print(f"{Colors.GREEN}[+] Horizontal expansion: {_rd} related domain(s), "
                               f"{_rh} reverse-DNS host(s) discovered for {domain}.{Colors.RESET}")
 
+                # DNS hygiene (opt-in --dns-hygiene): wildcard-filter + permutation-
+                # expand the enumerated subdomains before probing. Passthrough when
+                # puredns/massdns aren't installed. Feeds the cleaned set forward.
+                if "dns_hygiene" in extra_scans:
+                    _dns = await dns_resolve.resolve_and_permute(subdomains, [domain], domain_output_dir, concurrency)
+                    for _f in _dns.get("findings", []):
+                        recon_phase_findings.append(_f)
+                    if _dns.get("resolved"):
+                        _before = len(subdomains)
+                        subdomains = _dns["resolved"]
+                        print(f"{Colors.GREEN}[+] DNS hygiene: {_before} → {len(subdomains)} host(s) "
+                              f"(wildcard-filtered + permutation-expanded).{Colors.RESET}")
+
                 if scan_found:
                     recon_findings = await run_recon_followups(
                         subdomains,
@@ -1330,6 +1388,7 @@ async def main(
                         port_retries,
                         enable_archived=archived_scan,
                         enable_screenshots=enable_screenshots,
+                        extra_scans=extra_scans,
                     )
                     if recon_findings:
                         print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {domain}{Colors.RESET}")
@@ -2129,6 +2188,15 @@ async def cmd_scan(args):
             archived_scan=getattr(args, 'archived_scan', True),
             enable_screenshots=getattr(args, 'screenshots', False),
             enable_horizontal=getattr(args, 'horizontal', False),
+            extra_scans=frozenset(
+                name for name, on in (
+                    ("params", getattr(args, 'params', False)),
+                    ("favicon", getattr(args, 'favicon', False)),
+                    ("tech", getattr(args, 'tech', False)),
+                    ("default_creds", getattr(args, 'default_creds', False)),
+                    ("dns_hygiene", getattr(args, 'dns_hygiene', False)),
+                ) if on
+            ),
         )
     except KeyboardInterrupt:
         if _partial_findings:
@@ -2355,6 +2423,17 @@ if __name__ == "__main__":
                          help="Horizontal/infra expansion for domain targets: asnmap → CIDRs, "
                               "reverse-DNS sweep, amass intel → related domains (off by default; "
                               "skips tools that aren't installed)")
+    sp_scan.add_argument("--params", action="store_true", dest="params",
+                         help="Parameter discovery on alive URLs (arjun/paramspider/gf) → INFO param surface")
+    sp_scan.add_argument("--favicon", action="store_true", dest="favicon",
+                         help="Favicon mmh3 hash + JARM fingerprint on alive URLs (Shodan/Censys pivots)")
+    sp_scan.add_argument("--tech", action="store_true", dest="tech",
+                         help="Technology fingerprint + End-of-Life check on alive URLs (webanalyze + endoflife.date)")
+    sp_scan.add_argument("--default-creds", action="store_true", dest="default_creds",
+                         help="Confirmed default-credential checks on alive URLs (Tomcat/Jenkins/Grafana/Basic-Auth)")
+    sp_scan.add_argument("--dns-hygiene", action="store_true", dest="dns_hygiene",
+                         help="Wildcard-filter + permutation-expand enumerated subdomains before probing "
+                              "(puredns/massdns/alterx; passthrough if not installed)")
     sp_scan.add_argument("--wordlist")
     # --scan-found removed: the scan subcommand always probes discovered subdomains
     sp_scan.add_argument("--nmap", action="store_true")

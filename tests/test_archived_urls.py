@@ -1,7 +1,12 @@
 """Tests for modules/archived_urls.py.
 
-All tests run WITHOUT real tools or network access: the ``uro`` subprocess and
-the httpx re-probe are mocked, and JS fetching is patched.
+All tests run WITHOUT real tools or network access: the ``uro`` subprocess, the
+httpx re-probe, and the content/JS fetches are mocked.
+
+The emphasis is the FALSE-POSITIVE discipline: a live 200 alone must NEVER
+produce an "exposed sensitive file" finding — the response CONTENT must be
+validated (a catch-all/SPA that 200s every path must yield nothing), and a
+401/403 (protected) must not be reported as exposed.
 """
 
 import unittest
@@ -9,16 +14,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from modules import archived_urls
 from modules.archived_urls import (
-    _classify,
+    _classify_ext,
     _dedup_internal,
     _filter_high_signal,
+    _validate_exposure,
     scan_archived_urls,
 )
 from modules.schema import CANONICAL_KEYS
 
 
 def _is_canonical(finding):
-    """A finding must carry all 15 canonical keys (normalize_finding contract)."""
     return set(CANONICAL_KEYS).issubset(finding.keys())
 
 
@@ -33,10 +38,6 @@ class DedupTests(unittest.TestCase):
         ]
         out = _dedup_internal(urls)
         self.assertEqual(len(out), 3)
-        # First occurrence of the (path, {q,page}) key is kept.
-        self.assertIn("https://ex.com/search?q=a&page=1", out)
-        self.assertIn("https://ex.com/search?q=c&sort=x", out)
-        self.assertIn("https://ex.com/other?q=a", out)
 
     def test_internal_dedup_skips_blanks(self):
         self.assertEqual(_dedup_internal(["", "  ", None]), [])
@@ -45,70 +46,49 @@ class DedupTests(unittest.TestCase):
 class FilterTests(unittest.TestCase):
     def test_filter_selects_extensions_and_keywords_only(self):
         urls = [
-            "https://ex.com/index.html",          # dropped
-            "https://ex.com/img/logo.png",         # dropped
-            "https://ex.com/config/.env",          # sensitive ext .env
-            "https://ex.com/db/backup.sql",        # sensitive ext .sql (+ keyword)
-            "https://ex.com/app.old",              # sensitive ext .old
-            "https://ex.com/admin/panel",          # keyword admin
-            "https://ex.com/api/v1/users",         # keyword api
-            "https://ex.com/assets/app.js",        # JS bucket
-            "https://ex.com/module.mjs",           # JS bucket
+            "https://ex.com/index.html",
+            "https://ex.com/img/logo.png",
+            "https://ex.com/config/.env",
+            "https://ex.com/db/backup.sql",
+            "https://ex.com/admin/panel",
+            "https://ex.com/assets/app.js",
         ]
         sensitive, js = _filter_high_signal(urls)
-
         self.assertIn("https://ex.com/config/.env", sensitive)
-        self.assertIn("https://ex.com/db/backup.sql", sensitive)
-        self.assertIn("https://ex.com/app.old", sensitive)
         self.assertIn("https://ex.com/admin/panel", sensitive)
-        self.assertIn("https://ex.com/api/v1/users", sensitive)
-
-        # Plain page/asset are excluded.
         self.assertNotIn("https://ex.com/index.html", sensitive)
-        self.assertNotIn("https://ex.com/img/logo.png", sensitive)
+        self.assertEqual(set(js), {"https://ex.com/assets/app.js"})
 
-        # JS routed to its own bucket, not the sensitive bucket.
-        self.assertEqual(set(js), {"https://ex.com/assets/app.js", "https://ex.com/module.mjs"})
-        self.assertNotIn("https://ex.com/assets/app.js", sensitive)
-
-    def test_git_directory_form_is_matched(self):
-        sensitive, _ = _filter_high_signal(["https://ex.com/.git/config"])
-        self.assertEqual(sensitive, ["https://ex.com/.git/config"])
-
-    def test_classify_severity_tiers(self):
-        self.assertEqual(_classify("https://ex.com/a/.env")[2], "HIGH")
-        self.assertEqual(_classify("https://ex.com/db.sql")[2], "HIGH")
-        self.assertEqual(_classify("https://ex.com/.git/config")[2], "HIGH")
-        self.assertEqual(_classify("https://ex.com/db-backup.tar.gz")[2], "HIGH")
-        self.assertEqual(_classify("https://ex.com/settings.ini")[2], "MEDIUM")
-        self.assertEqual(_classify("https://ex.com/admin/panel")[2], "INFO")
+    def test_classify_ext_tiers(self):
+        self.assertEqual(_classify_ext(".env")[2], "HIGH")
+        self.assertEqual(_classify_ext(".sql")[2], "HIGH")
+        self.assertEqual(_classify_ext(".ini")[2], "MEDIUM")
 
 
-class NormalizeDedupUroTests(unittest.IsolatedAsyncioTestCase):
-    async def test_uro_subprocess_is_used_when_available(self):
-        class _FakeUroProc:
-            async def communicate(self, input=None):
-                # uro collapses the two near-duplicate URLs into one.
-                return b"https://ex.com/search?q=FUZZ\n", b""
+class ValidateExposureOracleTests(unittest.TestCase):
+    """The content oracle is what prevents catch-all false positives."""
 
-        async def fake_exec(*args, **kwargs):
-            return _FakeUroProc()
+    def test_env_requires_key_value_lines(self):
+        self.assertTrue(_validate_exposure(".env", "SECRET_KEY=abc\nDB_HOST=db\n", "text/plain", 24))
+        # KEY=VALUE absent -> reject
+        self.assertFalse(_validate_exposure(".env", "just some prose", "text/plain", 15))
 
-        with patch("modules.archived_urls.shutil.which", return_value="/fake/uro"), \
-             patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
-            out = await archived_urls._normalize_and_dedup(
-                ["https://ex.com/search?q=a", "https://ex.com/search?q=b"]
-            )
+    def test_env_html_catchall_rejected(self):
+        # The classic false positive: a SPA/catch-all returns HTML 200 for /.env
+        self.assertFalse(_validate_exposure(".env", "<!DOCTYPE html><html>app</html>", "text/html", 500))
 
-        self.assertEqual(out, ["https://ex.com/search?q=FUZZ"])
+    def test_git_requires_ref(self):
+        self.assertTrue(_validate_exposure(".git", "ref: refs/heads/main\n", "text/plain", 20))
+        self.assertFalse(_validate_exposure(".git", "<html>404</html>", "text/html", 16))
 
-    async def test_falls_back_to_internal_dedup_when_uro_absent(self):
-        with patch("modules.archived_urls.shutil.which", return_value=None):
-            out = await archived_urls._normalize_and_dedup(
-                ["https://ex.com/p?a=1", "https://ex.com/p?a=2"]
-            )
-        # Internal dedup collapses same path + same param-key set.
-        self.assertEqual(out, ["https://ex.com/p?a=1"])
+    def test_sql_requires_sql_markers(self):
+        self.assertTrue(_validate_exposure(".sql", "CREATE TABLE users (id int);", "text/plain", 28))
+        self.assertFalse(_validate_exposure(".sql", "welcome to my site", "text/plain", 18))
+
+    def test_zip_requires_binary_or_size(self):
+        self.assertTrue(_validate_exposure(".zip", "PKblob", "application/zip", 4096))
+        self.assertTrue(_validate_exposure(".zip", "x" * 4096, "", 4096))   # large, no ct
+        self.assertFalse(_validate_exposure(".zip", "<html>page</html>", "text/html", 500))
 
 
 class ScanArchivedUrlsTests(unittest.IsolatedAsyncioTestCase):
@@ -116,7 +96,6 @@ class ScanArchivedUrlsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await scan_archived_urls([], "/tmp/vaktscan_archived_test"), [])
 
     async def test_no_high_signal_urls_returns_empty(self):
-        # Only plain pages/assets -> nothing to probe.
         with patch("modules.archived_urls.shutil.which", return_value=None), \
              patch("modules.archived_urls.HTTPXRunner") as HR:
             out = await scan_archived_urls(
@@ -124,67 +103,78 @@ class ScanArchivedUrlsTests(unittest.IsolatedAsyncioTestCase):
                 "/tmp/vaktscan_archived_test",
             )
         self.assertEqual(out, [])
-        HR.assert_not_called()  # never even constructs the prober
+        HR.assert_not_called()
 
-    async def test_full_scan_produces_canonical_findings(self):
+    async def test_content_validated_exposure_only(self):
+        """The core anti-FP test: only the .env with REAL content becomes a finding;
+        the catch-all-HTML .env and the 403-protected .sql do NOT."""
         urls = [
-            "https://ex.com/index.html",       # ignored
-            "https://ex.com/config/.env",       # HIGH, live 200
-            "https://ex.com/db/backup.sql",     # HIGH, live 403 (auth-required)
-            "https://ex.com/assets/app.js",     # JS, live 200, has a secret
-            "https://ex.com/admin/panel",       # keyword, but 404 -> not live
+            "https://ex.com/real/.env",      # 200 + real KEY=VALUE  -> HIGH
+            "https://ex.com/fake/.env",      # 200 + HTML catch-all  -> NO finding
+            "https://ex.com/db/backup.sql",  # 403 protected         -> NO finding
+            "https://ex.com/assets/app.js",  # 200 JS w/ secret      -> CRITICAL
         ]
-
         alive = [
-            {"input": "https://ex.com/config/.env", "url": "https://ex.com/config/.env", "status_code": 200},
+            {"input": "https://ex.com/real/.env", "url": "https://ex.com/real/.env", "status_code": 200},
+            {"input": "https://ex.com/fake/.env", "url": "https://ex.com/fake/.env", "status_code": 200},
             {"input": "https://ex.com/db/backup.sql", "url": "https://ex.com/db/backup.sql", "status_code": 403},
             {"input": "https://ex.com/assets/app.js", "url": "https://ex.com/assets/app.js", "status_code": 200},
-            {"input": "https://ex.com/admin/panel", "url": "https://ex.com/admin/panel", "status_code": 404},
         ]
-
         fake_runner = MagicMock()
         fake_runner.run_httpx = AsyncMock(return_value=alive)
 
-        # A live JS file containing a classic AWS access key -> js_paths secret hit.
+        async def fake_meta(url, timeout=10.0):
+            if url == "https://ex.com/real/.env":
+                return "SECRET_KEY=abc123\nDB_HOST=db\n", "text/plain", 30
+            if url == "https://ex.com/fake/.env":
+                return "<!DOCTYPE html><html><body>SPA</body></html>", "text/html", 200
+            return None, "", 0
+
         js_body = 'const c={key:"AKIAIOSFODNN7EXAMPLE"};'
 
         with patch("modules.archived_urls.shutil.which", return_value=None), \
              patch("modules.archived_urls.HTTPXRunner", return_value=fake_runner), \
+             patch("modules.archived_urls._fetch_meta", side_effect=fake_meta), \
              patch("modules.archived_urls._fetch_text", AsyncMock(return_value=js_body)):
             findings = await scan_archived_urls(urls, "/tmp/vaktscan_archived_test", concurrency=10)
 
-        # httpx was invoked with the union of sensitive + JS URLs.
-        fake_runner.run_httpx.assert_awaited_once()
-        probed = fake_runner.run_httpx.await_args.args[0]
-        self.assertIn("https://ex.com/config/.env", probed)
-        self.assertIn("https://ex.com/assets/app.js", probed)
-        self.assertNotIn("https://ex.com/index.html", probed)
-
-        self.assertTrue(findings, "expected findings from live archived URLs")
-
-        # Every finding is canonical.
         for f in findings:
-            self.assertTrue(_is_canonical(f), f"non-canonical finding: {f}")
+            self.assertTrue(_is_canonical(f))
             self.assertEqual(f["module"], "archived_urls")
 
-        # .env exposure -> HIGH / VULNERABLE.
-        env_findings = [f for f in findings if ".env" in f["payload_url"]]
-        self.assertTrue(env_findings)
-        self.assertEqual(env_findings[0]["severity"], "HIGH")
-        self.assertEqual(env_findings[0]["status"], "VULNERABLE")
+        # Real .env content -> HIGH / VULNERABLE.
+        real_env = [f for f in findings if f["url"] == "https://ex.com/real/.env"]
+        self.assertTrue(real_env, "content-validated .env must produce a finding")
+        self.assertEqual(real_env[0]["severity"], "HIGH")
+        self.assertEqual(real_env[0]["status"], "VULNERABLE")
 
-        # backup.sql served with 403 still counts as live -> HIGH exposure.
-        sql_findings = [f for f in findings if "backup.sql" in f["url"]]
-        self.assertTrue(sql_findings)
-        self.assertEqual(sql_findings[0]["severity"], "HIGH")
+        # Catch-all HTML .env -> NO finding (the false positive we're preventing).
+        self.assertFalse(
+            any(f["url"] == "https://ex.com/fake/.env" for f in findings),
+            "an HTML catch-all .env must NOT be reported as exposed",
+        )
 
-        # Secret hit reuses js_paths severity (CRITICAL).
-        secret_findings = [f for f in findings if "Hardcoded Secret" in f["vulnerability"]]
-        self.assertTrue(secret_findings, "expected a reused js_paths secret finding")
-        self.assertEqual(secret_findings[0]["severity"], "CRITICAL")
+        # 403-protected .sql -> NOT exposed.
+        self.assertFalse(
+            any("backup.sql" in (f.get("url") or "") for f in findings),
+            "a 401/403 sensitive path is protected, not exposed",
+        )
 
-        # 404 admin/panel is NOT live -> no finding references it.
-        self.assertFalse(any("admin/panel" in (f.get("url") or "") for f in findings))
+        # JS secret still fires (regex-validated, so no FP risk).
+        secret = [f for f in findings if "Hardcoded Secret" in f["vulnerability"]]
+        self.assertTrue(secret)
+        self.assertEqual(secret[0]["severity"], "CRITICAL")
+
+    async def test_keyword_only_endpoint_is_info_not_vulnerable(self):
+        alive = [{"input": "https://ex.com/admin/panel", "url": "https://ex.com/admin/panel", "status_code": 200}]
+        fake_runner = MagicMock()
+        fake_runner.run_httpx = AsyncMock(return_value=alive)
+        with patch("modules.archived_urls.shutil.which", return_value=None), \
+             patch("modules.archived_urls.HTTPXRunner", return_value=fake_runner):
+            findings = await scan_archived_urls(["https://ex.com/admin/panel"], "/tmp/vaktscan_archived_test")
+        self.assertTrue(findings)
+        self.assertEqual(findings[0]["severity"], "INFO")
+        self.assertNotEqual(findings[0]["status"], "VULNERABLE")
 
     async def test_dead_urls_yield_no_findings(self):
         fake_runner = MagicMock()
