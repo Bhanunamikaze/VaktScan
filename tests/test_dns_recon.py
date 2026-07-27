@@ -12,6 +12,7 @@ import os
 import struct
 import sys
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -76,6 +77,56 @@ class FindingSchemaTests(unittest.TestCase):
         for k in self.REQUIRED:
             self.assertIn(k, f, f"missing key {k}")
         self.assertEqual(f['module'], 'DNS')
+
+
+class DanglingCnameTests(unittest.IsolatedAsyncioTestCase):
+    """DNS-level subdomain-takeover detection (dangling CNAME -> NXDOMAIN)."""
+
+    def _fake_query(self, cname_map, nxdomain_targets):
+        async def fake(server, name, qtype, **kw):
+            name = name.rstrip('.')
+            if qtype == dns_recon.RR_CNAME:
+                tgt = cname_map.get(name)
+                if tgt:
+                    return {'rcode': 0, 'answers': [{'type': dns_recon.RR_CNAME, 'data': tgt}]}
+                return {'rcode': 0, 'answers': []}
+            # A / AAAA lookup on a target
+            if name in nxdomain_targets:
+                return {'rcode': 3, 'answers': []}   # NXDOMAIN
+            return {'rcode': 0, 'answers': [{'type': qtype, 'data': '1.2.3.4'}]}
+        return fake
+
+    async def test_known_service_nxdomain_is_takeover(self):
+        cname_map = {'app.example.com': 'unclaimed.s3.amazonaws.com'}
+        nx = {'unclaimed.s3.amazonaws.com'}
+        with unittest.mock.patch.object(dns_recon, '_query', side_effect=self._fake_query(cname_map, nx)):
+            findings = await dns_recon.check_dangling_cnames(['app.example.com'])
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]['status'], 'VULNERABLE')
+        self.assertIn('AWS S3', findings[0]['vulnerability'])
+
+    async def test_unknown_target_nxdomain_is_medium(self):
+        cname_map = {'old.example.com': 'gone.internal.example.net'}
+        nx = {'gone.internal.example.net'}
+        with unittest.mock.patch.object(dns_recon, '_query', side_effect=self._fake_query(cname_map, nx)):
+            findings = await dns_recon.check_dangling_cnames(['old.example.com'])
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]['severity'], 'MEDIUM')
+
+    async def test_resolving_cname_is_not_flagged(self):
+        # CNAME target resolves fine -> NOT dangling -> no finding (false-positive guard).
+        cname_map = {'live.example.com': 'live.cdn.example.com'}
+        with unittest.mock.patch.object(dns_recon, '_query', side_effect=self._fake_query(cname_map, set())):
+            findings = await dns_recon.check_dangling_cnames(['live.example.com'])
+        self.assertEqual(findings, [])
+
+    async def test_no_cname_is_not_flagged(self):
+        with unittest.mock.patch.object(dns_recon, '_query', side_effect=self._fake_query({}, set())):
+            findings = await dns_recon.check_dangling_cnames(['plain.example.com'])
+        self.assertEqual(findings, [])
+
+    async def test_empty_input(self):
+        self.assertEqual(await dns_recon.check_dangling_cnames([]), [])
 
 
 if __name__ == '__main__':

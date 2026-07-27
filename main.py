@@ -811,6 +811,7 @@ async def main(
     output_format=None,
     dns_hygiene=True,
     dns_permute=False,
+    dns_takeover=True,
 ):
     """
     Main orchestrator for the scanning tool.
@@ -1344,6 +1345,14 @@ async def main(
                         subdomains = _dns["resolved"]
                         _how = "wildcard-filtered + permutation-expanded" if dns_permute else "wildcard-filtered"
                         print(f"{Colors.GREEN}[+] DNS hygiene: {_before} → {len(subdomains)} host(s) ({_how}).{Colors.RESET}")
+
+                # Per-subdomain DNS-level takeover: flag dangling CNAMEs (CNAME ->
+                # NXDOMAIN) across ALL discovered subdomains. Complements the
+                # HTTP-based takeover check by catching targets that serve no HTTP.
+                if dns_takeover and subdomains:
+                    _dangling = await dns_recon.check_dangling_cnames(subdomains, concurrency=concurrency)
+                    for _df in _dangling:
+                        recon_phase_findings.append(_df)
 
                 if scan_found:
                     recon_findings = await run_recon_followups(
@@ -2187,6 +2196,7 @@ async def cmd_scan(args):
             output_format=getattr(args, 'format', None),
             dns_hygiene=getattr(args, 'dns_hygiene', True),
             dns_permute=getattr(args, 'dns_permute', False),
+            dns_takeover=getattr(args, 'dns_takeover', True),
         )
     except KeyboardInterrupt:
         if _partial_findings:
@@ -2413,6 +2423,9 @@ if __name__ == "__main__":
     sp_scan.add_argument("--dns-permute", action="store_true", dest="dns_permute",
                          help="Additionally generate + resolve subdomain permutations (alterx/dnsgen) "
                               "during DNS hygiene — can greatly expand the host set")
+    sp_scan.add_argument("--no-dns-takeover", action="store_false", dest="dns_takeover", default=True,
+                         help="Disable the per-subdomain DNS-level takeover check (dangling CNAME -> "
+                              "NXDOMAIN across all discovered subdomains). On by default.")
     sp_scan.add_argument("--wordlist")
     # --scan-found removed: the scan subcommand always probes discovered subdomains
     sp_scan.add_argument("--nmap", action="store_true")

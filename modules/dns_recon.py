@@ -815,6 +815,149 @@ async def scan_domain(domain: str, resolver: str = DEFAULT_RESOLVERS[0]) -> list
     return findings
 
 
+# ─── Per-subdomain dangling CNAME / DNS-level takeover ────────────────────────
+# Complements the HTTP-response-based takeover check in domain_scan.py by catching
+# subdomains whose CNAME points at a NON-EXISTENT (NXDOMAIN) target — a dangling
+# CNAME that serves no HTTP response and so is invisible to the HTTP-based check.
+# The oracle is the NXDOMAIN response itself (a concrete DNS fact, not a weak signal).
+
+# CNAME targets that indicate a takeover-prone service: (substring, vendor, severity).
+_TAKEOVER_CNAME_PATTERNS = [
+    ('.s3.amazonaws.com', 'AWS S3', 'CRITICAL'),
+    ('.s3-website', 'AWS S3', 'CRITICAL'),
+    ('.cloudfront.net', 'AWS CloudFront', 'HIGH'),
+    ('.github.io', 'GitHub Pages', 'CRITICAL'),
+    ('.herokuapp.com', 'Heroku', 'CRITICAL'),
+    ('.herokudns.com', 'Heroku', 'CRITICAL'),
+    ('.herokussl.com', 'Heroku', 'CRITICAL'),
+    ('.azurewebsites.net', 'Azure App Service', 'HIGH'),
+    ('.cloudapp.net', 'Azure', 'HIGH'),
+    ('.cloudapp.azure.com', 'Azure', 'HIGH'),
+    ('.trafficmanager.net', 'Azure Traffic Manager', 'HIGH'),
+    ('.blob.core.windows.net', 'Azure Blob', 'HIGH'),
+    ('.azureedge.net', 'Azure CDN', 'HIGH'),
+    ('.fastly.net', 'Fastly', 'HIGH'),
+    ('.myshopify.com', 'Shopify', 'HIGH'),
+    ('.pantheonsite.io', 'Pantheon', 'HIGH'),
+    ('.zendesk.com', 'Zendesk', 'HIGH'),
+    ('.surge.sh', 'Surge.sh', 'HIGH'),
+    ('.bitbucket.io', 'Bitbucket', 'HIGH'),
+    ('.fly.dev', 'Fly.io', 'HIGH'),
+    ('.netlify.app', 'Netlify', 'MEDIUM'),
+    ('.readthedocs.io', 'Read the Docs', 'HIGH'),
+    ('.ghost.io', 'Ghost', 'HIGH'),
+    ('.statuspage.io', 'Statuspage', 'MEDIUM'),
+    ('.uservoice.com', 'UserVoice', 'HIGH'),
+    ('.wpengine.com', 'WP Engine', 'HIGH'),
+    ('.unbouncepages.com', 'Unbounce', 'MEDIUM'),
+    ('.webflow.io', 'Webflow', 'MEDIUM'),
+    ('.wordpress.com', 'WordPress.com', 'MEDIUM'),
+    ('.launchrock.com', 'LaunchRock', 'HIGH'),
+    ('.helpscoutdocs.com', 'Help Scout', 'HIGH'),
+    ('.intercom.help', 'Intercom', 'HIGH'),
+    ('.desk.com', 'Desk', 'MEDIUM'),
+]
+
+# Cap so a huge subdomain set can't spawn an unbounded number of DNS queries.
+_DANGLING_MAX_HOSTS = 20000
+
+
+def _takeover_vendor(cname_target: str):
+    low = (cname_target or '').lower().rstrip('.')
+    for pattern, vendor, severity in _TAKEOVER_CNAME_PATTERNS:
+        if pattern in low:
+            return vendor, severity
+    return None, None
+
+
+async def _cname_of(host: str, resolver: str):
+    """Return the CNAME target for ``host``, or None."""
+    try:
+        resp = await _query(resolver, host, RR_CNAME)
+    except Exception:
+        return None
+    for a in resp.get('answers', []):
+        if a.get('type') == RR_CNAME and a.get('data'):
+            return a['data'].rstrip('.')
+    return None
+
+
+async def _target_is_nxdomain(host: str, resolver: str) -> bool:
+    """True only when ``host`` genuinely does not exist — NXDOMAIN for BOTH A and
+    AAAA (double-checked to avoid a flaky single lookup producing a false positive)."""
+    try:
+        a = await _query(resolver, host, RR_A)
+        if a.get('rcode') != 3:  # 3 == NXDOMAIN
+            return False
+        aaaa = await _query(resolver, host, RR_AAAA)
+        return aaaa.get('rcode') == 3
+    except Exception:
+        return False
+
+
+async def _check_one_dangling(host: str, resolver: str, sem) -> "dict | None":
+    async with sem:
+        cname = await _cname_of(host, resolver)
+        if not cname:
+            return None
+        # Fire ONLY when the CNAME target itself is NXDOMAIN (the concrete oracle).
+        if not await _target_is_nxdomain(cname, resolver):
+            return None
+        vendor, severity = _takeover_vendor(cname)
+        if vendor:
+            return _finding(
+                host, status='VULNERABLE', severity=severity,
+                vulnerability=f'Subdomain Takeover (dangling CNAME -> {vendor})',
+                details=(f'{host} has a dangling CNAME to {cname} ({vendor}) whose target is '
+                         f'NXDOMAIN — the service slot appears unclaimed and may be takeoverable. '
+                         f'DNS-level detection (complements the HTTP-based takeover check).'),
+                evidence=f'dns://{host} CNAME {cname} (NXDOMAIN)',
+            )
+        return _finding(
+            host, status='POTENTIAL', severity='MEDIUM',
+            vulnerability='Dangling CNAME (target does not resolve)',
+            details=(f'{host} has a CNAME to {cname}, which is NXDOMAIN (does not exist). '
+                     f'Review manually — may be takeoverable depending on the provider.'),
+            evidence=f'dns://{host} CNAME {cname} (NXDOMAIN)',
+        )
+
+
+async def check_dangling_cnames(subdomains, resolver: str = DEFAULT_RESOLVERS[0], concurrency: int = 50) -> list[dict]:
+    """DNS-level subdomain-takeover / dangling-CNAME detection, per subdomain.
+
+    For each host: if it has a CNAME whose target is NXDOMAIN, emit a finding
+    (HIGH/CRITICAL when the target matches a known takeover-prone service, else
+    MEDIUM). Complements ``domain_scan.py`` (which is HTTP-response-based) by
+    catching dangling CNAMEs that serve no HTTP response. Returns canonical
+    findings; never raises.
+    """
+    hosts, seen = [], set()
+    for h in subdomains or []:
+        h = (h or '').strip().lower().rstrip('.')
+        if h and h not in seen:
+            seen.add(h)
+            hosts.append(h)
+    if not hosts:
+        return []
+    if len(hosts) > _DANGLING_MAX_HOSTS:
+        print(f"[*] dns_recon: capping dangling-CNAME check at {_DANGLING_MAX_HOSTS} of {len(hosts)} hosts.")
+        hosts = hosts[:_DANGLING_MAX_HOSTS]
+
+    sem = asyncio.Semaphore(max(1, min(int(concurrency), 100)))
+    try:
+        from modules.progress import DashboardProgress
+        prog = DashboardProgress('dns_takeover', total=len(hosts), noun='hosts')
+        wrapped = [prog.wrap(_check_one_dangling(h, resolver, sem)) for h in hosts]
+    except Exception:
+        wrapped = [_check_one_dangling(h, resolver, sem) for h in hosts]
+
+    results = await asyncio.gather(*wrapped, return_exceptions=True)
+    findings = [r for r in results if isinstance(r, dict)]
+    if findings:
+        print(f"[+] DNS-level takeover: {len(findings)} dangling-CNAME finding(s).")
+    return findings
+
+
 async def run_dns_recon(domains: list[str], resolver: str = DEFAULT_RESOLVERS[0], concurrency: int = 20) -> list[dict]:
     sem = asyncio.Semaphore(max(1, concurrency))
     out: list[dict] = []
