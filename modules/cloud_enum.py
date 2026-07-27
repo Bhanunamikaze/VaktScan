@@ -19,6 +19,8 @@ from typing import Any
 
 import httpx
 
+from modules.progress import heartbeat
+
 MODULE_NAME = 'cloud_enum'
 
 _TIMEOUT = httpx.Timeout(5.0, connect=5.0)
@@ -543,30 +545,31 @@ async def enumerate_cloud_assets(domain: str, concurrency: int = 50) -> list[dic
 
     Returns a list of finding dicts in VaktScan canonical format.
     """
-    sem = asyncio.Semaphore(concurrency)
+    async with heartbeat("cloud_enum", "Enumerating cloud assets"):
+        sem = asyncio.Semaphore(concurrency)
 
-    # Follow redirects so virtual-hosted S3 URLs that redirect are handled,
-    # but cap at 3 to avoid redirect loops.
-    transport = httpx.AsyncHTTPTransport(retries=0)
-    async with httpx.AsyncClient(
-        timeout=_TIMEOUT,
-        follow_redirects=True,
-        max_redirects=3,
-        verify=False,
-        transport=transport,
-        headers={'User-Agent': 'VaktScan/1.0 cloud-enum'},
-    ) as client:
-        s3_findings, azure_findings, gcs_findings, cf_findings = await asyncio.gather(
-            _enumerate_s3(client, sem, domain),
-            _enumerate_azure(client, sem, domain),
-            _enumerate_gcs(client, sem, domain),
-            _detect_cloudfront(client, domain),
-            return_exceptions=True,
-        )
+        # Follow redirects so virtual-hosted S3 URLs that redirect are handled,
+        # but cap at 3 to avoid redirect loops.
+        transport = httpx.AsyncHTTPTransport(retries=0)
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT,
+            follow_redirects=True,
+            max_redirects=3,
+            verify=False,
+            transport=transport,
+            headers={'User-Agent': 'VaktScan/1.0 cloud-enum'},
+        ) as client:
+            s3_findings, azure_findings, gcs_findings, cf_findings = await asyncio.gather(
+                _enumerate_s3(client, sem, domain),
+                _enumerate_azure(client, sem, domain),
+                _enumerate_gcs(client, sem, domain),
+                _detect_cloudfront(client, domain),
+                return_exceptions=True,
+            )
 
-    all_findings: list[dict] = []
-    for result in (s3_findings, azure_findings, gcs_findings, cf_findings):
-        if isinstance(result, list):
-            all_findings.extend(result)
+        all_findings: list[dict] = []
+        for result in (s3_findings, azure_findings, gcs_findings, cf_findings):
+            if isinstance(result, list):
+                all_findings.extend(result)
 
-    return all_findings
+        return all_findings

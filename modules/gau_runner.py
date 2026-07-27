@@ -4,6 +4,8 @@ import re
 import shutil
 from datetime import datetime
 
+from modules.progress import DashboardProgress
+
 
 class GAURunner:
     """
@@ -55,8 +57,9 @@ class GAURunner:
 
         semaphore = asyncio.Semaphore(self.concurrency)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prog = DashboardProgress("gau", total=len(normalized), noun="hosts")
         tasks = [
-            asyncio.create_task(self._run_single(domain, semaphore, timestamp))
+            asyncio.create_task(prog.wrap(self._run_single(domain, semaphore, timestamp)))
             for domain in normalized
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)

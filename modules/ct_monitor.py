@@ -8,11 +8,14 @@ First scan for a domain: establishes baseline, emits INFO findings.
 Subsequent scans: emits HIGH findings for each newly observed subdomain.
 """
 
+import asyncio
 import os
 import sqlite3
 from datetime import datetime
 
 import httpx
+
+from modules.progress import heartbeat
 
 _DEFAULT_DB = os.path.join("reports", "ct_baseline.sqlite")
 
@@ -85,7 +88,8 @@ async def check_new_certificates(domain: str, db_path: str = _DEFAULT_DB) -> lis
     Severity is INFO on first scan (baseline establishment) and HIGH on
     subsequent scans where new subdomains appear.
     """
-    current = await _fetch_raw(domain)
+    async with heartbeat("ct_monitor", "Querying crt.sh"):
+        current = await _fetch_raw(domain)
     if not current:
         return []
 

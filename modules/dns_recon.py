@@ -46,6 +46,8 @@ from typing import Any
 
 import httpx
 
+from modules.progress import heartbeat
+
 MODULE_NAME = 'DNS'
 
 # Public resolvers we use to look up authoritative nameservers when the
@@ -828,7 +830,8 @@ async def run_dns_recon(domains: list[str], resolver: str = DEFAULT_RESOLVERS[0]
     from modules.dashboard import LiveDashboard
     if not LiveDashboard().active:
         print(f"[*] DNS recon over {len(domains)} domain(s) ({', '.join(domains)}) using resolver {resolver}...")
-    await asyncio.gather(*(worker(d) for d in domains))
+    async with heartbeat("dns_recon", "DNS recon"):
+        await asyncio.gather(*(worker(d) for d in domains))
     return out
 
 

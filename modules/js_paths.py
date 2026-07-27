@@ -24,6 +24,8 @@ import requests
 import urllib3
 from bs4 import BeautifulSoup
 
+from modules.progress import heartbeat
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -552,7 +554,8 @@ class JSPathsScanner:
         """
         loop = asyncio.get_running_loop()
         with ThreadPoolExecutor(max_workers=1) as pool:
-            result = await loop.run_in_executor(pool, self._run_sync)
+            async with heartbeat("js_paths", "Probing JS paths"):
+                result = await loop.run_in_executor(pool, self._run_sync)
         return result
 
     def _run_sync(self) -> dict:

@@ -9,6 +9,8 @@ import subprocess
 from datetime import datetime
 from urllib.parse import urlparse
 
+from modules.progress import DashboardProgress
+
 
 class Colors:
     RED = '\033[91m'
@@ -17,6 +19,19 @@ class Colors:
     CYAN = '\033[96m'
     BOLD = '\033[1m'
     RESET = '\033[0m'
+
+
+def _dashboard_active():
+    """Return True when the LiveDashboard is currently rendering the terminal.
+
+    A single per-URL log line forces a full dashboard redraw, so callers use
+    this to stay silent while the dashboard owns the screen. Never raises.
+    """
+    try:
+        from modules.dashboard import LiveDashboard
+        return getattr(LiveDashboard(), "active", False)
+    except Exception:
+        return False
 
 
 class DirEnumerator:
@@ -150,27 +165,32 @@ class DirEnumerator:
         attempt = 0
         current_env = env.copy()
         while attempt < 2:
+            # dirsearch writes its findings to the --output file above. Its own
+            # stdout (startup banner) and stderr (e.g. the pkg_resources
+            # DeprecationWarning) are irrelevant to the results, so discard
+            # stdout entirely and capture stderr only for the genuine-failure
+            # diagnostics below. This stops dirsearch's noise from leaking onto
+            # the LiveDashboard terminal on every URL.
             process = await asyncio.create_subprocess_shell(
                 cmd,
-                stdout=None,
+                stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
                 env=current_env.copy()
             )
             _, stderr = await process.communicate()
 
-            # Treat as success if output file exists and is either not empty, OR the scan completed (exit code 0 or 1).
-            if os.path.exists(output_file) and (os.path.getsize(output_file) > 0 or process.returncode in (0, 1)):
-                if stderr:
-                    err = stderr.decode().strip()
-                    if err:
-                        print(err)
-                if process.returncode not in (0, 1):
-                    print(f"{Colors.YELLOW}[*] dirsearch completed with warnings/non-zero exit code ({process.returncode}) for {url}. report saved: {output_file}{Colors.RESET}")
-                else:
-                    print(f"{Colors.GREEN}[+] dirsearch report saved: {output_file}{Colors.RESET}")
+            err_text = stderr.decode().strip() if stderr else ""
+            output_exists = os.path.exists(output_file)
+            output_has_content = output_exists and os.path.getsize(output_file) > 0
+
+            # Exit code 0 (clean) or 1 (ran fine, e.g. no matching paths / minor
+            # warnings) means dirsearch executed successfully; a non-empty report
+            # counts as success on any exit code too. Success is silent so the
+            # dashboard is not redrawn once per URL. Results are read afterward
+            # from the output file (via reports_dir), never from stdout.
+            if process.returncode in (0, 1) or output_has_content:
                 return output_file
 
-            err_text = stderr.decode().strip() if stderr else ""
             if attempt == 0:
                 # Check if Python environment variables are causing path conflicts (e.g. in a virtualenv)
                 # If so, retry by stripping them.
@@ -192,9 +212,14 @@ class DirEnumerator:
                         attempt += 1
                         continue
 
-            if err_text:
-                print(err_text)
-            print(f"{Colors.RED}[!] dirsearch failed for {url} with exit code {process.returncode}.{Colors.RESET}")
+            # Genuine failure: non-zero exit AND no report produced. Do not spam
+            # the dashboard with a per-URL line (it forces a full redraw); only
+            # surface diagnostics when debugging or when the dashboard is not
+            # actively rendering the terminal.
+            if os.environ.get("VAKT_DEBUG") or not _dashboard_active():
+                if err_text:
+                    print(err_text)
+                print(f"{Colors.RED}[!] dirsearch failed for {url} with exit code {process.returncode}.{Colors.RESET}")
             return None
 
         return None
@@ -232,8 +257,9 @@ class DirEnumerator:
                     print(f"{Colors.RED}[!] dirsearch internal error for {target_url}: {exc}{Colors.RESET}")
                     return exc
 
+        prog = DashboardProgress("dirsearch", total=len(unique_urls), noun="URLs")
         try:
-            tasks = [asyncio.create_task(runner(url)) for url in unique_urls]
+            tasks = [asyncio.create_task(prog.wrap(runner(url))) for url in unique_urls]
             results = await asyncio.gather(*tasks, return_exceptions=True)
         except Exception as exc:
             print(f"{Colors.RED}[!] dirsearch execution error: {exc}{Colors.RESET}")

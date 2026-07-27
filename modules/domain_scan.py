@@ -10,6 +10,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from modules.progress import DashboardProgress
+
 class Colors:
     RED = '\033[91m'
     GREEN = '\033[92m'
@@ -398,7 +400,8 @@ class DomainScanner:
                         pass
             
             print(f"{Colors.CYAN}[*] Running anomaly and misconfig checks on {len(alive_urls)} alive URLs...{Colors.RESET}")
-            tasks = [check_url(url) for url in alive_urls]
+            prog = DashboardProgress("domain_scan", total=len(alive_urls), noun="URLs")
+            tasks = [prog.wrap(check_url(url)) for url in alive_urls]
             if tasks:
                 await asyncio.gather(*tasks)
                 

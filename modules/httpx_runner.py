@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -151,45 +152,117 @@ class HTTPXRunner:
             "-ip",
             "-o", json_output,
             "-t", str(concurrency),
+            "-timeout", "10",  # bound per-request time so one dead host can't stall throughput
         ]
 
-        print(f"\033[96m[*] Running httpx on {len(targets)} hosts to find alive web services (Concurrency: {concurrency})...\033[0m")
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+        total = len(targets)
+
+        print(f"\033[96m[*] Running httpx on {total} hosts to find alive web services (Concurrency: {concurrency})...\033[0m")
+
+        results = []
+        start = time.monotonic()
+
+        def _status():
+            elapsed = int(time.monotonic() - start)
+            return f"{len(results)} alive · {elapsed}s elapsed · {total:,} hosts"
+
+        # httpx streams one JSON object per alive host to stdout, and large target
+        # sets take a long time. Emit a live heartbeat (elapsed + alive count) so
+        # the task never sits at a frozen "Starting" — it is working, not hung.
+        hb_interval = 2 if dashboard.active else 30
+
+        async def _heartbeat():
+            try:
+                while True:
+                    await asyncio.sleep(hb_interval)
+                    if dashboard.active:
+                        dashboard.update_task("httpx", status=_status())
+                    else:
+                        print(f"\033[96m[*] httpx still probing… {_status()}\033[0m")
+            except asyncio.CancelledError:
+                pass
 
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await process.communicate()
-
-            if not os.path.exists(json_output):
-                if stderr:
-                    print(f"\033[91m[!] httpx failed to generate output: {stderr.decode()}\033[0m")
-                return []
-
-            results = []
-            with open(json_output, 'r') as f:
-                for line in f:
-                    if not line.strip(): continue
-                    try:
-                        data = json.loads(line)
-                        results.append(data)
-                    except json.JSONDecodeError:
-                        continue
-
+        except Exception as e:
+            print(f"\033[91m[!] Error running httpx: {e}\033[0m")
             try:
                 os.remove(input_file)
-                os.remove(json_output)
+            except OSError:
+                pass
+            return []
+
+        stderr_chunks = []
+
+        async def _drain_stderr():
+            # Drain stderr concurrently so a full stderr pipe can't deadlock the
+            # stdout streaming loop below.
+            try:
+                async for chunk in process.stderr:
+                    stderr_chunks.append(chunk)
+            except asyncio.CancelledError:
+                pass
+
+        heartbeat_task = asyncio.create_task(_heartbeat())
+        stderr_task = asyncio.create_task(_drain_stderr())
+        try:
+            async for raw_line in process.stdout:
+                line = raw_line.decode("utf-8", "ignore").strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                results.append(data)
+                if dashboard.active:
+                    dashboard.update_task("httpx", status=_status())
+            await process.wait()
+        except Exception as e:
+            print(f"\033[91m[!] Error running httpx: {e}\033[0m")
+        finally:
+            heartbeat_task.cancel()
+            for _t in (heartbeat_task, stderr_task):
+                try:
+                    await _t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+        # Fallback: if nothing streamed to stdout (httpx build differences), parse
+        # the -o file that httpx also wrote to.
+        if not results and os.path.exists(json_output):
+            try:
+                with open(json_output, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            results.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
             except OSError:
                 pass
 
-            print(f"\033[92m[+] httpx finished. Found {len(results)} alive services.\033[0m")
-            return results
+        if not results:
+            stderr_text = b"".join(stderr_chunks).decode("utf-8", "ignore").strip()
+            if stderr_text:
+                print(f"\033[91m[!] httpx produced no results: {stderr_text.splitlines()[-1]}\033[0m")
 
-        except Exception as e:
-            print(f"\033[91m[!] Error running httpx: {e}\033[0m")
-            return []
+        for _path in (input_file, json_output):
+            try:
+                os.remove(_path)
+            except OSError:
+                pass
+
+        print(f"\033[92m[+] httpx finished. Found {len(results)} alive services.\033[0m")
+        return results
 
     async def _run_httpx_library(self, targets, concurrency=100):
         expanded_targets = self._expand_targets_for_library(targets)

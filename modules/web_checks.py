@@ -21,6 +21,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from modules.progress import DashboardProgress
+
 MODULE_NAME = "WebChecks"
 _DEFAULT_TIMEOUT = 8.0
 
@@ -1322,7 +1324,11 @@ async def run_checks(alive_urls: list[str], concurrency: int = 20) -> list[dict]
         timeout=_DEFAULT_TIMEOUT,
         follow_redirects=True,
     ) as client:
-        tasks = [_run_checks_for_url(url, client, semaphore) for url in alive_urls]
+        prog = DashboardProgress("web_checks", total=len(alive_urls), noun="URLs")
+        tasks = [
+            prog.wrap(_run_checks_for_url(url, client, semaphore))
+            for url in alive_urls
+        ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     for res in results:
