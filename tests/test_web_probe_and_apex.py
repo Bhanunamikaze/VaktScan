@@ -17,7 +17,7 @@ class RegistrableDomainTest(unittest.TestCase):
         cases = {
             "a.b.example.com": "example.com",
             "example.com": "example.com",
-            "richardrodermond.homestead.com": "homestead.com",
+            "richardrodermond.steinzsecurity.com": "steinzsecurity.com",
             "deep.sub.domain.example.co.uk": "example.co.uk",
             "shop.example.com.au": "example.com.au",
             "localhost": "localhost",

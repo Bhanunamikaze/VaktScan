@@ -12,11 +12,11 @@ from utils import build_exclusion_matcher, load_exclusion_patterns  # noqa: E402
 
 class ExclusionMatcherTests(unittest.TestCase):
     def test_glob_match(self):
-        m = build_exclusion_matcher(["customer1*.homestead.com"])
-        self.assertTrue(m("customer123.homestead.com"))
-        self.assertTrue(m("customer1.homestead.com"))
-        self.assertFalse(m("customer2.homestead.com"))
-        self.assertFalse(m("www.homestead.com"))
+        m = build_exclusion_matcher(["customer1*.steinzsecurity.com"])
+        self.assertTrue(m("customer123.steinzsecurity.com"))
+        self.assertTrue(m("customer1.steinzsecurity.com"))
+        self.assertFalse(m("customer2.steinzsecurity.com"))
+        self.assertFalse(m("www.steinzsecurity.com"))
 
     def test_case_insensitive(self):
         m = build_exclusion_matcher(["*.Internal.example.com"])

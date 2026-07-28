@@ -1,7 +1,7 @@
 """Tests for modules/asset_classifier.py (shared-hosting customer/company split).
 
 All DNS resolution is mocked - no network. Validates the core behavior that made
-the theory hold on homestead.com: hosts crowding one shared IP are customers,
+the theory hold on steinzsecurity.com: hosts crowding one shared IP are customers,
 distinct-IP and functional-named hosts are company assets.
 """
 
@@ -28,18 +28,18 @@ def _fake_query_for(ip_map):
 
 class ApexChildTests(unittest.TestCase):
     def test_direct_child_label(self):
-        self.assertEqual(asset_classifier._apex_child_label("mail.homestead.com", "homestead.com"), "mail")
+        self.assertEqual(asset_classifier._apex_child_label("mail.steinzsecurity.com", "steinzsecurity.com"), "mail")
         # not a direct child (two labels before apex)
-        self.assertIsNone(asset_classifier._apex_child_label("www.cust.homestead.com", "homestead.com"))
+        self.assertIsNone(asset_classifier._apex_child_label("www.cust.steinzsecurity.com", "steinzsecurity.com"))
         # not under the apex
-        self.assertIsNone(asset_classifier._apex_child_label("mail.other.com", "homestead.com"))
+        self.assertIsNone(asset_classifier._apex_child_label("mail.other.com", "steinzsecurity.com"))
 
     def test_is_functional(self):
-        self.assertTrue(asset_classifier._is_functional("www.homestead.com", "homestead.com"))
-        self.assertTrue(asset_classifier._is_functional("api.homestead.com", "homestead.com"))
-        self.assertFalse(asset_classifier._is_functional("randomcustomer.homestead.com", "homestead.com"))
+        self.assertTrue(asset_classifier._is_functional("www.steinzsecurity.com", "steinzsecurity.com"))
+        self.assertTrue(asset_classifier._is_functional("api.steinzsecurity.com", "steinzsecurity.com"))
+        self.assertFalse(asset_classifier._is_functional("randomcustomer.steinzsecurity.com", "steinzsecurity.com"))
         # www.<customer> must NOT be treated as functional (it's a customer site)
-        self.assertFalse(asset_classifier._is_functional("www.randomcustomer.homestead.com", "homestead.com"))
+        self.assertFalse(asset_classifier._is_functional("www.randomcustomer.steinzsecurity.com", "steinzsecurity.com"))
 
 
 class ClassifyTests(unittest.IsolatedAsyncioTestCase):
