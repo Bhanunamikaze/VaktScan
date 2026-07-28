@@ -64,6 +64,38 @@ HARNESS = (
     "sys.stdout.flush()\n"
 )
 
+# T3 harness: a STUCK graceful shutdown. `_work` keeps a real child alive (for the
+# no-orphan assertion) but swallows the first cancellation, so a single Ctrl+C can
+# never end the process -- only the SECOND signal's force-quit (os._exit(130)) can.
+# (The default HARNESS shuts down cleanly in ~0.1s, so a second signal would never
+# land during it; the force-quit path only matters when graceful cancel is stuck.)
+HARNESS_STUCK = (
+    "import asyncio, sys\n"
+    "sys.path.insert(0, %r)\n" % REPO_ROOT +
+    "import main\n"
+    "from modules import proc\n"
+    "STUB = %r\n" % STUB_IGNORE +
+    "async def _announce():\n"
+    "    for _ in range(2000):\n"
+    "        if proc._LIVE:\n"
+    "            child = next(iter(proc._LIVE))\n"
+    "            sys.stdout.write('SPAWNED %d\\n' % child.pid)\n"
+    "            sys.stdout.flush()\n"
+    "            return\n"
+    "        await asyncio.sleep(0.01)\n"
+    "async def _work():\n"
+    "    asyncio.ensure_future(_announce())\n"
+    "    asyncio.ensure_future(proc.run_tool([sys.executable, '-c', STUB]))\n"
+    "    while True:\n"
+    "        try:\n"
+    "            await asyncio.sleep(3600)\n"
+    "        except asyncio.CancelledError:\n"
+    "            pass\n"   # stuck: absorb the graceful cancel; force-quit is required
+    "main.run_command(_work())\n"
+    "sys.stdout.write('EXITED\\n')\n"
+    "sys.stdout.flush()\n"
+)
+
 
 def _pid_alive(pid):
     try:
@@ -101,9 +133,9 @@ def _readline_timeout(fh, timeout):
     return buf.decode(errors="replace")
 
 
-def _spawn_harness():
+def _spawn_harness(src=HARNESS):
     return subprocess.Popen(
-        [sys.executable, "-c", HARNESS],
+        [sys.executable, "-c", src],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         cwd=REPO_ROOT,
@@ -153,15 +185,15 @@ class SignalShutdownHarnessTests(unittest.TestCase):
             self._cleanup(harness, child_pid)
 
     def test_t3_second_sigint_force_quits_exit_130_no_orphans(self):
-        harness = _spawn_harness()
+        harness = _spawn_harness(HARNESS_STUCK)
         child_pid = None
         try:
             child_pid = self._read_spawned_pid(harness)
             self.assertTrue(_pid_alive(child_pid))
 
-            # First SIGINT starts the graceful cancel; because the child ignores
-            # SIGTERM the runner is inside the 5s grace window when the second
-            # SIGINT arrives and force-quits with os._exit(130).
+            # First SIGINT requests a graceful cancel, but this harness's _work
+            # absorbs it (a stuck shutdown), so the process stays alive. The
+            # second SIGINT force-quits with os._exit(130) and kills the child.
             os.kill(harness.pid, signal.SIGINT)
             time.sleep(0.5)
             os.kill(harness.pid, signal.SIGINT)
