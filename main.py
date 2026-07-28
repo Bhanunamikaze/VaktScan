@@ -1381,6 +1381,94 @@ async def main(
         )
         return
 
+    # --- TECH-ONLY MODE (scan --tech-only) ---
+    # Lightweight web-technology fingerprint + version->CVE only. Minimal pipeline:
+    # resolve/expand targets -> web-port scan -> httpx alive-probe ->
+    # tech_fingerprint.fingerprint_tech, then route the resulting "Technology
+    # Detected" findings through _enrich_and_report so the web_tech_cve header +
+    # tech CVE paths, NVD/KEV/EPSS/CVSS enrichment, and CSV/HTML/JSON/SARIF
+    # reporting all fire (run_id=None -> inventory persistence is skipped).
+    # Deliberately SKIPS subdomain enum, passive/DNS/cloud/CT recon, nuclei,
+    # dirsearch, web_checks, js_paths, js_cve, domain_scan, archived_urls, the
+    # service-scan modules, and nmap. tech-only never enumerates subdomains, so
+    # --no-subdomain-enum is honored implicitly. Supports domain / IP / CIDR / file.
+    if module_mode == 'tech-only':
+        target_input = domain_scan_file or subdomains_file
+        if not target_input:
+            print(f"{Colors.RED}[!] Error: --tech-only requires a target "
+                  f"(domain, IP, CIDR) or a --sub-domains <file>.{Colors.RESET}")
+            sys.exit(1)
+
+        raw_targets = load_subdomains_file(target_input)
+        if not raw_targets:
+            return
+        unique_targets = sorted(set(raw_targets))
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join("reports", f"tech_only_{timestamp}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        print(f"{Colors.CYAN}[*] Starting tech-only scan "
+              f"(web-tech fingerprint + version->CVE) on {len(unique_targets)} target(s)...{Colors.RESET}")
+
+        # 1. Expand + resolve targets (handles domain / IP / CIDR / file). CIDRs
+        # expand to individual hosts and domains resolve to IPs here.
+        scan_targets = await process_targets(unique_targets)
+        ip_to_hosts = {}
+        for _t in scan_targets:
+            _ip = _t.get("resolved_ip")
+            _host = _t.get("display_target")
+            if _ip and _host and _host != _ip:
+                ip_to_hosts.setdefault(_ip, []).append(_host)
+        for _hosts in ip_to_hosts.values():
+            _hosts.sort()
+
+        # 2. Web-port scan (configured web ports + any --ports). No nmap.
+        web_ports = sorted(_web_port_set(get_service_ports(), custom_ports))
+        port_scan_results = []
+        if scan_targets:
+            print(f"{Colors.CYAN}[*] tech-only: web-port scan on {len(scan_targets)} "
+                  f"target(s) over ports {web_ports}...{Colors.RESET}")
+            port_scan_results = await scan_ports(
+                scan_targets,
+                web_ports,
+                concurrency,
+                state_manager=None,
+                connect_timeout=connect_timeout,
+                retries=port_retries,
+            )
+
+        # 3. HTTP alive-probe (httpx only - NO nuclei / web_checks / dirsearch / js).
+        http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
+        probe_urls = build_recon_probe_urls(unique_targets, port_scan_results, ip_to_hosts)
+        print(f"{Colors.CYAN}[*] tech-only: probing {len(probe_urls)} web URL(s) with httpx...{Colors.RESET}")
+        httpx_data = await http_runner.run_httpx(probe_urls, domain_scan_concurrency)
+        if httpx_data:
+            http_runner.save_csv(httpx_data, "tech_only")
+        alive_urls = sorted({e.get("url") for e in httpx_data if e.get("url")})
+        print(f"{Colors.GREEN}[+] tech-only: {len(alive_urls)} alive web URL(s) found.{Colors.RESET}")
+
+        # 4. Web-technology fingerprint (webanalyze) -> "Technology Detected" findings.
+        tech_findings = []
+        if alive_urls:
+            tech_findings = await tech_fingerprint.fingerprint_tech(
+                alive_urls, output_dir, concurrency
+            )
+            if tech_findings:
+                print(f"{Colors.GREEN}[+] tech-only: {len(tech_findings)} technology "
+                      f"finding(s).{Colors.RESET}")
+
+        # 5. web_tech_cve (header + tech CVE paths) + NVD/KEV/EPSS/CVSS enrichment,
+        # and CSV/HTML (always) + JSON/SARIF (per --format / --sarif). run_id=None
+        # skips inventory persistence (tech-only is an ad-hoc lightweight triage).
+        await _enrich_and_report(
+            tech_findings, None, output_dir, sarif_output, output_format=output_format,
+        )
+
+        print(f"{Colors.BRIGHT_GREEN}[*] tech-only scan finished. "
+              f"Output directory: {Colors.BOLD}{output_dir}{Colors.RESET}")
+        return
+
     # --- DOMAIN SCAN MODE ---
     if module_mode == 'domain-scan':
         target_file = domain_scan_file or subdomains_file
@@ -2681,6 +2769,32 @@ async def cmd_scan(args):
         print(f"{Colors.RED}[!] Error: '{args.target}' is not a valid domain name.{Colors.RESET}")
         sys.exit(1)
 
+    # --tech-only: lightweight web-technology fingerprint + version->CVE only.
+    # Runs a minimal pipeline (resolve -> web-port scan -> httpx alive-probe ->
+    # tech_fingerprint -> web_tech_cve) and routes findings through the shared
+    # finalization tail for NVD/KEV/EPSS/CVSS enrichment + CSV/HTML/JSON/SARIF.
+    # Deliberately skips subdomain enum, passive recon, nuclei, dirsearch,
+    # web_checks, js/js_cve, domain_scan, archived_urls, service modules, and nmap.
+    # Accepts a domain, IP, CIDR, URL, or a --sub-domains/file list. Takes
+    # precedence over --posture when both flags are supplied.
+    if getattr(args, 'tech_only', False):
+        if getattr(args, 'posture', False):
+            print(f"{Colors.YELLOW}[*] Both --tech-only and --posture given; "
+                  f"running --tech-only (takes precedence).{Colors.RESET}")
+        await main(
+            targets_file=None,
+            concurrency=args.concurrency,
+            module_mode='tech-only',
+            domain_scan_file=getattr(args, 'sub_domains_file', None) or args.target,
+            domain_scan_concurrency=args.concurrency,
+            custom_ports=args.ports,
+            connect_timeout=args.connect_timeout,
+            port_retries=args.port_retries,
+            sarif_output=args.sarif,
+            output_format=getattr(args, 'format', None),
+        )
+        return
+
     # --posture: lightweight domain-posture triage only (formerly the `domain-scan`
     # subcommand) - classification, subdomain-takeover, CORS, and security-header
     # checks on the given domain(s). Skips subdomain enum, port/service scanning,
@@ -3171,6 +3285,10 @@ if __name__ == "__main__":
                               "domain(s). Skips subdomain enum, port/service scanning, nuclei, and "
                               "dirsearch - fast triage of a domain or a --sub-domains/file list. "
                               "(Replaces the old `domain-scan` subcommand.)")
+    sp_scan.add_argument("--tech-only", action="store_true", dest="tech_only",
+                         help="Lightweight mode: ONLY web-tech fingerprint + version->CVE "
+                              "(skips subdomain enum, nuclei, dirsearch, web_checks, js, "
+                              "domain_scan, archived, service modules, nmap).")
     sp_scan.add_argument("--no-subdomain-enum", action="store_true", dest="no_subdomain_enum",
         help="Skip subdomain enumeration for domain targets")
     sp_scan.add_argument("--no-dashboard", action="store_true", help="Disable the multi-row live progress dashboard")
