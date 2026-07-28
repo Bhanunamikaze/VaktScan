@@ -228,6 +228,20 @@ if command -v python3 > /dev/null && [ -f "$REPO_ROOT/scripts/update_js_cve_db.p
     fi
 fi
 
+#Refreshing the offline NVD CVE index (modules/data/nvd_cve_db.json) used by
+#modules/nvd.lookup_cves() for local-first, offline CVE lookups. Fail-safe: keeps
+#the committed copy if offline / rate-limited. Never aborts setup. Honours the
+#TTL, so re-running setup within the TTL is a cheap no-op. Set NVD_API_KEY for a
+#faster refresh. Safe to run standalone: python scripts/update_cve_db.py --force
+if command -v python3 > /dev/null && [ -f "$REPO_ROOT/scripts/update_cve_db.py" ]; then
+    echo -e "\n${cyan} [**] Refreshing offline NVD CVE database... ${reset}"
+    if python3 "$REPO_ROOT/scripts/update_cve_db.py"; then
+        echo -e "${magenta} [+] Offline NVD CVE database is up to date ${reset}"
+    else
+        echo -e "${red} [-] Could not fully refresh NVD CVE DB; keeping committed copy ${reset}"
+    fi
+fi
+
 echo -e "\n${green}########## Completed ########## ${reset} \n"
 echo -e "\n${green} [*] All required tools have been checked and installed if necessary."
 

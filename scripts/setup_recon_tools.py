@@ -21,6 +21,12 @@ CVE database (modules/data/retirejs_db.json) is refreshed separately by
 `python scripts/update_js_cve_db.py` (run automatically at the end of
 requirements.sh; safe to run standalone with --force).
 
+Likewise, the offline NVD CVE index (modules/data/nvd_cve_db.json) that powers
+local-first CVE lookups in modules/nvd.lookup_cves() is refreshed by
+`python scripts/update_cve_db.py` (also run at the end of requirements.sh, TTL
+aware, honours NVD_API_KEY; safe to run standalone with --force). Wire it into a
+daily cron/systemd-timer to keep lookups current without hitting the live API.
+
 Usage:
     python scripts/setup_recon_tools.py            # Just report tool status
     python scripts/setup_recon_tools.py --install  # Attempt to install missing tools
