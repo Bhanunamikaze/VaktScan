@@ -47,6 +47,12 @@ CPE_VENDOR_MAP = {
     "http_server":   "apache",
     "nginx":         "nginx",
     "iis":           "microsoft",
+    # Common web-layer server/framework products (fed by modules/web_tech_cve.py
+    # from Server / X-Powered-By headers and webanalyze detections).
+    "php":           "php",
+    "openssl":       "openssl",
+    "lighttpd":      "lighttpd",
+    "jetty":         "eclipse",
 }
 
 
@@ -151,6 +157,12 @@ def extract_product_and_version(finding: dict) -> tuple[str, str]:
     First checks if service_version is present. If not, parses details for banners.
     Returns (product, version) or ('', '').
     """
+    # A finding whose vulnerability field IS a CVE id (js_cve, nvd, web_tech_cve,
+    # nuclei CVE templates, nmap vulners) already names its CVE - re-looking it up
+    # against NVD would duplicate the CVE and waste API calls. Skip it.
+    if re.match(r"\s*CVE-\d{4}-\d{3,7}", finding.get("vulnerability", ""), re.IGNORECASE):
+        return "", ""
+
     version = finding.get("service_version", "")
     if version in ("Unknown", "N/A", "unknown"):
         version = ""

@@ -87,6 +87,7 @@ from modules import (
     dns_resolve,
     favicon_jarm,
     tech_fingerprint,
+    web_tech_cve,
     default_creds,
     notify,
     asset_classifier,
@@ -878,6 +879,66 @@ async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_ou
     Extracted so streaming mode (>1000 targets) gets the same enrichment and
     outputs as a normal scan instead of silently dropping them.
     """
+    # ── Web-layer version->CVE (modules/web_tech_cve) ──────────────────────────
+    # Turn the concrete versions VaktScan already detected at the WEB layer into
+    # NVD CVE findings so they reach KEV/EPSS/CVSS enrichment like js_cve does.
+    # Two paths, both reusing already-fetched data (NO new HTTP requests):
+    #   1. DEFAULT-ON: the Server / X-Powered-By header versions web_checks
+    #      surfaced (its "…Header Discloses…" findings carry the raw header in
+    #      service_version).
+    #   2. --tech: the webanalyze product/version pairs tech_fingerprint detected
+    #      (its "Technology Detected: <name> <version>" INFO findings).
+    # Emitted BEFORE the KEV/EPSS/passive gather so these CVEs get enriched too.
+    # Deduped against CVEs already reported by nuclei/nmap/service_recon/js_cve.
+    try:
+        _wt_existing_keys = web_tech_cve.collect_existing_cve_keys(final_vulnerabilities)
+        _wt_headers, _wt_tech = [], []
+        for _f in final_vulnerabilities:
+            _mod = _f.get("module", "")
+            _vuln = _f.get("vulnerability", "") or ""
+            _sv = _f.get("service_version", "") or ""
+            _ctx = {
+                "target":      _f.get("target", "N/A"),
+                "resolved_ip": _f.get("resolved_ip", "N/A"),
+                "port":        str(_f.get("port", "N/A")),
+                "url":         _f.get("url", "N/A"),
+            }
+            if (_mod == "WebChecks" and _sv not in ("", "N/A", "Unknown")
+                    and ("Server Header Discloses Version" in _vuln
+                         or "X-Powered-By Header Discloses" in _vuln)):
+                _wt_headers.append({**_ctx, "header": _sv})
+            elif (_mod == tech_fingerprint.MODULE_NAME
+                    and _vuln.startswith("Technology Detected:")):
+                _label = _vuln[len("Technology Detected:"):].strip()
+                _name = _label
+                if _sv not in ("", "N/A") and _label.endswith(_sv):
+                    _name = _label[:-len(_sv)].strip()
+                _wt_tech.append({**_ctx, "name": _name, "version": _sv})
+
+        _wt_header_cves, _wt_tech_cves = await asyncio.gather(
+            web_tech_cve.cves_from_headers(_wt_headers, existing_cve_keys=_wt_existing_keys),
+            web_tech_cve.cves_from_tech_detections(_wt_tech, existing_cve_keys=_wt_existing_keys),
+        )
+        _wt_cves = _wt_header_cves + _wt_tech_cves
+        # De-dup the two paths against each other by (target, CVE id).
+        _wt_added = 0
+        for _wf in _wt_cves:
+            _cid = ""
+            _cm = web_tech_cve.CVE_RE.search(_wf.get("vulnerability", "") or "")
+            if _cm:
+                _cid = _cm.group(0).upper()
+            _k = (_wf.get("target", "N/A"), _cid)
+            if _cid and _k not in _wt_existing_keys:
+                _wt_existing_keys.add(_k)
+                final_vulnerabilities.append(_wf)
+                _wt_added += 1
+        if _wt_added:
+            print(f"{Colors.CYAN}[*] Web-tech version->CVE added {_wt_added} "
+                  f"version-inferred CVE finding(s).{Colors.RESET}")
+    except Exception as _wt_exc:
+        _reraise_if_bug(_wt_exc)
+        print(f"{Colors.YELLOW}[!] Web-tech CVE mapping skipped: {_wt_exc}{Colors.RESET}")
+
     # NVD CVE lookups for unique (product, version) pairs.
     _nvd_seen_versions = set()
     _nvd_tasks = []
@@ -905,12 +966,23 @@ async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_ou
         if _f.get("url") not in _existing_urls:
             final_vulnerabilities.append(_f)
             _existing_urls.add(_f.get("url"))
+    # Seed the banner-NVD dedup with CVEs ALREADY present (js_cve, nuclei, nmap,
+    # and the web_tech_cve version-inferred findings added above) so the banner
+    # path never re-adds a duplicate of a CVE already reported for the same
+    # host:port - notably the nginx/apache/iis header versions web_tech_cve now
+    # owns as conservative POTENTIAL findings.
     _seen_cve_keys = set()
+    for _f in final_vulnerabilities:
+        _cm = web_tech_cve.CVE_RE.search(_f.get("vulnerability", "") or "")
+        if _cm:
+            _seen_cve_keys.add(
+                (_f.get("target", "N/A"), str(_f.get("port", "N/A")), _cm.group(0).upper())
+            )
     _added_cve_count = 0
     for _batch in nvd_results_list:
         for _f in _batch:
             _cve_id = _f.get("vulnerability", "").split(" - ")[0].strip()
-            _key = (_f.get("target", "N/A"), _f.get("port", "N/A"), _cve_id)
+            _key = (_f.get("target", "N/A"), str(_f.get("port", "N/A")), _cve_id.upper())
             if _cve_id and _key not in _seen_cve_keys:
                 _seen_cve_keys.add(_key)
                 final_vulnerabilities.append(_f)
@@ -2685,7 +2757,7 @@ async def cmd_scan(args):
             name for name, on in (
                 ("params", getattr(args, 'params', False)),
                 ("favicon", getattr(args, 'favicon', False)),
-                ("tech", getattr(args, 'tech', False)),
+                ("tech", not getattr(args, 'no_tech', False)),
                 ("default_creds", getattr(args, 'default_creds', False)),
             ) if on
         ],
@@ -2765,7 +2837,7 @@ async def cmd_scan(args):
                 name for name, on in (
                     ("params", getattr(args, 'params', False)),
                     ("favicon", getattr(args, 'favicon', False)),
-                    ("tech", getattr(args, 'tech', False)),
+                    ("tech", not getattr(args, 'no_tech', False)),
                     ("default_creds", getattr(args, 'default_creds', False)),
                 ) if on
             ),
@@ -3054,7 +3126,9 @@ if __name__ == "__main__":
     sp_scan.add_argument("--favicon", action="store_true", dest="favicon",
                          help="Favicon mmh3 hash + JARM fingerprint on alive URLs (Shodan/Censys pivots)")
     sp_scan.add_argument("--tech", action="store_true", dest="tech",
-                         help="Technology fingerprint + End-of-Life check on alive URLs (webanalyze + endoflife.date)")
+                         help="(Default ON) Technology fingerprint + EOL + version->CVE on alive URLs (webanalyze + endoflife.date). Kept for back-compat; tech now runs by default.")
+    sp_scan.add_argument("--no-tech", action="store_true", dest="no_tech",
+                         help="Disable the default technology fingerprint / EOL / web-tech CVE pass")
     sp_scan.add_argument("--default-creds", action="store_true", dest="default_creds",
                          help="Confirmed default-credential checks on alive URLs (Tomcat/Jenkins/Grafana/Basic-Auth)")
     sp_scan.add_argument("--no-dns-hygiene", action="store_false", dest="dns_hygiene", default=True,
