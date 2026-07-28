@@ -21,9 +21,9 @@ Every external tool it drives is **optional**: if a binary is missing, that stag
 - **JavaScript analysis** - hardcoded secrets, source maps, internal IPs, endpoint extraction and probing.
 - **Port scanning + service modules** - async TCP scan, then per-service CVE modules (Elasticsearch, Kibana, Grafana, Prometheus, Next.js, AEM, cPanel/WHM, Jenkins, plus a broad `service_recon` covering 80+ ports) and `testssl.sh` TLS posture.
 - **Nmap CVE scripts** - `nmap --script vuln,vulners` runs **only on the open ports the port scanner already found** (no separate full 1-65535 sweep), gated behind `--nmap`.
-- **Enrichment** - NVD CVE lookup, CISA KEV cross-reference, EPSS exploit-probability scoring, and Shodan/Censys passive intel.
+- **Enrichment & version-based CVEs** - maps product+version (service banners, `Server`/`X-Powered-By` headers, webanalyze/whatweb tech detection) to CVEs via a local **offline NVD CVE database** (daily-refreshable, live-API fallback), cross-referenced with CISA KEV + EPSS, plus Shodan/Censys passive intel. JavaScript libraries are covered separately by the Retire.js scanner.
 - **Reporting & state** - CSV + HTML reports are **always** written to `reports/`; JSON and SARIF 2.1 are opt-in. A SQLite inventory tracks assets and emits "new vs resolved" deltas, and `notify.py` sends Slack/Discord/webhook/email alerts on new findings (env-gated).
-- **Opt-in expansions** - screenshots, parameter discovery, favicon (mmh3) + JARM pivots, tech fingerprint + EOL, confirmed default-credential checks, and horizontal/infra expansion (asnmap, reverse-DNS, amass intel).
+- **Opt-in expansions** - screenshots, parameter discovery, favicon (mmh3) + JARM pivots, confirmed default-credential checks, and horizontal/infra expansion (asnmap, reverse-DNS, amass intel). *(Technology fingerprint + EOL + web-tech CVE now runs by default; use `--no-tech` to disable, or `--tech-only` for a fingerprint+CVE-only pass.)*
 - **Scale features** - streaming mode for large CIDRs, **resumable scans** (auto-resume for any target type - domain/IP/CIDR/file - with graceful Ctrl+C shutdown that checkpoints progress to `.vaktscan/state/` and cleanly terminates every running tool), IPv6, proxy support, and a live multi-row progress dashboard.
 
 
@@ -31,7 +31,7 @@ Every external tool it drives is **optional**: if a binary is missing, that stag
 
 - **Python 3.8+** (tested 3.8-3.11).
 - Python packages: `httpx`, `requests`, `urllib3`, `beautifulsoup4`, `playwright` (+ stealth) - see `requirements.txt`.
-- **Optional external tools** - subdomain enum (amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys), probing (httpx, ffuf, dirsearch, nuclei), scanning (nmap, testssl.sh), archives (gau, waybackurls, uro), DNS hygiene (puredns, massdns, alterx, dnsgen, dnsx), expansion (asnmap, amass), and optional add-ons (gowitness/aquatone, arjun/paramspider/gf, webanalyze). **All are optional** - any missing tool simply skips its stage.
+- **Optional external tools** - subdomain enum (amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys), probing (httpx, ffuf, dirsearch, nuclei), scanning (nmap, testssl.sh), archives (gau, waybackurls, uro), DNS hygiene (puredns, massdns, alterx, dnsgen, dnsx), expansion (asnmap, amass), and optional add-ons (gowitness/aquatone, arjun/paramspider/gf, webanalyze, whatweb). **All are optional** - any missing tool simply skips its stage.
 
 ```bash
 git clone https://github.com/Bhanunamikaze/VaktScan.git
@@ -242,7 +242,9 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `--horizontal` | off | Horizontal/infra expansion: asnmap CIDRs, reverse-DNS sweep, amass intel |
 | `--params` | off | Parameter discovery on alive URLs (arjun/paramspider/gf) |
 | `--favicon` | off | Favicon mmh3 hash + JARM fingerprint (Shodan/Censys pivots) |
-| `--tech` | off | Technology fingerprint + End-of-Life check (webanalyze + endoflife.date) |
+| `--tech` | **on** | (Default) Technology fingerprint + EOL + version->CVE (webanalyze + whatweb). `--tech` kept for back-compat |
+| `--no-tech` | off | Disable the default technology fingerprint / EOL / web-tech CVE pass |
+| `--tech-only` | off | Lightweight mode: ONLY web-tech fingerprint + version->CVE (skips subdomain enum, nuclei, dirsearch, service modules, nmap, etc.) |
 | `--default-creds` | off | Confirmed default-credential checks (Tomcat/Jenkins/Grafana/Basic-Auth) |
 | `--no-dns-hygiene` | on | Disable default DNS wildcard-filtering of enumerated subdomains |
 | `--dns-permute` | off | Generate + resolve subdomain permutations (alterx/dnsgen) during DNS hygiene |
@@ -253,6 +255,8 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `--include-only-file FILE` | - | File of `--include-only` patterns |
 | `--company-only` | off | Resolve + IP-map every subdomain, then scan **only company assets** - drop customer sites clustered on shared hosting IPs (writes `company_assets.txt` / `customer_sites.txt`) |
 | `--shared-ip-threshold N` | `10` | For `--company-only`: an IP hosting ≥ N subdomains is treated as shared hosting |
+| `--customer-dns-marker STR` | - | For `--company-only`: also treat a host as a customer site if its CNAME/PTR matches this substring (cPanel/shared-hosting); repeatable |
+| `--customer-dns-marker-file FILE` | - | File of `--customer-dns-marker` values (one per line, `#` comments) |
 
 ### `enum` - subdomain enumeration only
 
@@ -383,7 +387,7 @@ All are optional; modules degrade gracefully when they are absent.
 | `recon` | `enum` / `scan` | Subdomain enumeration orchestrator (amass, subfinder, assetfinder, findomain, sublist3r, knockpy, bbot, censys, crt.sh, ffuf) |
 | `dns_recon` | `dns` / `scan` | SPF/DMARC/DKIM, AXFR, open recursion, DNSSEC, CAA, email-security posture, and per-subdomain **dangling-CNAME takeover** (CNAME → NXDOMAIN) |
 | `dns_resolve` | `scan` | DNS hygiene: wildcard filtering (puredns/massdns) + optional permutations (alterx/dnsgen) |
-| `asset_classifier` | `--company-only` | Resolves + IP-maps subdomains; splits company assets from shared-hosting customer sites (functional-name whitelist rescue) |
+| `asset_classifier` | `--company-only` | Splits company vs shared-hosting customer sites by shared-IP density **and cPanel/hosting DNS markers** (CNAME/PTR, `--customer-dns-marker`), with functional-name rescue |
 | `cloud_enum` | `cloud` / `scan` | S3/Azure Blob/GCS bucket permutation + existence, CloudFront detection |
 | `ct_monitor` | `scan` | Certificate-transparency baseline + new-cert diffing per domain |
 | `google_dork` | `google-dork` / `scan` | Operator-crafted dorks via Custom Search API or Playwright/HTML fallback |
@@ -400,11 +404,12 @@ All are optional; modules degrade gracefully when they are absent.
 | `horizontal_expand` | `--horizontal` | asnmap → CIDRs, reverse-DNS sweep, amass intel → related domains |
 | `screenshots` | `--screenshots` | gowitness/aquatone visual triage + HTML gallery |
 | `param_discovery` | `--params` | arjun/paramspider/gf parameter surface (INFO only) |
-| `favicon_jarm` | `--favicon` | Favicon mmh3 hash + JARM fingerprint pivots |
-| `tech_fingerprint` | `--tech` | webanalyze tech detection + endoflife.date EOL validation |
+| `favicon_jarm` | `--favicon` | Favicon mmh3 hash + JARM pivots + favicon-hash -> product identification (INFO) |
+| `tech_fingerprint` | default (`--no-tech` disables) | webanalyze + **whatweb** tech/version detection, endoflife.date EOL, feeds web-tech CVE |
 | `default_creds` | `--default-creds` | Confirmed default-credential checks with a wrong-credential negative control |
 | `passive_intel` | enrichment | Shodan + Censys passive host data |
-| `nvd` | enrichment | Product/version → CVE lookup (CVSS ≥ 7) |
+| `nvd` | enrichment | Product/version → CVE lookup (CVSS ≥ 7), **local-first** from an offline NVD DB (`scripts/update_cve_db.py` daily refresh) with live-API fallback |
+| `web_tech_cve` | default (web layer) | Maps web-tech product+version (`Server`/`X-Powered-By` + webanalyze/whatweb) to NVD CVEs (POTENTIAL/version-inferred, deduped vs nuclei/nmap/js_cve) |
 | `cisa_kev` | enrichment | Flags findings present in the CISA Known Exploited Vulnerabilities catalog |
 | `epss` | enrichment | Appends EPSS exploit-probability scores |
 | `inventory` | reporting | SQLite asset inventory, delta + executive summary |
