@@ -8,7 +8,12 @@ in Shodan/Censys (whose API keys VaktScan already reads via
   * FAVICON HASH - fetch each host's ``/favicon.ico`` and compute the mmh3
     (MurmurHash3) hash the way Shodan expects: base64-encode the raw favicon
     bytes with a newline every 76 chars, then ``mmh3.hash(b64)``. Searchable in
-    Shodan as ``http.favicon.hash:<hash>``.
+    Shodan as ``http.favicon.hash:<hash>``. When the computed hash matches a
+    curated map of well-known favicon fingerprints, an extra INFO finding names
+    the identified PRODUCT. IMPORTANT: a favicon identifies the product/appliance
+    ONLY - it carries NO version information - so this is an identification /
+    pivot signal and is NEVER used to fabricate a version or drive version->CVE
+    inference.
   * JARM - compute the JARM active TLS fingerprint per ``host:port``. Searchable
     in Shodan as ``ssl.jarm:<hash>`` (and equivalently in Censys).
 
@@ -104,6 +109,46 @@ def _parse_target(url: str):
     if not port:
         port = 443 if scheme == 'https' else 80
     return scheme, host, port
+
+
+# ─── Curated favicon-hash -> product identification ────────────────────────────
+#
+# A small, curated map of well-known favicon mmh3 hashes (Shodan-style: the hash
+# of ``base64.encodebytes(favicon_bytes)``) to the PRODUCT that ships that
+# favicon. These are publicly documented FOFA/Shodan favicon fingerprints for
+# common admin panels / servers / appliances. The map is intentionally
+# conservative and meant to be extended.
+#
+# HONESTY / SCOPE: a favicon hash identifies the PRODUCT ONLY. It says NOTHING
+# about the version, so a match is an identification / pivot signal - it is
+# emitted as INFO and MUST NOT be used to infer a version or to drive a
+# version->CVE lookup. Versions are never fabricated from a favicon.
+FAVICON_PRODUCT_MAP: dict[int, str] = {
+    81586312:    "Jenkins",
+    116323821:   "Spring Boot (default Whitelabel error/favicon)",
+    -1968180568: "GitLab",
+    -1616143106: "Grafana",
+    -1520332186: "phpMyAdmin",
+    1073055960:  "pfSense",
+    -235216981:  "Cisco (device management)",
+    999357577:   "Kibana",
+    743365239:   "Fortinet FortiGate",
+    -297069493:  "Apache Tomcat (default favicon)",
+}
+
+
+def favicon_product(fhash) -> str | None:
+    """Return the product identity for a known favicon mmh3 hash, or ``None``.
+
+    IMPORTANT: this identifies the PRODUCT / appliance only. A favicon carries no
+    version information, so the result is used solely as an identification / pivot
+    signal and NEVER to infer a version or a CVE. Returns ``None`` for unknown or
+    unparseable hashes.
+    """
+    try:
+        return FAVICON_PRODUCT_MAP.get(int(fhash))
+    except (TypeError, ValueError):
+        return None
 
 
 # ─── Favicon (mmh3) fingerprint ────────────────────────────────────────────────
@@ -270,6 +315,24 @@ async def _fingerprint_one(client: httpx.AsyncClient, sem: asyncio.Semaphore,
                 ),
                 host, favicon_url, port,
             ))
+
+            # Curated favicon -> PRODUCT identification. Product only, NO version:
+            # this is an identification / pivot signal, not a CVE source.
+            product = favicon_product(fhash)
+            if product:
+                findings.append(_finding(
+                    'Product Identified via Favicon',
+                    (
+                        f'The favicon served by {host} matches the well-known '
+                        f'favicon of {product} (mmh3 hash {fhash}). This '
+                        f'identifies the PRODUCT only - a favicon carries NO '
+                        f'version information, so this is an identification / '
+                        f'pivot signal and is NOT used to infer a version or a '
+                        f'CVE. Determine the running version by other means '
+                        f'before assessing vulnerabilities.'
+                    ),
+                    host, favicon_url, port,
+                ))
 
     # --- JARM TLS fingerprint ---
     if do_jarm:

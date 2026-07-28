@@ -17,10 +17,19 @@ Detection strategy
 1. If ``webanalyze`` (the Wappalyzer engine) is present on ``PATH`` (or pointed at
    by ``VAKT_WEBANALYZE_BIN``) it is invoked per-URL with ``-output json`` and its
    results are parsed. No auto-install - if it is missing we simply fall back.
-2. Otherwise (or if webanalyze yields nothing for a URL) a lightweight built-in
-   detector inspects the ``Server`` / ``X-Powered-By`` response headers plus a
-   couple of common HTML markers (``<meta name="generator">``, WordPress paths)
-   via httpx. It never raises.
+2. If ``whatweb`` is present on ``PATH`` (or pointed at by ``VAKT_WHATWEB_BIN``) it
+   is ALSO invoked per-URL with ``--log-json=-`` and its plugin output is parsed.
+   whatweb runs alongside webanalyze under the same default-on tech pass; the two
+   detection sets are merged and deduped by (name, version) so the same technology
+   is never reported twice. No auto-install - missing whatweb is skipped.
+3. Otherwise (or if the external tools yield nothing for a URL) a lightweight
+   built-in detector inspects the ``Server`` / ``X-Powered-By`` response headers
+   plus a couple of common HTML markers (``<meta name="generator">``, WordPress
+   paths) via httpx. It never raises.
+
+All three sources emit the SAME canonical ``"Technology Detected: <name> <version>"``
+INFO finding, so any concrete product/version they surface flows unchanged into the
+web_tech_cve ``--tech`` NVD/KEV/EPSS funnel and the EOL cross-reference below.
 
 EOL cross-reference (false-positive disciplined - see TODO.md §1)
 ----------------------------------------------------------------
@@ -75,6 +84,7 @@ ENDOFLIFE_API = "https://endoflife.date/api"
 
 _HTTP_TIMEOUT = httpx.Timeout(8.0, connect=5.0)
 _WEBANALYZE_TIMEOUT = 60.0
+_WHATWEB_TIMEOUT = 60.0
 
 # Detected technology name (lowercased) -> endoflife.date product slug.
 # Kept aligned with the vocabulary already used by modules/web_checks.py.
@@ -120,6 +130,21 @@ def _webanalyze_binary() -> str | None:
             if found:
                 return found
     return shutil.which("webanalyze")
+
+
+def _whatweb_binary() -> str | None:
+    """Resolve the whatweb binary (env override first), or None if absent."""
+    env = os.environ.get("VAKT_WHATWEB_BIN")
+    if env:
+        expanded = os.path.expanduser(env)
+        if os.path.isabs(expanded):
+            if os.path.exists(expanded):
+                return expanded
+        else:
+            found = shutil.which(expanded)
+            if found:
+                return found
+    return shutil.which("whatweb")
 
 
 # ─── Detection primitives ──────────────────────────────────────────────────────
@@ -265,6 +290,109 @@ def _parse_webanalyze_output(text: str) -> list[dict]:
     return _dedup_dets(dets)
 
 
+# whatweb heuristic/metadata plugins that are NOT technologies (lowercased). They
+# carry page/transport metadata rather than a product, so they are skipped to keep
+# the fingerprint output (and the downstream CVE funnel) free of noise.
+_WHATWEB_META_PLUGINS: frozenset[str] = frozenset({
+    "title", "ip", "country", "country-code", "email", "html5", "script",
+    "object", "frame", "iframe", "cookies", "httponly", "uncommonheaders",
+    "redirectlocation", "meta-author", "meta-refresh-redirect", "via", "via-proxy",
+    "open-graph-protocol", "x-frame-options", "x-xss-protection", "x-ua-compatible",
+    "strict-transport-security", "content-security-policy", "content-language",
+    "access-control-allow-methods", "access-control-allow-origin", "allow",
+    "passwordfield", "header-hash", "opensearch", "index-of", "pingback",
+    "rss", "atom", "feed", "probably-",
+})
+
+# whatweb plugins whose ``string`` value carries a raw "product/version" server
+# token (e.g. "nginx/1.18.0"); parsed like a Server / X-Powered-By header.
+_WHATWEB_HEADER_PLUGINS: frozenset[str] = frozenset({"httpserver", "x-powered-by"})
+
+
+def _first_version(val) -> str:
+    """Pick the first non-empty version string from a whatweb ``version`` field."""
+    if isinstance(val, list):
+        for v in val:
+            s = str(v).strip()
+            if s:
+                return s
+        return ""
+    if val is None:
+        return ""
+    return str(val).strip()
+
+
+def _as_str_list(val) -> list[str]:
+    """Coerce a whatweb field (str or list) into a list of non-empty strings."""
+    if isinstance(val, list):
+        return [str(v) for v in val if str(v).strip()]
+    if val is None:
+        return []
+    s = str(val).strip()
+    return [s] if s else []
+
+
+def _parse_whatweb_output(text: str) -> list[dict]:
+    """Parse whatweb ``--log-json`` output (array, object, or JSON-lines).
+
+    whatweb emits a list of result objects; each has a ``plugins`` map of
+    ``{plugin_name: {"version": [...], "string": [...], ...}}``. The plugin name
+    is the product; its ``version`` list (when present) is the version. Metadata
+    plugins are skipped and HTTPServer / X-Powered-By strings are parsed like a
+    Server header. Never raises.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    objs: list = []
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            objs = data
+        elif isinstance(data, dict):
+            objs = [data]
+    except json.JSONDecodeError:
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, list):
+                objs.extend(parsed)
+            elif isinstance(parsed, dict):
+                objs.append(parsed)
+
+    dets: list[dict] = []
+    for obj in objs:
+        if not isinstance(obj, dict):
+            continue
+        plugins = obj.get("plugins")
+        if not isinstance(plugins, dict):
+            continue
+        for pname, pdata in plugins.items():
+            name = str(pname or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            if not isinstance(pdata, dict):
+                pdata = {}
+            # HTTPServer / X-Powered-By carry a raw product/version token.
+            if key in _WHATWEB_HEADER_PLUGINS:
+                for sv in _as_str_list(pdata.get("string")):
+                    for m in _HEADER_TOKEN_RE.finditer(sv):
+                        dets.append(_mk_det(m.group(1), m.group(2), [], "whatweb"))
+                continue
+            if key in _WHATWEB_META_PLUGINS:
+                continue
+            version = _first_version(pdata.get("version"))
+            dets.append(_mk_det(name, version, [], "whatweb"))
+    return _dedup_dets(dets)
+
+
 def _save_raw(output_dir: str, url: str, text: str) -> None:
     """Persist raw webanalyze output for traceability. Never raises."""
     if not (output_dir and text and text.strip()):
@@ -298,16 +426,41 @@ async def _run_webanalyze(binary: str, url: str, sem: asyncio.Semaphore,
     return _parse_webanalyze_output(text)
 
 
-async def _detect_for_url(client: httpx.AsyncClient, binary: str | None, url: str,
+async def _run_whatweb(binary: str, url: str, sem: asyncio.Semaphore,
+                       output_dir: str) -> list[dict]:
+    """Run whatweb for a single URL and parse its JSON plugins. Never raises."""
+    # --log-json=- writes JSON to stdout; --quiet suppresses the brief terminal
+    # log; --no-errors keeps connection noise off stderr.
+    cmd = [binary, "--quiet", "--no-errors", "--log-json=-", url]
+    try:
+        async with sem:
+            result = await proc_runner.run_tool(cmd, timeout=_WHATWEB_TIMEOUT)
+            stdout, _stderr = result.stdout, result.stderr
+    except Exception:
+        return []
+
+    text = (stdout or b"").decode("utf-8", errors="replace")
+    _save_raw(output_dir, f"{url}.whatweb", text)
+    return _parse_whatweb_output(text)
+
+
+async def _detect_for_url(client: httpx.AsyncClient, wa_binary: str | None,
+                          ww_binary: str | None, url: str,
                           sem: asyncio.Semaphore, output_dir: str) -> list[dict]:
-    """Fingerprint a single URL: webanalyze if available, else/also built-in."""
-    if binary:
-        dets = await _run_webanalyze(binary, url, sem, output_dir)
-        if dets:
-            return dets
-        # webanalyze produced nothing (missing apps db, error, no match) →
-        # fall back to the built-in detector so we still get a signal.
-    return await _builtin_detect(client, url, sem)
+    """Fingerprint a single URL with webanalyze AND whatweb (whichever are
+    present), merging + deduping their detections. Falls back to the built-in
+    detector only when neither external tool yields a signal."""
+    dets: list[dict] = []
+    if wa_binary:
+        dets.extend(await _run_webanalyze(wa_binary, url, sem, output_dir))
+    if ww_binary:
+        dets.extend(await _run_whatweb(ww_binary, url, sem, output_dir))
+    if not dets:
+        # No external fingerprinter available, or none matched → built-in signal.
+        dets = await _builtin_detect(client, url, sem)
+    # Dedup across sources by (name, version) so the same tech is not reported
+    # twice (e.g. webanalyze "Nginx 1.18.0" and whatweb "nginx 1.18.0").
+    return _dedup_dets(dets)
 
 
 # ─── End-of-Life cross-reference ───────────────────────────────────────────────
@@ -466,7 +619,8 @@ async def fingerprint_tech(alive_urls: list[str], output_dir: str,
     except Exception:
         pass
 
-    binary = _webanalyze_binary()
+    wa_binary = _webanalyze_binary()
+    ww_binary = _whatweb_binary()
     sem = asyncio.Semaphore(max(1, int(concurrency)))
     findings: list[dict] = []
 
@@ -480,7 +634,8 @@ async def fingerprint_tech(alive_urls: list[str], output_dir: str,
         prog = DashboardProgress("tech_fingerprint", total=len(urls), noun="hosts")
 
         det_results = await asyncio.gather(
-            *(prog.wrap(_detect_for_url(client, binary, u, sem, output_dir))
+            *(prog.wrap(_detect_for_url(client, wa_binary, ww_binary, u, sem,
+                                        output_dir))
               for u in urls),
             return_exceptions=True,
         )
