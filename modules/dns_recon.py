@@ -59,6 +59,7 @@ RR_A = 1
 RR_NS = 2
 RR_CNAME = 5
 RR_SOA = 6
+RR_PTR = 12
 RR_MX = 15
 RR_TXT = 16
 RR_AAAA = 28
@@ -145,6 +146,10 @@ def _parse_response(data: bytes) -> dict:
         elif rtype == RR_AAAA and rdlen == 16:
             rec['data'] = ':'.join(rdata_raw[i:i + 2].hex() for i in range(0, 16, 2))
         elif rtype == RR_CNAME:
+            rec['data'], _ = _decode_name(data, offset)
+        elif rtype == RR_PTR:
+            # Reverse-DNS name; reuse the compression-aware decoder (some resolvers
+            # compress PTR rdata) so callers get a real hostname, not a hex blob.
             rec['data'], _ = _decode_name(data, offset)
         elif rtype == RR_NS:
             rec['data'], _ = _decode_name(data, offset)

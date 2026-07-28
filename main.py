@@ -1130,6 +1130,7 @@ async def main(
     include_only_patterns=None,
     company_only=False,
     shared_ip_threshold=10,
+    customer_dns_markers=None,
     scan_id=None,
     canonical_targets=None,
     scope=None,
@@ -1890,6 +1891,7 @@ async def main(
                     _cls = await asset_classifier.classify_by_shared_ip(
                         subdomains, domain, domain_output_dir,
                         shared_ip_threshold=shared_ip_threshold, concurrency=concurrency,
+                        extra_markers=customer_dns_markers,
                     )
                     for _cf in _cls.get("findings", []):
                         state_manager.add_vulnerability(_cf)
@@ -2855,6 +2857,11 @@ async def cmd_scan(args):
     _include_only_loaded = load_exclusion_patterns(
         getattr(args, 'include_only', None), getattr(args, 'include_only_file', None)
     )
+    # Extra customer/shared-hosting DNS markers (--customer-dns-marker[-file]);
+    # only meaningful with --company-only, harmlessly ignored otherwise.
+    _customer_dns_markers = load_exclusion_patterns(
+        getattr(args, 'customer_dns_marker', None), getattr(args, 'customer_dns_marker_file', None)
+    )
     _scope_cfg = {
         "module_filter": args.module,
         "ports": args.ports,
@@ -2964,6 +2971,7 @@ async def cmd_scan(args):
             include_only_patterns=_include_only_loaded,
             company_only=getattr(args, 'company_only', False),
             shared_ip_threshold=getattr(args, 'shared_ip_threshold', 10),
+            customer_dns_markers=_customer_dns_markers,
             scan_id=_scan_id,
             canonical_targets=_canon_targets,
             scope=_scan_scope,
@@ -3255,7 +3263,7 @@ if __name__ == "__main__":
                          help="Disable the per-subdomain DNS-level takeover check (dangling CNAME -> "
                               "NXDOMAIN across all discovered subdomains). On by default.")
     sp_scan.add_argument("--exclude", action="append", metavar="PATTERN", dest="exclude",
-                         help="Exclude hosts matching this glob (e.g. 'customer1*.homestead.com') from "
+                         help="Exclude hosts matching this glob (e.g. 'customer1*.steinzsecurity.com') from"
                               "scanning - they stay in the enumerated subdomain list but are never "
                               "resolved/probed/scanned. Repeatable; prefix 're:' for a regex.")
     sp_scan.add_argument("--exclude-file", metavar="FILE", dest="exclude_file",
@@ -3274,6 +3282,13 @@ if __name__ == "__main__":
                          metavar="N",
                          help="For --company-only: an IP hosting N or more subdomains is treated as shared "
                               "hosting (its hosts = customer sites). Default: 10.")
+    sp_scan.add_argument("--customer-dns-marker", action="append", metavar="STR", dest="customer_dns_marker",
+                         help="For --company-only: extra shared-hosting DNS substring (matched against a "
+                              "host's CNAME target / reverse-DNS PTR). Hosts that match are classified as "
+                              "customer sites even below --shared-ip-threshold. Repeatable; merged with the "
+                              "built-in provider markers. Ignored without --company-only.")
+    sp_scan.add_argument("--customer-dns-marker-file", metavar="FILE", dest="customer_dns_marker_file",
+                         help="File of --customer-dns-marker substrings, one per line (# comments allowed).")
     sp_scan.add_argument("--wordlist")
     # --scan-found removed: the scan subcommand always probes discovered subdomains
     sp_scan.add_argument("--nmap", action="store_true")
