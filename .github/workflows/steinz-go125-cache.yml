@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/steinz-go125-cache-20260802
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
