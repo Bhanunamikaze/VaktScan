@@ -45,8 +45,8 @@ class CSPTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Weak Content-Security-Policy Directives", titles)
 
     def test_web_url_bundles_preserve_request_throughput_without_task_storm(self):
-        self.assertEqual(web_checks._url_bundle_concurrency(100), 20)
-        self.assertEqual(web_checks._url_bundle_concurrency(500), 100)
+        self.assertEqual(web_checks._url_bundle_concurrency(100), 2)
+        self.assertEqual(web_checks._url_bundle_concurrency(500), 10)
         self.assertEqual(web_checks._url_bundle_concurrency(3), 1)
 
     async def test_web_check_client_pool_follows_concurrency(self):

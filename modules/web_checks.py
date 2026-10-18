@@ -34,7 +34,9 @@ def _url_bundle_concurrency(request_concurrency: int) -> int:
     smaller number of bundles is sufficient to saturate the request pool and
     avoids starving the event loop with thousands of runnable coroutines.
     """
-    return max(1, int(request_concurrency) // 5)
+    # A single URL can fan out to roughly sixty simultaneous endpoint probes
+    # (sensitive files, admin panels, directory listings, API docs, etc.).
+    return max(1, int(request_concurrency) // 50)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
