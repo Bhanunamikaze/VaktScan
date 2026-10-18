@@ -35,7 +35,7 @@
 - [x] Escape target/tool-controlled content in HTML output.
 - [x] Generate a current report snapshot from the saved `onit.com` state.
 - [x] Include the user's `requirements.sh` update in the earlier fixes commit.
-- [x] Run the complete offline regression suite (530 tests passing, plus 13 subtests).
+- [x] Run the complete offline regression suite (531 tests passing, plus 13 subtests).
 
 ## Final live verification
 

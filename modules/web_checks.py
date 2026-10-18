@@ -26,6 +26,16 @@ from modules.progress import DashboardProgress, heartbeat
 MODULE_NAME = "WebChecks"
 _DEFAULT_TIMEOUT = 8.0
 
+
+def _url_bundle_concurrency(request_concurrency: int) -> int:
+    """Bound URL bundles while preserving the requested HTTP connection pool.
+
+    Each URL bundle fans out into many check families and endpoint probes.  A
+    smaller number of bundles is sufficient to saturate the request pool and
+    avoids starving the event loop with thousands of runnable coroutines.
+    """
+    return max(1, int(request_concurrency) // 5)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1555,16 +1565,23 @@ async def run_checks(alive_urls: list[str], concurrency: int = 20) -> list[dict]
     if not alive_urls:
         return []
 
-    semaphore = asyncio.Semaphore(max(1, concurrency))
+    request_concurrency = max(1, int(concurrency))
+    bundle_concurrency = _url_bundle_concurrency(request_concurrency)
+    semaphore = asyncio.Semaphore(bundle_concurrency)
     findings: list[dict] = []
+
+    print(
+        f"[*] Web checks using {request_concurrency} HTTP connections across "
+        f"{bundle_concurrency} active URL bundles."
+    )
 
     async with httpx.AsyncClient(
         verify=False,
         timeout=_DEFAULT_TIMEOUT,
         follow_redirects=True,
         limits=httpx.Limits(
-            max_connections=max(1, concurrency),
-            max_keepalive_connections=max(1, concurrency),
+            max_connections=request_concurrency,
+            max_keepalive_connections=request_concurrency,
         ),
     ) as client:
         total_checks = len(alive_urls) * len(_ALL_CHECKS)
