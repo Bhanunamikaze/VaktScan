@@ -24,6 +24,22 @@ class Colors:
     RESET = '\033[0m'
 
 class ReconScanner:
+    # Passive enumeration tools occasionally wait forever on an upstream API
+    # or leave a child process behind.  Keep the limits tool-specific so the
+    # slower aggregators have enough time while a single stalled provider can
+    # never block the entire recon phase.
+    TOOL_TIMEOUTS = {
+        "amass": 600,
+        "subfinder": 180,
+        "assetfinder": 120,
+        "findomain": 180,
+        "sublist3r": 120,
+        "knockpy": 300,
+        "bbot": 600,
+        "censys": 120,
+        "crtsh": 120,
+    }
+
     def __init__(self, domain, output_dir="reports", wordlist=None,
                  detailed_dashboard=True, skip_tools=frozenset()):
         self.domain = domain.strip().lower()
@@ -107,14 +123,15 @@ class ReconScanner:
             print(f"{Colors.RED}[!] sudo authentication failed. Skipping privileged tools.{Colors.RESET}")
             return False
 
-    async def _run_command(self, cmd, tool_name):
+    async def _run_command(self, cmd, tool_name, timeout=None):
         """Helper to run async subprocess commands."""
         from modules.dashboard import LiveDashboard
         dashboard = LiveDashboard()
+        timeout = timeout or self.TOOL_TIMEOUTS.get(str(tool_name).strip().lower(), 300)
         if not dashboard.active:
             print(f"{Colors.CYAN}[*] [{self.domain}] Running {tool_name}...{Colors.RESET}")
         try:
-            result = await proc_runner.run_tool(cmd)
+            result = await proc_runner.run_tool(cmd, timeout=timeout)
             stdout, stderr = result.stdout, result.stderr
 
             if result.returncode == 0:
@@ -130,6 +147,15 @@ class ReconScanner:
                     if "update" not in error_msg.lower(): 
                          pass # print(f"{Colors.YELLOW}[!] {tool_name} stderr: {error_msg}{Colors.RESET}")
                 return stdout.decode().strip().split('\n')
+        except asyncio.TimeoutError:
+            # proc.run_tool tears down the complete child process group.  A
+            # timeout is an expected provider failure, not a fatal scan error.
+            if not dashboard.active:
+                print(
+                    f"{Colors.YELLOW}[!] [{self.domain}] {tool_name} timed out "
+                    f"after {timeout}s; continuing with other recon results.{Colors.RESET}"
+                )
+            return []
         except Exception as e:
             if not dashboard.active:
                 print(f"{Colors.RED}[!] [{self.domain}] Error running {tool_name}: {e}{Colors.RESET}")
