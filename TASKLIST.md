@@ -47,7 +47,8 @@
 - [x] Bound every external recon enumerator and tear down its complete process group on timeout so one stalled provider cannot block the scan.
 - [x] Bound GAU and Wayback collection with configurable `VAKT_ARCHIVE_TOOL_TIMEOUT` process-group timeouts.
 - [x] Keep fresh domain-scan port, finding, and unified reports under `reports/<primary-target>/` instead of an intermediate generated subdomain filename.
-- [x] Run the complete offline regression suite (572 tests passing, plus 13 subtests).
+- [x] Treat CISA KEV as prioritization metadata without duplicating findings or automatically inflating conditional version matches to Critical.
+- [x] Run the complete offline regression suite (573 tests passing, plus 13 subtests).
 
 ## Final live verification
 

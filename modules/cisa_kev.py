@@ -3,7 +3,6 @@ import re
 import os
 import json
 import time
-from datetime import datetime
 
 MODULE_NAME = 'CISA-KEV'
 _KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'
@@ -47,51 +46,43 @@ def extract_cves(text: str) -> list:
 async def enrich_findings_with_kev(findings: list) -> list:
     """
     For each finding that mentions a CVE, check if it's in CISA KEV.
-    If yes, add a new sibling finding with status=CRITICAL, severity=CRITICAL
-    flagging it as a known-exploited vulnerability.
-    Returns the original findings list with KEV findings appended.
+    KEV membership is prioritization context, not deployment-specific impact.
+    Annotate the source finding without duplicating it or inflating severity.
     """
     catalog = await fetch_kev_catalog()
     if not catalog:
         return findings
 
     kev_index = build_kev_index(catalog)
-    kev_findings = []
-    seen_cves = set()
-
     for f in findings:
         # Extract CVEs from vulnerability name + details
         text = f.get('vulnerability', '') + ' ' + f.get('details', '')
+        matched = []
         for cve in extract_cves(text):
             cve_upper = cve.upper()
-            if cve_upper in seen_cves:
-                continue
             entry = kev_index.get(cve_upper)
-            if not entry:
+            if not entry or any(item['cve'] == cve_upper for item in matched):
                 continue
-            seen_cves.add(cve_upper)
-            kev_findings.append({
-                'status': 'CRITICAL',
-                'vulnerability': f'CISA KEV: {cve_upper} - {entry["vulnerabilityName"]}',
-                'target': f.get('target', ''),
-                'resolved_ip': f.get('resolved_ip', ''),
-                'port': f.get('port', ''),
-                'url': f.get('url', ''),
-                'payload_url': f.get('payload_url', ''),
-                'module': MODULE_NAME,
-                'service_version': f.get('service_version', ''),
-                'severity': 'CRITICAL',
-                'details': (
-                    f'{cve_upper} is on the CISA Known Exploited Vulnerabilities catalog. '
-                    f'Product: {entry["vendorProject"]} {entry["product"]}. '
-                    f'Required action: {entry["requiredAction"]} '
-                    f'(due {entry.get("dueDate", "N/A")}). '
-                    f'Ransomware use: {entry.get("knownRansomwareCampaignUse", "Unknown")}.'
-                ),
-                'http_status': f.get('http_status', 'N/A'),
-                'page_title': 'N/A',
-                'content_length': 'N/A',
-                'timestamp': datetime.utcnow().isoformat() + 'Z',
-            })
+            matched.append({'cve': cve_upper, 'entry': entry})
 
-    return findings + kev_findings
+        if not matched:
+            continue
+
+        f['cisa_kev'] = True
+        f['cisa_kev_ids'] = [item['cve'] for item in matched]
+        annotations = []
+        for item in matched:
+            cve_upper, entry = item['cve'], item['entry']
+            annotations.append(
+                f'CISA KEV: {cve_upper} is known exploited; '
+                f'product {entry["vendorProject"]} {entry["product"]}; '
+                f'required action: {entry["requiredAction"]}; '
+                f'due {entry.get("dueDate", "N/A")}; '
+                f'ransomware use: {entry.get("knownRansomwareCampaignUse", "Unknown")}'
+            )
+        details = str(f.get('details') or '').rstrip()
+        suffix = ' | '.join(annotations)
+        if suffix not in details:
+            f['details'] = f'{details} | {suffix}' if details else suffix
+
+    return findings
