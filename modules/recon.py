@@ -24,11 +24,16 @@ class Colors:
     RESET = '\033[0m'
 
 class ReconScanner:
-    def __init__(self, domain, output_dir="reports", wordlist=None, detailed_dashboard=True):
+    def __init__(self, domain, output_dir="reports", wordlist=None,
+                 detailed_dashboard=True, skip_tools=frozenset()):
         self.domain = domain.strip().lower()
         self.output_dir = output_dir
         self.wordlist = wordlist
         self.detailed_dashboard = detailed_dashboard
+        self.skip_tools = {
+            str(name).strip().lower().replace("_", "-")
+            for name in (skip_tools or ()) if str(name).strip()
+        }
         self.subdomains = set()
         self.raw_candidates = []
         self.tools = {
@@ -57,6 +62,8 @@ class ReconScanner:
         """Verifies that required tools are installed in PATH."""
         missing = []
         for name, binary in self.tools.items():
+            if name.replace("_", "-") in self.skip_tools:
+                continue
             if not shutil.which(binary):
                 # Special check for sublist3r as it might be a python script
                 if name == "sublist3r" and shutil.which("sublist3r.py"):
@@ -368,6 +375,15 @@ class ReconScanner:
             print(f"{Colors.YELLOW}[!] Scanning will proceed with available tools.{Colors.RESET}")
 
         disabled = set()
+        skipped = {
+            name for name in self.tools
+            if name.replace("_", "-") in self.skip_tools
+        }
+        if skipped:
+            print(
+                f"{Colors.YELLOW}[*] Skipping recon tool(s): "
+                f"{', '.join(sorted(skipped))}.{Colors.RESET}"
+            )
         sudo_needed = [tool for tool in self.sudo_tools if tool not in missing]
         if sudo_needed and not self.ensure_sudo_session():
             disabled.update(sudo_needed)
@@ -378,14 +394,14 @@ class ReconScanner:
 
         # Determine the set of tools that will actually run
         active_tools = []
-        if "subfinder" not in missing: active_tools.append("Subfinder")
-        if "assetfinder" not in missing: active_tools.append("Assetfinder")
-        if "findomain" not in missing: active_tools.append("Findomain")
-        if "sublist3r" not in missing: active_tools.append("Sublist3r")
-        if "knockpy" not in missing: active_tools.append("Knockpy")
-        if "bbot" not in missing and "bbot" not in disabled: active_tools.append("BBOT")
-        if "censys" not in missing: active_tools.append("Censys")
-        if "crtsh" not in missing: active_tools.append("Crtsh")
+        if "subfinder" not in missing and "subfinder" not in skipped: active_tools.append("Subfinder")
+        if "assetfinder" not in missing and "assetfinder" not in skipped: active_tools.append("Assetfinder")
+        if "findomain" not in missing and "findomain" not in skipped: active_tools.append("Findomain")
+        if "sublist3r" not in missing and "sublist3r" not in skipped: active_tools.append("Sublist3r")
+        if "knockpy" not in missing and "knockpy" not in skipped: active_tools.append("Knockpy")
+        if "bbot" not in missing and "bbot" not in disabled and "bbot" not in skipped: active_tools.append("BBOT")
+        if "censys" not in missing and "censys" not in skipped: active_tools.append("Censys")
+        if "crtsh" not in missing and "crtsh" not in skipped: active_tools.append("Crtsh")
 
         self.pending_tools = set(active_tools)
 
@@ -452,14 +468,14 @@ class ReconScanner:
 
         tasks = []
         #if "amass" not in missing: tasks.append(wrap_task(self.run_amass(), "Amass"))
-        if "subfinder" not in missing: tasks.append(wrap_task(self.run_subfinder(), "Subfinder"))
-        if "assetfinder" not in missing: tasks.append(wrap_task(self.run_assetfinder(), "Assetfinder"))
-        if "findomain" not in missing: tasks.append(wrap_task(self.run_findomain(), "Findomain"))
-        if "sublist3r" not in missing: tasks.append(wrap_task(self.run_sublist3r(), "Sublist3r"))
-        if "knockpy" not in missing: tasks.append(wrap_task(self.run_knockpy(), "Knockpy"))
-        if "bbot" not in missing and "bbot" not in disabled: tasks.append(wrap_task(self.run_bbot(), "BBOT"))
-        if "censys" not in missing: tasks.append(wrap_task(self.run_censys(), "Censys"))
-        if "crtsh" not in missing: tasks.append(wrap_task(self.run_crtsh(), "Crtsh"))
+        if "subfinder" not in missing and "subfinder" not in skipped: tasks.append(wrap_task(self.run_subfinder(), "Subfinder"))
+        if "assetfinder" not in missing and "assetfinder" not in skipped: tasks.append(wrap_task(self.run_assetfinder(), "Assetfinder"))
+        if "findomain" not in missing and "findomain" not in skipped: tasks.append(wrap_task(self.run_findomain(), "Findomain"))
+        if "sublist3r" not in missing and "sublist3r" not in skipped: tasks.append(wrap_task(self.run_sublist3r(), "Sublist3r"))
+        if "knockpy" not in missing and "knockpy" not in skipped: tasks.append(wrap_task(self.run_knockpy(), "Knockpy"))
+        if "bbot" not in missing and "bbot" not in disabled and "bbot" not in skipped: tasks.append(wrap_task(self.run_bbot(), "BBOT"))
+        if "censys" not in missing and "censys" not in skipped: tasks.append(wrap_task(self.run_censys(), "Censys"))
+        if "crtsh" not in missing and "crtsh" not in skipped: tasks.append(wrap_task(self.run_crtsh(), "Crtsh"))
         
         # Run passive tools concurrently
         if tasks:

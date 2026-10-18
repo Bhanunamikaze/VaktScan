@@ -211,6 +211,48 @@ def _positive_int(value):
     return parsed
 
 
+_SKIP_TOOL_ALIASES = {
+    "domain_scan": "domain-scan",
+    "web_checks": "web-checks",
+    "js_paths": "js-paths",
+    "js_cve": "js-cve",
+    "dns_recon": "dns-recon",
+    "cloud_enum": "cloud-enum",
+    "ct_monitor": "ct-monitor",
+    "dns_hygiene": "dns-hygiene",
+    "dns_takeover": "dns-takeover",
+    "subdomain_enum": "subdomain-enum",
+    "wayback": "waybackurls",
+    "archived_urls": "archived-scan",
+    "default_creds": "default-creds",
+    "service_scans": "service-scans",
+}
+
+
+def _parse_skip_tools(values):
+    """Normalize repeatable/comma-separated ``--skip TOOL`` arguments.
+
+    Tool selection is intentionally not part of the state identity: operators
+    must be able to resume an existing scan and bypass a misbehaving stage
+    without creating a different scan id. Checkpointed stages record the skip
+    as their completed payload, so subsequent resumes continue after them.
+    """
+    normalized = set()
+    for raw in values or ():
+        for item in str(raw).split(","):
+            name = item.strip().lower().replace("_", "-")
+            if not name:
+                continue
+            normalized.add(_SKIP_TOOL_ALIASES.get(name, name))
+    return frozenset(normalized)
+
+
+def _tool_skipped(skip_tools, name):
+    canonical = str(name or "").strip().lower().replace("_", "-")
+    canonical = _SKIP_TOOL_ALIASES.get(canonical, canonical)
+    return canonical in (skip_tools or ())
+
+
 def _apply_network_tuning_args(args):
     """Expose safe scanner-specific network controls as normal CLI flags.
 
@@ -338,6 +380,7 @@ async def run_recon_followups(
     extra_scans=frozenset(),
     enable_js_cve=True,
     state_manager=None,
+    skip_tools=frozenset(),
 ):
     """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
     all_findings = []
@@ -382,6 +425,12 @@ async def run_recon_followups(
             f"for {recon_domain} already complete; reusing {len(alive_urls)} alive URL(s)."
             f"{Colors.RESET}"
         )
+    elif _tool_skipped(skip_tools, "httpx"):
+        print(f"{Colors.YELLOW}[*] Skipping HTTP discovery (--skip httpx); "
+              f"dependent web follow-ups have no alive-URL input.{Colors.RESET}")
+        if state_manager is not None:
+            state_manager.mark_recon_http_done(recon_domain, [], [])
+        return all_findings
     else:
         host_to_ip, ip_to_hosts, unresolved_hosts = await resolve_hostnames(unique_targets)
         recon_targets = build_scan_targets_from_mappings(unique_targets, host_to_ip)
@@ -523,6 +572,19 @@ async def run_recon_followups(
                 if dashboard.active:
                     dashboard.complete_task(name, "Reused checkpoint")
                 return state_manager.get_recon_stage_payload(recon_domain, name)
+            if _tool_skipped(skip_tools, name):
+                close = getattr(awaitable, "close", None)
+                if close:
+                    close()
+                print(
+                    f"{Colors.YELLOW}[*] Skipping {name.replace('_', ' ')} "
+                    f"(--skip {name.replace('_', '-')}).{Colors.RESET}"
+                )
+                if state_manager is not None:
+                    state_manager.mark_recon_stage_payload(recon_domain, name, None)
+                if dashboard.active:
+                    dashboard.complete_task(name, "Skipped by --skip")
+                return None
             result = await _capture_stage(awaitable)
             if state_manager is not None and not isinstance(result, Exception):
                 state_manager.mark_recon_stage_payload(recon_domain, name, result)
@@ -645,7 +707,7 @@ async def run_recon_followups(
         # Visual triage: screenshot alive URLs (opt-in via --screenshots; capped,
         # since a recon run can yield tens of thousands of alive hosts). Gracefully
         # skips when gowitness/aquatone isn't installed.
-        if enable_screenshots:
+        if enable_screenshots and not _tool_skipped(skip_tools, "screenshots"):
             _cap = 500
             _shot_urls = alive_urls[:_cap]
             if len(alive_urls) > _cap:
@@ -657,22 +719,22 @@ async def run_recon_followups(
 
         # Optional alive-URL analyses (opt-in - each can be heavy at recon scale;
         # all gracefully skip when their external tool isn't installed).
-        if "params" in extra_scans:
+        if "params" in extra_scans and not _tool_skipped(skip_tools, "params"):
             _pf = await param_discovery.discover_parameters(alive_urls, output_dir, web_concurrency)
             if _pf:
                 print(f"{Colors.GREEN}[+] Parameter discovery: {len(_pf)} finding(s).{Colors.RESET}")
                 all_findings.extend(_pf)
-        if "favicon" in extra_scans:
+        if "favicon" in extra_scans and not _tool_skipped(skip_tools, "favicon"):
             _ff = await favicon_jarm.fingerprint_favicon_jarm(alive_urls, output_dir, web_concurrency)
             if _ff:
                 print(f"{Colors.GREEN}[+] Favicon/JARM pivots: {len(_ff)} finding(s).{Colors.RESET}")
                 all_findings.extend(_ff)
-        if "tech" in extra_scans:
+        if "tech" in extra_scans and not _tool_skipped(skip_tools, "tech"):
             _tf = await tech_fingerprint.fingerprint_tech(alive_urls, output_dir, web_concurrency)
             if _tf:
                 print(f"{Colors.GREEN}[+] Tech/EOL fingerprint: {len(_tf)} finding(s).{Colors.RESET}")
                 all_findings.extend(_tf)
-        if "default_creds" in extra_scans:
+        if "default_creds" in extra_scans and not _tool_skipped(skip_tools, "default-creds"):
             _dcf = await default_creds.check_default_credentials(alive_urls, output_dir, web_concurrency)
             if _dcf:
                 print(f"{Colors.BRIGHT_RED}[!] Default credentials: {len(_dcf)} confirmed finding(s).{Colors.RESET}")
@@ -682,7 +744,10 @@ async def run_recon_followups(
     # concurrency. This preserves high throughput without stacking two process
     # pools and their outbound connections on top of one another.
     domain_hosts = collect_domain_hosts(alive_urls)
-    if domain_hosts:
+    if domain_hosts and not (
+        _tool_skipped(skip_tools, "gau")
+        and _tool_skipped(skip_tools, "waybackurls")
+    ):
         print(
             f"{Colors.CYAN}[*] Harvesting archived URLs for {len(domain_hosts)} host(s) "
             f"(GAU then Wayback, up to {web_concurrency} hosts per tool)...{Colors.RESET}"
@@ -701,8 +766,14 @@ async def run_recon_followups(
             dashboard.add_task("wayback", "Wayback Archival")
 
         try:
-            gau_result = await _capture_stage(gau_inst.run(domain_hosts))
-            wayback_result = await _capture_stage(wayback_inst.run(domain_hosts))
+            gau_result = (
+                {} if _tool_skipped(skip_tools, "gau")
+                else await _capture_stage(gau_inst.run(domain_hosts))
+            )
+            wayback_result = (
+                {} if _tool_skipped(skip_tools, "waybackurls")
+                else await _capture_stage(wayback_inst.run(domain_hosts))
+            )
         finally:
             if dashboard.active:
                 dashboard.complete_task("gau")
@@ -720,7 +791,7 @@ async def run_recon_followups(
         # Weaponize the harvested archive: dedup → filter high-signal → re-probe
         # for live endpoints → secret-scan archived JS. Reuses the URLs gau/wayback
         # already produced (previously discarded).
-        if enable_archived:
+        if enable_archived and not _tool_skipped(skip_tools, "archived-scan"):
             _archived_urls = []
             for _res in (gau_result, wayback_result):
                 if isinstance(_res, dict):
@@ -745,7 +816,8 @@ async def run_recon_followups(
     # Client-side JS CVE scan (js_cve) over the JS VaktScan already discovered.
     # Default-ON; --no-js-cve opts out; silently no-ops if the Retire.js DB is
     # absent. Reuses the collected corpus - no extra crawl pass.
-    if enable_js_cve and js_cve_corpus:
+    if (enable_js_cve and js_cve_corpus
+            and not _tool_skipped(skip_tools, "js-cve")):
         all_findings.extend(
             await _run_js_cve_over_corpus(js_cve_corpus, output_dir, web_concurrency)
         )
@@ -911,7 +983,9 @@ def _recover_recon_http_results(domain, output_dir, state_manager):
     )
     return alive_urls, rows
 
-async def _run_parallel_passive(domain: str, concurrency: int = 20, detailed_dashboard: bool = True) -> tuple:
+async def _run_parallel_passive(domain: str, concurrency: int = 20,
+                                detailed_dashboard: bool = True,
+                                skip_tools=frozenset()) -> tuple:
     """Run DNS recon, cloud enum, and CT monitoring in parallel for a domain.
 
     Returns (dns_findings, cloud_findings, ct_findings).
@@ -924,10 +998,16 @@ async def _run_parallel_passive(domain: str, concurrency: int = 20, detailed_das
         dashboard.add_task("ct_monitor", "CT Monitor")
 
     try:
+        async def _empty():
+            return []
+
         dns_f, cloud_f, ct_f = await asyncio.gather(
-            dns_recon.run_dns_recon([domain], concurrency=concurrency),
-            cloud_enum.enumerate_cloud_assets(domain),
-            ct_monitor.check_new_certificates(domain),
+            (_empty() if _tool_skipped(skip_tools, "dns-recon")
+             else dns_recon.run_dns_recon([domain], concurrency=concurrency)),
+            (_empty() if _tool_skipped(skip_tools, "cloud-enum")
+             else cloud_enum.enumerate_cloud_assets(domain)),
+            (_empty() if _tool_skipped(skip_tools, "ct-monitor")
+             else ct_monitor.check_new_certificates(domain)),
             return_exceptions=True,
         )
     finally:
@@ -991,7 +1071,8 @@ WEB_PROBE_CHECKPOINT_BATCH = 50
 
 async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
                           completed_urls=None, record_completed=None, batch_size=None,
-                          enable_js_cve=True, record_findings=None):
+                          enable_js_cve=True, record_findings=None,
+                          skip_tools=frozenset()):
     """httpx-probe the given URLs, then run nuclei + web_checks + dirsearch + JS
     path extraction on the alive ones. Returns the collected findings (dirsearch
     writes its own reports). Shared by the normal scan and (opt-in) streaming mode.
@@ -1035,8 +1116,14 @@ async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
         batches = [web_probe_urls]
 
     for batch in batches:
-        batch_findings = await _run_web_probe_batch(
-            batch, output_dir, domain_label, concurrency, enable_js_cve=enable_js_cve)
+        if skip_tools:
+            batch_findings = await _run_web_probe_batch(
+                batch, output_dir, domain_label, concurrency,
+                enable_js_cve=enable_js_cve, skip_tools=skip_tools)
+        else:
+            batch_findings = await _run_web_probe_batch(
+                batch, output_dir, domain_label, concurrency,
+                enable_js_cve=enable_js_cve)
         # Persist this batch's findings BEFORE marking its URLs complete. No
         # await separates these two synchronous steps, so an interrupt (injected
         # only at await points) cannot land between them: the batch's findings
@@ -1110,12 +1197,16 @@ def _js_cve_corpus_from_web(js_result, alive_urls):
 
 
 async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurrency,
-                               enable_js_cve=True):
+                               enable_js_cve=True, skip_tools=frozenset()):
     """Run the full web-probe pipeline (httpx→nuclei→web_checks→dirsearch→JS→js_cve)
     on one batch of URLs and return the collected findings."""
     findings = []
     web_concurrency = _web_concurrency(concurrency)
     if not web_probe_urls:
+        return findings
+    if _tool_skipped(skip_tools, "httpx"):
+        print(f"{Colors.YELLOW}[*] Skipping httpx (--skip httpx); "
+              f"dependent web follow-ups have no alive-URL input.{Colors.RESET}")
         return findings
     print(f"{Colors.CYAN}[*] Probing {len(web_probe_urls)} open web port URL(s) with httpx...{Colors.RESET}")
     http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
@@ -1137,31 +1228,36 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
             f"{Colors.RESET}"
         )
 
-    nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
-    nuclei_results = await nuclei_inst.run_nuclei(bulk_scan_urls)
-    if nuclei_results:
-        print(f"{Colors.GREEN}[+] Nuclei: {len(nuclei_results)} finding(s).{Colors.RESET}")
-        findings.extend(nuclei_results)
+    if not _tool_skipped(skip_tools, "nuclei"):
+        nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
+        nuclei_results = await nuclei_inst.run_nuclei(bulk_scan_urls)
+        if nuclei_results:
+            print(f"{Colors.GREEN}[+] Nuclei: {len(nuclei_results)} finding(s).{Colors.RESET}")
+            findings.extend(nuclei_results)
 
-    wc_results = await web_checks.run_checks(alive_urls, web_concurrency)
-    if wc_results:
-        print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
-        findings.extend(wc_results)
+    if not _tool_skipped(skip_tools, "web-checks"):
+        wc_results = await web_checks.run_checks(alive_urls, web_concurrency)
+        if wc_results:
+            print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
+            findings.extend(wc_results)
 
-    dir_enumerator = dir_enum.DirEnumerator(domain_label, output_dir=output_dir)
-    dirsearch_result = await dir_enumerator.run_dirsearch(bulk_scan_urls)
-    findings.extend(artifact_findings.dirsearch_findings(dirsearch_result))
+    if not _tool_skipped(skip_tools, "dirsearch"):
+        dir_enumerator = dir_enum.DirEnumerator(domain_label, output_dir=output_dir)
+        dirsearch_result = await dir_enumerator.run_dirsearch(bulk_scan_urls)
+        findings.extend(artifact_findings.dirsearch_findings(dirsearch_result))
 
-    js_scanner = js_paths.JSPathsScanner(bulk_scan_urls, output_dir=output_dir)
-    js_result = await js_scanner.run()
-    js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
-    findings.extend(js_findings)
+    js_result = None
+    if not _tool_skipped(skip_tools, "js-paths"):
+        js_scanner = js_paths.JSPathsScanner(bulk_scan_urls, output_dir=output_dir)
+        js_result = await js_scanner.run()
+        js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
+        findings.extend(js_findings)
 
     # Client-side JS CVE scan (js_cve) over the JS this probe just discovered.
     # Previously only ran in recon-domain mode; wiring it here makes it fire in the
     # direct-target (-f targets.txt) and streaming web-probe paths too. Reuses the
     # discovered JS - no extra crawl pass. Default-ON; --no-js-cve opts out.
-    if enable_js_cve:
+    if enable_js_cve and not _tool_skipped(skip_tools, "js-cve"):
         corpus = _js_cve_corpus_from_web(js_result, alive_urls)
         findings.extend(
             await _run_js_cve_over_corpus(corpus, output_dir, web_concurrency)
@@ -1446,6 +1542,7 @@ async def main(
     scan_id=None,
     canonical_targets=None,
     scope=None,
+    skip_tools=frozenset(),
 ):
     """
     Main orchestrator for the scanning tool.
@@ -1885,6 +1982,7 @@ async def main(
             enable_screenshots=enable_screenshots,
             extra_scans=extra_scans,
             enable_js_cve=js_cve_scan,
+            skip_tools=skip_tools,
         )
         if recon_findings:
             print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {safe_label}{Colors.RESET}")
@@ -2080,6 +2178,7 @@ async def main(
                     extra_scans=extra_scans,
                     enable_js_cve=js_cve_scan,
                     state_manager=state_manager,
+                    skip_tools=skip_tools,
                 )
                 if recon_findings:
                     print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {recon_domain}{Colors.RESET}")
@@ -2136,11 +2235,27 @@ async def main(
                             f"({len(_subs)} unique host(s)).{Colors.RESET}"
                         )
                         return _file, _subs
+                    if _tool_skipped(skip_tools, "subdomain-enum"):
+                        _safe = re.sub(r"[^a-z0-9._-]", "_", domain.lower())
+                        _dir = os.path.join("reports", _safe or "domain")
+                        os.makedirs(_dir, exist_ok=True)
+                        _file = os.path.join(_dir, "subdomain_enum_skipped.txt")
+                        with open(_file, "w", encoding="utf-8") as _handle:
+                            _handle.write(f"{domain}\n")
+                        _subs = [domain]
+                        state_manager.mark_recon_enumeration_done(domain, _file, _subs)
+                        print(f"{Colors.YELLOW}[*] Skipping subdomain enumeration "
+                              f"(--skip subdomain-enum); using apex {domain}.{Colors.RESET}")
+                        return _file, _subs
                     if not dashboard.active:
                         print(f"{Colors.CYAN}[*] Enumerating subdomains for {domain}...{Colors.RESET}")
-                    scanner = recon.ReconScanner(
-                        domain, wordlist=wordlist, detailed_dashboard=is_detailed
-                    )
+                    _scanner_kwargs = {
+                        "wordlist": wordlist,
+                        "detailed_dashboard": is_detailed,
+                    }
+                    if skip_tools:
+                        _scanner_kwargs["skip_tools"] = skip_tools
+                    scanner = recon.ReconScanner(domain, **_scanner_kwargs)
                     result = await scanner.run_all()
                     _file, _subs = result
                     # Save immediately, before slower HTTP/port follow-ups.
@@ -2152,7 +2267,9 @@ async def main(
                 _gcx     = os.environ.get('GOOGLE_CX', '')
 
                 async def _maybe_dork():
-                    if no_dork:
+                    if no_dork or _tool_skipped(skip_tools, "dork"):
+                        if _tool_skipped(skip_tools, "dork"):
+                            state_manager.mark_recon_stage_done(domain, "dork")
                         return []
                     if state_manager.is_recon_stage_done(domain, "dork") is True:
                         print(f"{Colors.CYAN}[*] Resume: Google Dork recon for {domain} "
@@ -2174,9 +2291,20 @@ async def main(
                         print(f"{Colors.CYAN}[*] Resume: DNS/cloud/CT recon for {domain} "
                               f"already complete; skipping.{Colors.RESET}")
                         return [], [], []
-                    result = await _run_parallel_passive(
-                        domain, concurrency, detailed_dashboard=is_detailed
-                    )
+                    if _tool_skipped(skip_tools, "passive"):
+                        state_manager.mark_recon_stage_done(domain, "passive")
+                        print(f"{Colors.YELLOW}[*] Skipping passive DNS/cloud/CT recon "
+                              f"(--skip passive).{Colors.RESET}")
+                        return [], [], []
+                    if skip_tools:
+                        result = await _run_parallel_passive(
+                            domain, concurrency, detailed_dashboard=is_detailed,
+                            skip_tools=skip_tools,
+                        )
+                    else:
+                        result = await _run_parallel_passive(
+                            domain, concurrency, detailed_dashboard=is_detailed,
+                        )
                     for finding in result[0] + result[1] + result[2]:
                         state_manager.add_vulnerability(finding)
                     state_manager.mark_recon_stage_done(domain, "passive")
@@ -2269,7 +2397,7 @@ async def main(
                 # Horizontal / infrastructure expansion (opt-in via --horizontal):
                 # asnmap → CIDRs, reverse-DNS sweep, amass intel → related domains.
                 # Gracefully skips when the tools aren't installed.
-                if enable_horizontal:
+                if enable_horizontal and not _tool_skipped(skip_tools, "horizontal"):
                     if state_manager.is_recon_stage_done(domain, "horizontal") is True:
                         _expansion = state_manager.get_recon_stage_payload(domain, "horizontal")
                         if not isinstance(_expansion, dict):
@@ -2298,7 +2426,7 @@ async def main(
                 # filter the enumerated subdomains before probing to drop catch-all
                 # false-positive names. Permutation expansion (--dns-permute) is
                 # opt-in. Passthrough when puredns/massdns aren't installed.
-                if dns_hygiene:
+                if dns_hygiene and not _tool_skipped(skip_tools, "dns-hygiene"):
                     _dns_checkpoint = state_manager.get_recon_stage_result(domain, "dns_hygiene")
                     if isinstance(_dns_checkpoint, list):
                         subdomains = _dns_checkpoint
@@ -2320,7 +2448,8 @@ async def main(
                 # Per-subdomain DNS-level takeover: flag dangling CNAMEs (CNAME ->
                 # NXDOMAIN) across ALL discovered subdomains. Complements the
                 # HTTP-based takeover check by catching targets that serve no HTTP.
-                if dns_takeover and subdomains:
+                if (dns_takeover and subdomains
+                        and not _tool_skipped(skip_tools, "dns-takeover")):
                     if state_manager.is_recon_stage_done(domain, "dns_takeover") is True:
                         print(f"{Colors.CYAN}[*] Resume: DNS takeover checks for {domain} "
                               f"already complete; skipping.{Colors.RESET}")
@@ -2345,6 +2474,7 @@ async def main(
                         extra_scans=extra_scans,
                         enable_js_cve=js_cve_scan,
                         state_manager=state_manager,
+                        skip_tools=skip_tools,
                     )
                     if recon_findings:
                         print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {domain}{Colors.RESET}")
@@ -2493,6 +2623,7 @@ async def main(
                 web_probe=stream_web_probe,
                 output_format=output_format,
                 enable_js_cve=js_cve_scan,
+                skip_tools=skip_tools,
             )
 
         if not is_resume or state_manager.state["phase"] == "initializing":
@@ -2573,8 +2704,16 @@ async def main(
         domain_label = os.path.splitext(os.path.basename(targets_file))[0]
 
         # --- STANDARD PORT SCAN LOGIC ---
-        if state_manager.state["phase"] in ["initializing", "recon", "recon_complete",
-                                             "target_processing_complete", "port_scanning"]:
+        if (_tool_skipped(skip_tools, "port-scan")
+                and state_manager.state["phase"] in ["initializing", "recon", "recon_complete",
+                                                      "target_processing_complete", "port_scanning"]):
+            print(f"{Colors.YELLOW}[*] Skipping port scan (--skip port-scan); "
+                  f"only previously checkpointed open ports will be reused.{Colors.RESET}")
+            state_manager.update_phase("port_scanning_complete")
+
+        if (state_manager.state["phase"] in ["initializing", "recon", "recon_complete",
+                                             "target_processing_complete", "port_scanning"]
+                and not _tool_skipped(skip_tools, "port-scan")):
             # process_targets emits both a hostname object and a bare-IP object per
             # host (both connect to the same resolved IP), which doubles the port
             # scan AND every downstream per-service module run. De-duplicate by
@@ -2645,7 +2784,7 @@ async def main(
         # Optional Nmap follow-up is its own durable unit. Previously it only
         # lived in the fresh port-scan branch, so an interrupt during Nmap made
         # resume skip the unfinished work entirely.
-        if nmap_enabled:
+        if nmap_enabled and not _tool_skipped(skip_tools, "nmap"):
             if state_manager.is_scan_stage_done("nmap_cve") is True:
                 print(f"{Colors.CYAN}[*] Resume: Nmap CVE follow-up already complete; skipping.{Colors.RESET}")
             else:
@@ -2693,17 +2832,22 @@ async def main(
                             web_probe_urls.append(format_url(scheme, host, port))
             web_probe_urls = sorted(set(web_probe_urls))
 
-            web_findings = await _probe_web_urls(
-                web_probe_urls, web_output_dir, domain_label, concurrency,
-                completed_urls=state_manager.get_completed_web_urls(),
-                record_completed=state_manager.add_completed_web_urls,
-                batch_size=WEB_PROBE_CHECKPOINT_BATCH,
-                enable_js_cve=js_cve_scan,
+            _probe_kwargs = {
+                "completed_urls": state_manager.get_completed_web_urls(),
+                "record_completed": state_manager.add_completed_web_urls,
+                "batch_size": WEB_PROBE_CHECKPOINT_BATCH,
+                "enable_js_cve": js_cve_scan,
                 # Persist each batch's findings atomically with its completed-URL
                 # checkpoint (see _probe_web_urls) so an interrupt can't lose the
                 # findings of an already-checkpointed batch. With this hook the
                 # returned list is empty, so there is nothing to re-add below.
-                record_findings=state_manager.add_vulnerability,
+                "record_findings": state_manager.add_vulnerability,
+            }
+            if skip_tools:
+                _probe_kwargs["skip_tools"] = skip_tools
+            web_findings = await _probe_web_urls(
+                web_probe_urls, web_output_dir, domain_label, concurrency,
+                **_probe_kwargs,
             )
             for _wf in web_findings:
                 state_manager.add_vulnerability(_wf)
@@ -2727,7 +2871,14 @@ async def main(
         state_manager.save_state(force=True)
 
     # 3. Validate services and create tasks for service-specific scanners
-    if state_manager.state["phase"] in ["port_scanning_complete", "web_probing_complete",
+    if (_tool_skipped(skip_tools, "service-scans")
+            and state_manager.state["phase"] in ["port_scanning_complete", "web_probing_complete",
+                                                   "full_port_scanning", "service_validation",
+                                                   "vulnerability_scanning"]):
+        print(f"{Colors.YELLOW}[*] Skipping service validation/scanners "
+              f"(--skip service-scans).{Colors.RESET}")
+        state_manager.update_phase("vulnerability_scanning_complete")
+    elif state_manager.state["phase"] in ["port_scanning_complete", "web_probing_complete",
                                         "full_port_scanning", "service_validation",
                                         "vulnerability_scanning"]:
         validation_tasks = []
@@ -2757,6 +2908,8 @@ async def main(
             # It checks if the open ports found (e.g., 9200) match our service definitions.
             for port in target_open_ports:
                 for service, service_ports_list in service_ports.items():
+                    if _tool_skipped(skip_tools, service):
+                        continue
                     if port in service_ports_list:
                         scanner_func = SERVICE_TO_MODULE[service].run_scans
                         validation_tasks.append(validate_service(service, target_obj, port))
@@ -2764,6 +2917,8 @@ async def main(
 
                 if custom_ports and port not in [p for ports in service_ports.values() for p in ports]:
                     for service_name in SERVICE_TO_MODULE.keys():
+                        if _tool_skipped(skip_tools, service_name):
+                            continue
                         if module_filter is None or service_name == module_filter:
                             scanner_func = SERVICE_TO_MODULE[service_name].run_scans
                             validation_tasks.append(validate_service(service_name, target_obj, port))
@@ -2879,7 +3034,8 @@ async def main(
     # Cloud bucket names derive from the registrable/org domain, not each
     # subdomain, so enumerate ONCE per registrable domain (not per host), and skip
     # any apex already enumerated during passive recon - reuse, don't repeat.
-    if not module_filter or module_filter == 'cloud':
+    if ((not module_filter or module_filter == 'cloud')
+            and not _tool_skipped(skip_tools, "cloud-enum")):
         apex_targets = []
         seen_apex = set()
         for t in targets:
@@ -2995,6 +3151,7 @@ async def process_streaming_scan(
     web_probe=False,
     output_format=None,
     enable_js_cve=True,
+    skip_tools=frozenset(),
 ):
     print(f"{Colors.CYAN}[*] Calculating total targets for progress estimation...{Colors.RESET}")
     total_targets = 0
@@ -3063,9 +3220,12 @@ async def process_streaming_scan(
                                 chunk_web_urls.append(format_url(scheme, host, port))
                 chunk_web_urls = sorted(set(chunk_web_urls))
                 if chunk_web_urls:
+                    _stream_probe_kwargs = {"enable_js_cve": enable_js_cve}
+                    if skip_tools:
+                        _stream_probe_kwargs["skip_tools"] = skip_tools
                     web_findings = await _probe_web_urls(
                         chunk_web_urls, "reports", "streaming", concurrency,
-                        enable_js_cve=enable_js_cve)
+                        **_stream_probe_kwargs)
                     for _wf in web_findings:
                         state_manager.add_vulnerability(_wf)
                     chunk_vulnerabilities.extend(web_findings)
@@ -3435,6 +3595,7 @@ async def cmd_scan(args):
                 ) if on
             ),
             js_cve_scan=getattr(args, 'js_cve', True),
+            skip_tools=_parse_skip_tools(getattr(args, 'skip', None)),
             output_format=getattr(args, 'format', None),
             dns_hygiene=getattr(args, 'dns_hygiene', True),
             dns_permute=getattr(args, 'dns_permute', False),
@@ -3684,6 +3845,12 @@ if __name__ == "__main__":
                          help="Threads per Dirsearch target (default: 30, hard cap: 50)")
     sp_scan.add_argument("--dirsearch-parallel", type=_positive_int, default=None, metavar="N",
                          help="Dirsearch target processes in parallel (default: 20, hard cap: 20)")
+    sp_scan.add_argument(
+        "--skip", action="append", default=[], metavar="TOOL",
+        help=("Skip a named tool/stage while preserving the current scan id; "
+              "repeat the flag or use comma-separated names (for example: "
+              "--skip dirsearch --skip nuclei)"),
+    )
     sp_scan.add_argument("--js-threads", type=_positive_int, default=None, metavar="N",
                          help="JavaScript/path-analysis workers (default: use -c; hard cap: 500)")
     sp_scan.add_argument("--connect-timeout", type=float, default=DEFAULT_CONNECT_TIMEOUT)

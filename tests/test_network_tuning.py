@@ -89,6 +89,17 @@ class NetworkTuningTests(unittest.TestCase):
             main._positive_int("0")
         self.assertEqual(main._positive_int("3"), 3)
 
+    def test_skip_tools_are_repeatable_comma_separated_and_normalized(self):
+        skipped = main._parse_skip_tools(
+            ["dirsearch", "nuclei, JS_PATHS", "web_checks"]
+        )
+        self.assertEqual(
+            skipped,
+            frozenset({"dirsearch", "nuclei", "js-paths", "web-checks"}),
+        )
+        self.assertTrue(main._tool_skipped(skipped, "js_paths"))
+        self.assertFalse(main._tool_skipped(skipped, "httpx"))
+
 
 if __name__ == "__main__":
     unittest.main()
