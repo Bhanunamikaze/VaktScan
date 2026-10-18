@@ -725,10 +725,22 @@ async def scan_js_cves(
                         *(_one(i, u) for i, u in need), return_exceptions=True
                     )
 
-        merged = [
-            (u, c if c else fetched.get(i))
-            for i, (u, c) in enumerate(artifacts)
-        ]
+        # A version embedded in a URL is only evidence when that URL actually
+        # serves JavaScript.  Previously a failed fetch (404, HTML login page,
+        # SPA fallback, timeout, ...) left ``content`` as None, but the detector
+        # still trusted the filename/URI and emitted CVEs.  This turned stale
+        # archive URLs such as ``jquery-3.0.0.min.js`` into critical KEV false
+        # positives even though the live application served jQuery 3.7.1.
+        merged = []
+        for i, (u, supplied_content) in enumerate(artifacts):
+            content = supplied_content if supplied_content else fetched.get(i)
+            if not content:
+                continue
+            # Content supplied by an upstream collector did not pass through
+            # _fetch_js, so apply the same HTML/XML soft-404 guard here too.
+            if not _looks_like_js_body(200, "", content):
+                continue
+            merged.append((u, content))
 
         async def _detect(u, c):
             try:

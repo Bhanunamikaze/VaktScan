@@ -419,6 +419,22 @@ class ScanFixtureTests(_FixtureDBMixin, unittest.TestCase):
         m.assert_not_called()
         self.assertEqual(findings, [])
 
+    def test_failed_fetch_does_not_trust_versioned_filename(self):
+        """A stale/dead JS URL is not evidence that the named version is served."""
+        corpus = ["https://site.tld/jquery-3.0.0.min.js"]
+        with patch.object(js_cve, "_fetch_js", new=AsyncMock(return_value=None)) as m:
+            findings = _run(scan_js_cves(corpus))
+        m.assert_awaited_once()
+        self.assertEqual(findings, [])
+
+    def test_supplied_html_does_not_trust_versioned_filename(self):
+        """Upstream HTML/SPA fallbacks must receive the same gate as downloads."""
+        corpus = [{
+            "url": "https://site.tld/jquery-3.0.0.min.js",
+            "content": "<!doctype html><html><title>Not found</title></html>",
+        }]
+        self.assertEqual(_run(scan_js_cves(corpus)), [])
+
     def test_malformed_port_does_not_abort_loop(self):
         # A non-numeric port in a discovered/archived URL must not raise inside the
         # detection loop (urllib .port raises ValueError) - the finding for that URL
