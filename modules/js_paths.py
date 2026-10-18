@@ -18,7 +18,6 @@ import signal
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from itertools import product
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -122,11 +121,12 @@ class JSRecon:
         r'|192\.168\.\d{1,3}\.\d{1,3})\b'
     )
 
-    def __init__(self, target_urls: list, threads: int = 100, timeout: int = 10):
+    def __init__(self, target_urls: list, threads: int = 300, timeout: int = 10):
         self.target_urls = target_urls
         self.threads     = threads
         self.timeout     = timeout
         self._stop       = threading.Event()
+        self._association_lock = threading.Lock()
 
         self._session_local = threading.local()
         self._session_headers = {
@@ -145,6 +145,8 @@ class JSRecon:
         self.paths         = set()
         self.hosts         = set()
         self.absolute_urls = set()
+        self.origin_paths  = {}
+        self.js_url_origins = {}
         self.findings      = []   # VaktScan vuln dicts
         self.probe_results = []   # every interesting probe hit
 
@@ -209,6 +211,20 @@ class JSRecon:
             pct = min(100, int(self.progress_done * 100 / total))
             return f"{self.progress_phase}: {self.progress_done:,}/{total:,} ({pct}%)"
         return self.progress_phase
+
+    def _associate_paths(self, origins, paths):
+        paths = set(paths or ())
+        if not paths:
+            return
+        with self._association_lock:
+            for origin in origins:
+                if origin in self._scope_origins or not self._scope_origins:
+                    self.origin_paths.setdefault(origin, set()).update(paths)
+
+    def _register_js_url(self, js_url, origin):
+        with self._association_lock:
+            self.js_urls.add(js_url)
+            self.js_url_origins.setdefault(js_url, set()).add(origin)
 
     @staticmethod
     def _build_path_extractors():
@@ -307,12 +323,23 @@ class JSRecon:
                 and (not self._scope_origins or base_host in self._scope_origins)
             ):
                 self.hosts.add(base_host)
+            normalized_path = re.sub(r'\$\{[^}]*\}', '*', parsed.path or '/')
+            active_origin = (
+                base_host if parsed.netloc and not has_template_host
+                and self._is_allowed(base_host)
+                and (not self._scope_origins or base_host in self._scope_origins)
+                else None
+            )
             if parsed.path and parsed.path != '/':
-                normalized_path = re.sub(r'\$\{[^}]*\}', '*', parsed.path)
                 self.paths.add(normalized_path)
+                if active_origin:
+                    self._associate_paths((active_origin,), (normalized_path,))
             # Also add the full URL path with query for probing
             if parsed.query and '${' not in parsed.query and '{' not in parsed.query and '}' not in parsed.query:
-                self.paths.add(f"{normalized_path}?{parsed.query}")
+                query_path = f"{normalized_path}?{parsed.query}"
+                self.paths.add(query_path)
+                if active_origin:
+                    self._associate_paths((active_origin,), (query_path,))
 
     # ------------------------------------------------------------------
     # Allowlist helper
@@ -338,9 +365,12 @@ class JSRecon:
             r    = self.session.get(target_url, verify=False, timeout=self.timeout)
             soup = BeautifulSoup(r.text, 'html.parser')
 
+            parsed_target = urlparse(target_url)
+            target_origin = f"{parsed_target.scheme}://{parsed_target.netloc}"
+
             # Standard <script src>
             for tag in soup.find_all('script', src=True):
-                self.js_urls.add(urljoin(target_url, tag['src']))
+                self._register_js_url(urljoin(target_url, tag['src']), target_origin)
 
             # Module preloads (React/Vue/Vite)
             for link in soup.find_all('link', href=True):
@@ -348,12 +378,14 @@ class JSRecon:
                 if isinstance(rel, str):
                     rel = [rel]
                 if 'modulepreload' in rel or ('preload' in rel and link.get('as') == 'script'):
-                    self.js_urls.add(urljoin(target_url, link['href']))
+                    self._register_js_url(urljoin(target_url, link['href']), target_origin)
 
             # Inline <script> blocks - extract paths directly from HTML JS
             for inline in soup.find_all('script', src=False):
                 if inline.string:
-                    self.paths.update(self._extract_paths(inline.string))
+                    inline_paths = self._extract_paths(inline.string)
+                    self.paths.update(inline_paths)
+                    self._associate_paths((target_origin,), inline_paths)
                     self._extract_hosts_and_paths_from_urls(inline.string)
 
         except Exception as exc:
@@ -459,7 +491,12 @@ class JSRecon:
             content = r.text
 
             # Multi-strategy path extraction
-            self.paths.update(self._extract_paths(content))
+            extracted_paths = self._extract_paths(content)
+            self.paths.update(extracted_paths)
+            self._associate_paths(
+                self.js_url_origins.get(js_url, ()),
+                extracted_paths,
+            )
 
             # Full URL extraction → hosts + paths
             self._extract_hosts_and_paths_from_urls(content)
@@ -573,13 +610,19 @@ class JSRecon:
             pass
 
     def execute_probing(self) -> None:
-        total = len(self.hosts) * len(self.paths)
+        total = sum(len(paths) for paths in self.origin_paths.values())
         print(
-            f"{Colors.CYAN}[*] Probing {total:,} permutation(s) with "
+            f"{Colors.CYAN}[*] Probing {total:,} origin-associated path(s) with "
             f"{self.threads} worker(s)...{Colors.RESET}"
         )
+
+        def associated_combos():
+            for origin, paths in self.origin_paths.items():
+                for path in paths:
+                    yield origin, path
+
         self._run_bounded(
-            product(self.hosts, self.paths),
+            associated_combos(),
             self.probe_endpoint,
             phase="Probe paths",
             total=total,
@@ -611,7 +654,7 @@ class JSRecon:
             if self._stop.is_set():
                 return self._result_dict()
 
-            if not self.paths or not self.hosts:
+            if not self.origin_paths:
                 print(f"{Colors.YELLOW}[-] No paths/hosts extracted. Skipping probing.{Colors.RESET}")
                 return self._result_dict()
 
@@ -627,6 +670,10 @@ class JSRecon:
             "findings":      self.findings,
             "paths":         sorted(self.paths),
             "hosts":         sorted(self.hosts),
+            "origin_paths":  {
+                origin: sorted(paths)
+                for origin, paths in sorted(self.origin_paths.items())
+            },
             "absolute_urls": sorted(self.absolute_urls),
             "js_urls":       sorted(self.js_urls),
             "probe_results": self.probe_results,
@@ -642,9 +689,9 @@ class JSPathsScanner:
         self.target_urls = target_urls
         if threads is None:
             try:
-                threads = int(os.environ.get("VAKT_JS_THREADS", "100"))
+                threads = int(os.environ.get("VAKT_JS_THREADS", "300"))
             except (TypeError, ValueError):
-                threads = 100
+                threads = 300
         self.threads     = max(1, min(threads, 500))
         self.timeout     = timeout
         self.output_dir  = output_dir

@@ -193,7 +193,7 @@ def _web_concurrency(requested):
     try:
         requested = max(1, min(int(requested), 500))
     except (TypeError, ValueError):
-        requested = 100
+        requested = 300
     raw_override = os.environ.get("VAKT_WEB_CONCURRENCY")
     if raw_override is None:
         return requested
@@ -3650,7 +3650,7 @@ if __name__ == "__main__":
     sp_scan = subparsers.add_parser("scan", help="Full attack surface scan")
     sp_scan.add_argument("target", nargs="?", default=None,
                          help="Domain, IP, CIDR, or targets file (optional with --list-resumable)")
-    sp_scan.add_argument("-c", "--concurrency", type=int, default=100)
+    sp_scan.add_argument("-c", "--concurrency", type=int, default=300)
     sp_scan.add_argument("--web-concurrency", type=_positive_int, default=None, metavar="N",
                          help="Concurrency for HTTP-heavy stages (default: use -c; hard cap: 500)")
     sp_scan.add_argument("--nuclei-concurrency", type=_positive_int, default=None, metavar="N",

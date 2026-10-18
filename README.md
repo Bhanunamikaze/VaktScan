@@ -209,7 +209,7 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | Flag | Default | Description |
 |---|---|---|
 | `target` | - | Domain, IP, CIDR, or a targets file (positional) |
-| `-c`, `--concurrency` | `100` | Concurrent connections |
+| `-c`, `--concurrency` | `300` | Concurrent connections |
 | `--web-concurrency` | value of `-c` | HTTP-stage concurrency (heavy tools remain serialized) |
 | `--nuclei-concurrency` | `50` | Nuclei template concurrency |
 | `--nuclei-rate-limit` | `150` | Nuclei requests per second |

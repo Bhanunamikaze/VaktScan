@@ -45,7 +45,7 @@ class NetworkTuningTests(unittest.TestCase):
 
     def test_js_threads_inherit_global_concurrency_by_default(self):
         args = SimpleNamespace(
-            concurrency=100,
+            concurrency=300,
             web_concurrency=None,
             nuclei_concurrency=None,
             nuclei_rate_limit=None,
@@ -57,7 +57,7 @@ class NetworkTuningTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("VAKT_JS_THREADS", None)
             main._apply_network_tuning_args(args)
-            self.assertEqual(os.environ["VAKT_JS_THREADS"], "100")
+            self.assertEqual(os.environ["VAKT_JS_THREADS"], "300")
 
     def test_explicit_js_threads_override_global_concurrency(self):
         args = SimpleNamespace(

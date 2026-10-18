@@ -8,7 +8,29 @@ from modules.js_paths import JSPathsScanner, JSRecon
 
 class JSPathsTests(unittest.TestCase):
     def test_scanner_allows_global_default_concurrency(self):
-        self.assertEqual(JSPathsScanner([], threads=100).threads, 100)
+        self.assertEqual(JSPathsScanner([], threads=300).threads, 300)
+
+    def test_probes_only_paths_associated_with_each_origin(self):
+        recon = JSRecon([], threads=2)
+        recon.origin_paths = {
+            "https://a.example.com": {"/a", "/shared"},
+            "https://b.example.com": {"/b", "/shared"},
+        }
+        seen = []
+        recon.probe_endpoint = seen.append
+
+        recon.execute_probing()
+
+        self.assertEqual(
+            set(seen),
+            {
+                ("https://a.example.com", "/a"),
+                ("https://a.example.com", "/shared"),
+                ("https://b.example.com", "/b"),
+                ("https://b.example.com", "/shared"),
+            },
+        )
+        self.assertNotIn(("https://a.example.com", "/b"), seen)
 
     def test_embedded_third_party_hosts_are_inventory_only_not_probe_targets(self):
         recon = JSRecon(["https://app.onit.com/login"])
