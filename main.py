@@ -2970,9 +2970,16 @@ async def main(
                                         "vulnerability_scanning"]:
         validation_tasks = []
         service_mapping = []
+        prevalidated_mapping = []
+        skipped_service_mapping = []
+        _done_service_scans = state_manager.get_completed_service_scans()
+        _saved_validated_services = state_manager.get_validated_services()
         
-        print(f"\n[*] Validating services on open ports...")
-        state_manager.update_phase("service_validation")
+        if state_manager.state["phase"] == "vulnerability_scanning":
+            print(f"\n[*] Resuming unfinished service vulnerability scans...")
+        else:
+            print(f"\n[*] Validating services on open ports...")
+            state_manager.update_phase("service_validation")
         
         # Determine iterator based on structure of open_ports_results
         if isinstance(open_ports_results, dict):
@@ -2983,6 +2990,22 @@ async def main(
                 iterator.append(({'scan_address': ip, 'display_target': ip, 'resolved_ip': ip}, data))
         else:
             iterator = open_ports_results
+
+        def queue_service_candidate(service, target_obj, port, scanner_func, target_open_ports):
+            mapping = (service, target_obj, port, scanner_func, target_open_ports)
+            ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
+            key = f"{ip}:{port}:{service}"
+            if key in _done_service_scans:
+                skipped_service_mapping.append(mapping)
+                return
+            # A prior validation is durable and can feed an unfinished scanner
+            # directly.  Do not repeat its network handshake on resume.
+            saved_service = (_saved_validated_services.get(ip) or {}).get(str(port))
+            if saved_service == service:
+                prevalidated_mapping.append(mapping)
+                return
+            validation_tasks.append(validate_service(service, target_obj, port))
+            service_mapping.append(mapping)
 
         for target_obj, data in iterator:
             if not data['open_ports']:
@@ -2999,8 +3022,9 @@ async def main(
                         continue
                     if port in service_ports_list:
                         scanner_func = SERVICE_TO_MODULE[service].run_scans
-                        validation_tasks.append(validate_service(service, target_obj, port))
-                        service_mapping.append((service, target_obj, port, scanner_func, target_open_ports))
+                        queue_service_candidate(
+                            service, target_obj, port, scanner_func, target_open_ports
+                        )
 
                 if custom_ports and port not in [p for ports in service_ports.values() for p in ports]:
                     for service_name in SERVICE_TO_MODULE.keys():
@@ -3008,10 +3032,11 @@ async def main(
                             continue
                         if module_filter is None or service_name == module_filter:
                             scanner_func = SERVICE_TO_MODULE[service_name].run_scans
-                            validation_tasks.append(validate_service(service_name, target_obj, port))
-                            service_mapping.append((service_name, target_obj, port, scanner_func, target_open_ports))
+                            queue_service_candidate(
+                                service_name, target_obj, port, scanner_func, target_open_ports
+                            )
         
-        if not validation_tasks:
+        if not validation_tasks and not prevalidated_mapping and not skipped_service_mapping:
             print("\n[*] No specific VaktScan services (Elastic/Kibana/etc) found on open ports.")
             if not nuclei_vulns_found and not nmap_enabled:
                 state_manager.mark_completed()
@@ -3019,17 +3044,13 @@ async def main(
             else:
                 print(f"{Colors.GREEN}[*] Proceeding (Standard services not found, but Nmap/Nuclei ran).{Colors.RESET}")
         
-        if validation_tasks:
+        if validation_tasks or prevalidated_mapping:
             validation_results = await asyncio.gather(*validation_tasks, return_exceptions=True)
+            validation_pairs = list(zip(validation_results, service_mapping))
+            validation_pairs.extend((True, mapping) for mapping in prevalidated_mapping)
             
-            validated_services = 0
+            validated_services = len(skipped_service_mapping)
             scan_tasks = []
-
-            # Already-completed {ip}:{port}:{service} scans (Phase 6): on a resume
-            # of an interrupted vulnerability_scanning phase, skip the service
-            # scanners that already ran to completion instead of redoing them.
-            _done_service_scans = state_manager.get_completed_service_scans()
-            _skipped_service_scans = 0
 
             async def scan_with_state_saving(scan_func, target_obj, port, service, adjacent_open_ports=None):
                 try:
@@ -3051,7 +3072,7 @@ async def main(
                         print(f"{Colors.YELLOW}[!] Error scanning {target_obj['scan_address']}:{port} - {e}{Colors.RESET}")
                     return []
 
-            for is_valid, (service, target_obj, port, scanner_func, target_open_ports) in zip(validation_results, service_mapping):
+            for is_valid, (service, target_obj, port, scanner_func, target_open_ports) in validation_pairs:
                 if isinstance(is_valid, Exception):
                     # A raised validation result used to be silently read as
                     # "not a valid service" and the target skipped without a word.
@@ -3063,7 +3084,6 @@ async def main(
                 if isinstance(is_valid, bool) and is_valid:
                     _svc_ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
                     if f"{_svc_ip}:{port}:{service}" in _done_service_scans:
-                        _skipped_service_scans += 1
                         validated_services += 1
                         continue
                     display_url = target_obj['scan_address']
@@ -3075,8 +3095,8 @@ async def main(
                     scan_tasks.append(scan_with_state_saving(scanner_func, target_obj, port, service, adjacent_open_ports=adj))
                     validated_services += 1
 
-            if _skipped_service_scans:
-                print(f"{Colors.CYAN}[*] Resume: skipping {_skipped_service_scans} service scan(s) "
+            if skipped_service_mapping:
+                print(f"{Colors.CYAN}[*] Resume: skipping {len(skipped_service_mapping)} service scan(s) "
                       f"already completed.{Colors.RESET}")
             
             if validated_services == 0 and not nuclei_vulns_found and not nmap_enabled:
@@ -3112,6 +3132,9 @@ async def main(
                                 "service_scans", f"{len(scan_tasks)} services scanned"
                             )
             
+        if skipped_service_mapping and not validation_tasks and not prevalidated_mapping:
+            print(f"{Colors.CYAN}[*] Resume: all {len(skipped_service_mapping)} matching service scan(s) "
+                  f"were already completed.{Colors.RESET}")
         state_manager.update_phase("vulnerability_scanning_complete")
 
     else:

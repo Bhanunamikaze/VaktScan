@@ -269,7 +269,7 @@ class ServiceScanResumeSkipTest(_MainTempCwd):
                 "port_scan_progress": {"completed_combinations": 2, "scanned_ips": [ip]},
                 "scanned_ips": [ip],
                 "open_ports": {ip: [9200, 3000]},
-                "validated_services": {}, "vulnerabilities": [],
+                "validated_services": {ip: {"3000": "grafana"}}, "vulnerabilities": [],
                 "completed_service_scans": [f"{ip}:9200:elasticsearch"],
                 "completed_recon_domains": [],
                 "completed_web_urls": [], "completed": False,
@@ -278,7 +278,10 @@ class ServiceScanResumeSkipTest(_MainTempCwd):
         async def fake_process_targets(raw):
             return [{"scan_address": ip, "display_target": ip, "resolved_ip": ip}]
 
+        validation_calls = []
+
         async def fake_validate(service, target_obj, port):
+            validation_calls.append((service, port))
             return True  # every candidate service validates
 
         # Record every per-service scanner that actually runs, keyed by the
@@ -318,6 +321,10 @@ class ServiceScanResumeSkipTest(_MainTempCwd):
                          "completed elasticsearch:9200 scan must not re-run on resume")
         self.assertIn(("grafana", 3000), calls,
                       "the not-yet-completed grafana:3000 scan must run on resume")
+        self.assertNotIn(("elasticsearch", 9200), validation_calls,
+                         "a completed service scan must not be revalidated")
+        self.assertNotIn(("grafana", 3000), validation_calls,
+                         "a durably validated service must not be revalidated")
 
         # Both triples are checkpointed after the run (seeded + newly finished).
         self.assertEqual(len(managers), 1)
