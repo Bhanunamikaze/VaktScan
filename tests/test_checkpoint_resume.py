@@ -105,6 +105,52 @@ class ReconStagePayloadTest(_StateDirMixin, unittest.TestCase):
             resumed.get_recon_stage_payload("example.com", "nuclei"), payload
         )
 
+    def test_empty_http_result_and_preliminary_ports_survive_reload(self):
+        manager = _quiet_manager("example-http", ["example.com"], "scope")
+        target = {
+            "scan_address": "api.example.com",
+            "display_target": "api.example.com",
+            "resolved_ip": "203.0.113.10",
+        }
+        manager.mark_recon_http_done(
+            "example.com",
+            [],
+            [],
+            scanned_ports=[80, 443],
+            port_scan_results=[(target, {"open_ports": [443]})],
+        )
+
+        resumed = _quiet_manager("example-http", ["example.com"], "scope")
+        self.assertTrue(resumed.load_existing_state())
+        self.assertEqual(resumed.get_recon_http_results("example.com"), ([], []))
+        self.assertEqual(
+            resumed.get_recon_port_scan("example.com"),
+            {
+                "ports": [80, 443],
+                "results": {"203.0.113.10": [443]},
+            },
+        )
+
+    def test_collect_recon_port_cache_merges_domains_by_ip(self):
+        manager = _quiet_manager("example-merge", ["a.example", "b.example"], "scope")
+        target = {
+            "scan_address": "shared.example",
+            "display_target": "shared.example",
+            "resolved_ip": "203.0.113.20",
+        }
+        manager.mark_recon_http_done(
+            "a.example", [], [], [80], [(target, {"open_ports": [80]})]
+        )
+        manager.mark_recon_http_done(
+            "b.example", [], [], [443], [(target, {"open_ports": [443]})]
+        )
+
+        completed, opened = main._collect_recon_port_scan_cache(
+            manager, ["a.example", "b.example"]
+        )
+        self.assertEqual(completed, {"203.0.113.20": {80, 443}})
+        self.assertEqual(opened, {"203.0.113.20": {80, 443}})
+
 
 # ---------------------------------------------------------------------------
 # T4 - state written on interrupt mid-phase.

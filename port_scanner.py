@@ -250,6 +250,8 @@ async def scan_ports(
     state_manager=None,
     connect_timeout=DEFAULT_CONNECT_TIMEOUT,
     retries=DEFAULT_PORT_RETRIES,
+    completed_ports_by_ip=None,
+    cached_open_ports_by_ip=None,
 ):
     """
     Scans a list of target objects for a list of ports concurrently.
@@ -265,6 +267,15 @@ async def scan_ports(
         "retries": 0,
         "timeout_failures": 0,
         "transient_socket_failures": 0,
+    }
+    requested_ports = sorted({int(port) for port in ports})
+    completed_ports_by_ip = {
+        str(ip): {int(port) for port in (completed or [])}
+        for ip, completed in (completed_ports_by_ip or {}).items()
+    }
+    cached_open_ports_by_ip = {
+        str(ip): {int(port) for port in (open_ports or [])}
+        for ip, open_ports in (cached_open_ports_by_ip or {}).items()
     }
 
     # Resume skip (Phase 6): drop hosts whose full sweep already completed on a
@@ -287,17 +298,40 @@ async def scan_ports(
                       f"already port-scanned; scanning {len(_remaining)} remaining.{Colors.RESET}")
             targets = _remaining
 
+    # Remove target/port combinations already completed by a preliminary scan.
+    # Keep fully cached targets in the returned results and mark them complete
+    # for the full-scan resume checkpoint without opening another socket.
+    target_ports = []
+    fully_cached_targets = []
+    reused_combinations = 0
+    for _t in targets:
+        _ip = str(_t.get('resolved_ip') or _t.get('scan_address') or '')
+        completed = completed_ports_by_ip.get(_ip, set())
+        remaining = [port for port in requested_ports if port not in completed]
+        reused_combinations += len(requested_ports) - len(remaining)
+        if remaining:
+            target_ports.append((_t, remaining))
+        else:
+            fully_cached_targets.append(_t)
+            if state_manager is not None and _ip:
+                state_manager.mark_ip_scanned(_ip)
+    if reused_combinations:
+        print(
+            f"{Colors.CYAN}[*] Reusing {reused_combinations:,} completed preliminary "
+            f"target/port combination(s); only missing ports will be scanned.{Colors.RESET}"
+        )
+
     # Per-host completion tracking (Phase 6): count the ports pending for each
     # resolved IP so we can mark_ip_scanned() the instant a host's LAST port
     # probe finishes - even mid-scan, so an interrupt checkpoints completed
     # hosts. Populated only for the hosts actually being scanned this run.
     host_pending = {}
-    for _t in targets:
+    for _t, _ports in target_ports:
         _ip = _t.get('resolved_ip') or _t.get('scan_address')
         if _ip:
-            host_pending[_ip] = host_pending.get(_ip, 0) + len(ports)
+            host_pending[_ip] = host_pending.get(_ip, 0) + len(_ports)
 
-    total_tasks = len(targets) * len(ports)
+    total_tasks = sum(len(_ports) for _, _ports in target_ports)
     completed_tasks = [0]
     start_time = time.time()
     
@@ -306,7 +340,10 @@ async def scan_ports(
     if dashboard.active:
         dashboard.add_task("port_scan", "Port Scan", total=total_tasks)
     
-    print(f"{Colors.CYAN}[*] Scanning {len(targets)} targets across {len(ports)} ports ({total_tasks:,} total combinations){Colors.RESET}")
+    print(
+        f"{Colors.CYAN}[*] Scanning {len(target_ports)} targets across up to "
+        f"{len(requested_ports)} ports ({total_tasks:,} remaining combinations){Colors.RESET}"
+    )
     if effective_concurrency != concurrency:
         print(
             f"{Colors.YELLOW}[*] Requested concurrency {concurrency} reduced to "
@@ -320,8 +357,8 @@ async def scan_ports(
     print()
     
     # Associate each task with its target object
-    for target_obj in targets:
-        for port in ports:
+    for target_obj, target_remaining_ports in target_ports:
+        for port in target_remaining_ports:
             task = asyncio.create_task(
                 check_port_with_progress(
                     target_obj,
@@ -386,8 +423,23 @@ async def scan_ports(
     print()
     
     # Process results
-    results_map = {tuple(target.items()): {'open_ports': []} for target in targets}
+    result_targets = [target for target, _ in target_ports] + fully_cached_targets
+    results_map = {tuple(target.items()): {'open_ports': []} for target in result_targets}
+    requested_port_set = set(requested_ports)
     open_ports_found = 0
+    for target in result_targets:
+        ip = str(target.get('resolved_ip') or target.get('scan_address') or '')
+        cached_open = sorted(
+            cached_open_ports_by_ip.get(ip, set())
+            & completed_ports_by_ip.get(ip, set())
+            & requested_port_set
+        )
+        if cached_open:
+            results_map[tuple(target.items())]['open_ports'].extend(cached_open)
+            open_ports_found += len(cached_open)
+            if state_manager is not None:
+                for port in cached_open:
+                    state_manager.add_open_port(ip, port)
 
     for target_obj, port, task in tasks:
         target_key = tuple(target_obj.items())

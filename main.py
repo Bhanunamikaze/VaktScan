@@ -412,6 +412,10 @@ async def run_recon_followups(
         if nmap_followup_task:
             await nmap_followup_task
 
+    # Retained until the HTTP checkpoint is committed.  The later full service
+    # scan uses this exact per-IP result to avoid re-probing these ports.
+    common_web_ports = []
+    port_scan_results = []
     http_checkpoint = (
         _recover_recon_http_results(recon_domain, output_dir, state_manager)
         if state_manager is not None else None
@@ -471,6 +475,14 @@ async def run_recon_followups(
         probe_urls = build_recon_probe_urls(unique_targets, port_scan_results, ip_to_hosts)
         if not probe_urls:
             print(f"{Colors.YELLOW}[!] No hostname or port-scan HTTP targets were generated; skipping httpx probe.{Colors.RESET}")
+            if state_manager is not None:
+                state_manager.mark_recon_http_done(
+                    recon_domain,
+                    [],
+                    [],
+                    scanned_ports=common_web_ports,
+                    port_scan_results=port_scan_results,
+                )
             await _await_nmap_task()
             return all_findings
 
@@ -481,6 +493,14 @@ async def run_recon_followups(
         httpx_data = await http_runner.run_httpx(probe_urls, web_concurrency)
         if not httpx_data:
             print(f"{Colors.YELLOW}[!] No alive HTTP services detected by httpx.{Colors.RESET}")
+            if state_manager is not None:
+                state_manager.mark_recon_http_done(
+                    recon_domain,
+                    [],
+                    [],
+                    scanned_ports=common_web_ports,
+                    port_scan_results=port_scan_results,
+                )
             await _await_nmap_task()
             return all_findings
 
@@ -521,7 +541,13 @@ async def run_recon_followups(
 
     alive_urls = sorted(set(alive_urls))
     if state_manager is not None and not http_discovery_resumed:
-        state_manager.mark_recon_http_done(recon_domain, alive_urls, httpx_data)
+        state_manager.mark_recon_http_done(
+            recon_domain,
+            alive_urls,
+            httpx_data,
+            scanned_ports=common_web_ports,
+            port_scan_results=port_scan_results,
+        )
     bulk_scan_urls = select_unique_host_urls(alive_urls)
     if len(bulk_scan_urls) < len(alive_urls):
         print(
@@ -990,6 +1016,29 @@ def _recover_recon_http_results(domain, output_dir, state_manager):
         f"from {source} ({len(alive_urls)} alive URL(s)).{Colors.RESET}"
     )
     return alive_urls, rows
+
+
+def _collect_recon_port_scan_cache(state_manager, recon_domains):
+    """Merge exact preliminary port checkpoints for the active recon inputs.
+
+    The cache is keyed by resolved IP, so it is safe when multiple hostnames or
+    recon domains share infrastructure.  Legacy states simply return no cache
+    and receive one final full sweep; newly written states avoid the overlap.
+    """
+    completed_ports_by_ip = {}
+    cached_open_ports_by_ip = {}
+    if state_manager is None or not recon_domains:
+        return completed_ports_by_ip, cached_open_ports_by_ip
+
+    for domain in expand_recon_inputs(recon_domains):
+        checkpoint = state_manager.get_recon_port_scan(domain)
+        if not checkpoint:
+            continue
+        scanned_ports = set(checkpoint.get("ports") or [])
+        for ip, open_ports in (checkpoint.get("results") or {}).items():
+            completed_ports_by_ip.setdefault(str(ip), set()).update(scanned_ports)
+            cached_open_ports_by_ip.setdefault(str(ip), set()).update(open_ports or [])
+    return completed_ports_by_ip, cached_open_ports_by_ip
 
 async def _run_parallel_passive(domain: str, concurrency: int = 20,
                                 detailed_dashboard: bool = True,
@@ -2753,9 +2802,23 @@ async def main(
                 print(f"{Colors.GRAY}[*] De-duplicated {len(targets)} target objects to "
                       f"{len(scan_targets)} unique host(s) for scanning.{Colors.RESET}")
 
-            state_manager.set_totals(len(scan_targets), len(scan_targets) * len(all_ports_to_scan))
+            completed_ports_by_ip, cached_open_ports_by_ip = _collect_recon_port_scan_cache(
+                state_manager, recon_domains
+            )
+            requested_port_set = set(all_ports_to_scan)
+            remaining_combinations = sum(
+                len(requested_port_set - completed_ports_by_ip.get(
+                    str(target.get('resolved_ip') or target.get('scan_address') or ''), set()
+                ))
+                for target in scan_targets
+            )
+            state_manager.set_totals(len(scan_targets), remaining_combinations)
 
-            print(f"{Colors.CYAN}[*] Starting concurrent port scan for {len(scan_targets)} targets across {len(all_ports_to_scan)} unique ports...{Colors.RESET}")
+            print(
+                f"{Colors.CYAN}[*] Starting concurrent port scan for {len(scan_targets)} targets "
+                f"across {len(all_ports_to_scan)} unique ports "
+                f"({remaining_combinations:,} combinations remain after checkpoint reuse)...{Colors.RESET}"
+            )
             state_manager.update_phase("port_scanning")
 
             open_ports_results = await scan_ports(
@@ -2765,6 +2828,8 @@ async def main(
                 state_manager,
                 connect_timeout=connect_timeout,
                 retries=port_retries,
+                completed_ports_by_ip=completed_ports_by_ip,
+                cached_open_ports_by_ip=cached_open_ports_by_ip,
             )
             print(f"{Colors.GREEN}[+] Port scanning complete.{Colors.RESET}")
             state_manager.update_phase("port_scanning_complete")

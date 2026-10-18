@@ -103,6 +103,35 @@ class PortScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attempts, 2)
         self.assertEqual(results[0][1]["open_ports"], [5601])
 
+    async def test_preliminary_port_cache_subtracts_work_and_merges_open_ports(self):
+        target = {
+            "scan_address": "example.com",
+            "display_target": "example.com",
+            "resolved_ip": "203.0.113.10",
+        }
+        attempted = []
+
+        async def fake_open_connection(host, port):
+            attempted.append((host, port))
+            raise ConnectionRefusedError
+
+        with patch(
+            "port_scanner.asyncio.open_connection",
+            side_effect=fake_open_connection,
+        ):
+            results = await port_scanner.scan_ports(
+                [target],
+                [80, 443, 9200],
+                concurrency=10,
+                connect_timeout=0.1,
+                retries=0,
+                completed_ports_by_ip={"203.0.113.10": [80, 443]},
+                cached_open_ports_by_ip={"203.0.113.10": [443]},
+            )
+
+        self.assertEqual(attempted, [("203.0.113.10", 9200)])
+        self.assertEqual(results[0][1]["open_ports"], [443])
+
     def test_calculate_effective_concurrency_uses_fd_budget(self):
         if port_scanner.resource is None:
             self.skipTest("resource module unavailable")

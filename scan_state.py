@@ -158,9 +158,15 @@ class ScanStateManager:
             # {domain: {stage: object}}
             "recon_stage_payloads": {},
             # Completed preliminary web-port/httpx discovery for recon domains.
-            # This lets an interrupted Dirsearch/Nuclei stage reuse its alive
-            # hosts instead of repeating the port sweep and HTTP probing.
-            # {domain: {"alive_urls": [str], "httpx_data": [dict]}}
+            # Besides the alive HTTP results, retain the exact per-IP TCP sweep
+            # so the later full service scan can subtract ports already tested
+            # instead of repeating the (large) web-port subset.
+            # {domain: {
+            #   "completed": bool,
+            #   "alive_urls": [str],
+            #   "httpx_data": [dict],
+            #   "port_scan": {"ports": [int], "results": {ip: [open_port]}}
+            # }}
             "recon_http_results": {},
             "vulnerabilities": [],
             # URLs whose full web-probe pipeline (httpx→nuclei→web_checks→
@@ -664,17 +670,50 @@ class ScanStateManager:
     def get_completed_cloud_domains(self) -> set:
         return set(self.state.get("completed_cloud_domains") or [])
 
-    def mark_recon_http_done(self, domain: str, alive_urls, httpx_data=None):
-        """Persist preliminary port/httpx discovery for a recon domain."""
+    def mark_recon_http_done(
+        self,
+        domain: str,
+        alive_urls,
+        httpx_data=None,
+        scanned_ports=None,
+        port_scan_results=None,
+    ):
+        """Persist completed preliminary TCP/HTTP discovery for a domain.
+
+        ``completed`` is explicit because an empty alive-URL list is still a
+        valid completed result.  Older states without that marker remain
+        compatible when they contain at least one alive URL.
+        """
         if not domain:
             return
         urls = sorted({str(url).strip() for url in (alive_urls or []) if str(url).strip()})
+        port_scan = None
+        normalized_ports = sorted({int(port) for port in (scanned_ports or [])})
+        if normalized_ports:
+            results = {}
+            for target, data in (port_scan_results or []):
+                if not isinstance(target, dict):
+                    continue
+                ip = target.get("resolved_ip") or target.get("scan_address")
+                if not ip:
+                    continue
+                open_ports = []
+                if isinstance(data, dict):
+                    open_ports = data.get("open_ports") or []
+                results[str(ip)] = sorted({
+                    int(port) for port in open_ports if int(port) in normalized_ports
+                })
+            port_scan = {"ports": normalized_ports, "results": results}
         with self._lock:
             results = self.state.setdefault("recon_http_results", {})
-            results[domain] = {
+            entry = {
+                "completed": True,
                 "alive_urls": urls,
                 "httpx_data": list(httpx_data or []),
             }
+            if port_scan is not None:
+                entry["port_scan"] = port_scan
+            results[domain] = entry
         self.save_state(force=True)
 
     def get_recon_http_results(self, domain: str):
@@ -683,10 +722,37 @@ class ScanStateManager:
         if not isinstance(entry, dict):
             return None
         urls = entry.get("alive_urls")
-        if not isinstance(urls, list) or not urls:
+        if not isinstance(urls, list):
+            return None
+        if not entry.get("completed") and not urls:
             return None
         data = entry.get("httpx_data")
         return list(urls), list(data) if isinstance(data, list) else []
+
+    def get_recon_port_scan(self, domain: str):
+        """Return a validated preliminary per-IP port-scan checkpoint."""
+        entry = (self.state.get("recon_http_results") or {}).get(domain)
+        if not isinstance(entry, dict):
+            return None
+        checkpoint = entry.get("port_scan")
+        if not isinstance(checkpoint, dict):
+            return None
+        ports = checkpoint.get("ports")
+        results = checkpoint.get("results")
+        if not isinstance(ports, list) or not isinstance(results, dict):
+            return None
+        try:
+            normalized_ports = sorted({int(port) for port in ports})
+            normalized_results = {
+                str(ip): sorted({int(port) for port in (open_ports or [])})
+                for ip, open_ports in results.items()
+                if ip and isinstance(open_ports, list)
+            }
+        except (TypeError, ValueError):
+            return None
+        if not normalized_ports:
+            return None
+        return {"ports": normalized_ports, "results": normalized_results}
 
     def get_completed_recon_domains(self) -> set:
         """Set of recon domains whose pipeline already completed (Phase 6)."""
