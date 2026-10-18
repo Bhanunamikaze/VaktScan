@@ -11,6 +11,7 @@ import json
 import os
 import time
 import hashlib
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 DB_PATH = 'vaktscan_inventory.db'
 
@@ -32,6 +33,7 @@ def init_db():
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 started_at  TEXT    NOT NULL,
                 targets_file TEXT,
+                scope_key   TEXT,
                 total_findings INTEGER DEFAULT 0,
                 completed_at TEXT
             );
@@ -66,27 +68,98 @@ def init_db():
             );
         """)
 
+        # Existing installations pre-date per-scope inventory isolation. Keep
+        # the migration local and idempotent so upgrading does not require a
+        # separate database command.
+        scan_run_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(scan_runs)").fetchall()
+        }
+        if "scope_key" not in scan_run_columns:
+            conn.execute("ALTER TABLE scan_runs ADD COLUMN scope_key TEXT")
+
+
+def _canonical_url_identity(value: str) -> str:
+    """Return a stable endpoint identity without payload-specific query values."""
+    value = str(value or '').strip()
+    if not value:
+        return ''
+    try:
+        parts = urlsplit(value)
+        # Parameter names distinguish endpoints while injected/random values do
+        # not create a new inventory record for every validator payload.
+        query_keys = '&'.join(sorted({key for key, _ in parse_qsl(
+            parts.query, keep_blank_values=True
+        )}))
+        return urlunsplit((
+            parts.scheme.lower(),
+            parts.netloc.lower(),
+            parts.path or '/',
+            query_keys,
+            '',
+        ))
+    except (TypeError, ValueError):
+        return value
+
 
 def _finding_hash(finding: dict) -> str:
-    """Stable hash for deduplication across runs: sha1(vulnerability+resolved_ip+port+module)."""
+    """Stable, target-scoped hash for deduplication across scan runs.
+
+    Shared CDN IPs are deliberately not the primary identity. The previous
+    hash omitted hostname and URL, so the same generic finding on two domains
+    behind Cloudflare collided and moved the older domain's row into the newer
+    run. That contaminated executive summaries across targets.
+    """
+    target = str(finding.get('target', '') or '').strip().lower().rstrip('.')
+    resolved_ip = str(finding.get('resolved_ip', '') or '').strip().lower()
+    asset = target or resolved_ip
     key = '|'.join([
-        str(finding.get('vulnerability', '')),
-        str(finding.get('resolved_ip', '')),
+        str(finding.get('vulnerability', '') or '').strip().lower(),
+        asset,
         str(finding.get('port', '')),
-        str(finding.get('module', '')),
+        str(finding.get('module', '') or '').strip().lower(),
+        _canonical_url_identity(finding.get('url', '')),
     ])
     return hashlib.sha1(key.encode()).hexdigest()
 
 
-def start_scan_run(targets_file: str) -> int:
+def start_scan_run(targets_file: str, scope_key: str | None = None) -> int:
     """Insert a new scan_run row and return its ID."""
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     with _connect() as conn:
         cur = conn.execute(
-            "INSERT INTO scan_runs (started_at, targets_file) VALUES (?, ?)",
-            (now, targets_file),
+            "INSERT INTO scan_runs (started_at, targets_file, scope_key) VALUES (?, ?, ?)",
+            (now, targets_file, scope_key),
         )
         return cur.lastrowid
+
+
+def _previous_comparable_run(conn: sqlite3.Connection, run_id: int) -> int | None:
+    """Return the previous run for the same stable scope, never another target."""
+    current = conn.execute(
+        "SELECT targets_file, scope_key FROM scan_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    if current is None:
+        return None
+
+    if current['scope_key']:
+        row = conn.execute(
+            """
+            SELECT MAX(id) AS id FROM scan_runs
+            WHERE id < ? AND scope_key = ?
+            """,
+            (run_id, current['scope_key']),
+        ).fetchone()
+    else:
+        # Backward-compatible fallback for callers and databases that do not
+        # yet supply a stable scope key.
+        row = conn.execute(
+            """
+            SELECT MAX(id) AS id FROM scan_runs
+            WHERE id < ? AND scope_key IS NULL AND targets_file = ?
+            """,
+            (run_id, current['targets_file']),
+        ).fetchone()
+    return row['id'] if row and row['id'] is not None else None
 
 
 def complete_scan_run(run_id: int, total_findings: int):
@@ -129,14 +202,18 @@ def save_findings(run_id: int, findings: list) -> dict:
     """
     now = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    # 1. Get all finding_hashes from the PREVIOUS run (run_id - 1)
+    # 1. Get finding hashes from the previous run of this same target/scope.
+    # Comparing against the globally previous run incorrectly marked findings
+    # new/resolved whenever scans for different customers were interleaved.
     prev_hashes: set[str] = set()
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT finding_hash FROM findings WHERE run_id = ?",
-            (run_id - 1,),
-        ).fetchall()
-        prev_hashes = {r["finding_hash"] for r in rows}
+        previous_run_id = _previous_comparable_run(conn, run_id)
+        if previous_run_id is not None:
+            rows = conn.execute(
+                "SELECT DISTINCT finding_hash FROM findings WHERE run_id = ?",
+                (previous_run_id,),
+            ).fetchall()
+            prev_hashes = {r["finding_hash"] for r in rows}
 
     # 2. Insert/update all current findings (upsert on finding_hash)
     current_hashes: set[str] = set()
@@ -186,13 +263,20 @@ def save_findings(run_id: int, findings: list) -> dict:
                     """
                     UPDATE findings
                     SET run_id = ?, last_seen = ?, resolved_at = NULL,
-                        status = ?, severity = ?, details = ?
+                        status = ?, vulnerability = ?, target = ?, resolved_ip = ?,
+                        port = ?, url = ?, module = ?, severity = ?, details = ?
                     WHERE finding_hash = ?
                     """,
                     (
                         run_id,
                         now,
                         finding.get('status', ''),
+                        finding.get('vulnerability', ''),
+                        finding.get('target', ''),
+                        finding.get('resolved_ip', ''),
+                        str(finding.get('port', '')),
+                        finding.get('url', ''),
+                        finding.get('module', ''),
                         finding.get('severity', ''),
                         finding.get('details', ''),
                         fhash,
@@ -233,6 +317,7 @@ def save_findings(run_id: int, findings: list) -> dict:
 def get_delta_report(run_id: int) -> dict:
     """Get new/resolved/recurring counts for a specific run."""
     with _connect() as conn:
+        previous_run_id = _previous_comparable_run(conn, run_id)
         # Findings first seen in this run = new
         new_rows = conn.execute(
             "SELECT * FROM findings WHERE run_id = ? AND first_seen = last_seen",
@@ -240,10 +325,13 @@ def get_delta_report(run_id: int) -> dict:
         ).fetchall()
 
         # Findings resolved after this run's previous run_id
-        resolved_rows = conn.execute(
-            "SELECT * FROM findings WHERE resolved_at IS NOT NULL AND run_id < ?",
-            (run_id,),
-        ).fetchall()
+        resolved_rows = (
+            conn.execute(
+                "SELECT * FROM findings WHERE resolved_at IS NOT NULL AND run_id = ?",
+                (previous_run_id,),
+            ).fetchall()
+            if previous_run_id is not None else []
+        )
 
         # Findings seen before and still active in this run = recurring
         recurring_rows = conn.execute(

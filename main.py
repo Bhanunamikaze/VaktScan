@@ -2721,7 +2721,9 @@ async def main(
 
     # Inventory: initialise DB and open a new scan run
     inventory.init_db()
-    run_id = inventory.start_scan_run(targets_file or 'recon')
+    # The stable scan_id scopes inventory deltas and prevents unrelated target
+    # runs from being compared merely because they were executed consecutively.
+    run_id = inventory.start_scan_run(targets_file or 'recon', scope_key=scan_id)
 
     try:
         # 1. Process targets - use robust parser (handles schemas, comments,
