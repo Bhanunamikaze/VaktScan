@@ -13,6 +13,8 @@ import time
 import ipaddress
 import os
 import sys
+from pathlib import Path
+from urllib.parse import urlparse
 
 # Lazily-resolved module imports (same vendor path setup as main.py)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
@@ -367,6 +369,209 @@ def save_results_to_html(vulnerabilities, filename=None, scan_label=None):
         return filename
     except Exception as e:
         print(f"{Colors.RED}[!] Error saving HTML report: {e}{Colors.RESET}")
+        return None
+
+
+def save_unified_html_report(vulnerabilities, filename, scan_label=None,
+                             state=None, artifact_root=None):
+    """Write a searchable, self-contained report for the complete scan.
+
+    In addition to findings this combines checkpoint inventory, recon/httpx
+    results, ports/services, directory discoveries, and the textual output of
+    every tool beneath ``artifact_root``.  It is intentionally independent of
+    third-party JS/CSS so it remains usable as a single portable file.
+    """
+    import html as _html
+
+    state = state if isinstance(state, dict) else {}
+    vulnerabilities = list(vulnerabilities or [])
+    root = Path(artifact_root) if artifact_root else None
+    esc = lambda value: _html.escape(str(value if value is not None else ""))
+    generated = time.strftime("%Y-%m-%d %H:%M:%S")
+    label = str(scan_label or state.get("primary_target") or "VaktScan")
+
+    assets = {}
+
+    def add_asset(host, source=""):
+        host = str(host or "").strip().lower()
+        if not host or host in ("n/a", "unknown"):
+            return
+        item = assets.setdefault(host, {"host": host, "sources": set(), "urls": set(),
+                                        "ips": set(), "ports": set(), "findings": 0})
+        if source:
+            item["sources"].add(source)
+
+    for domain, payload in (state.get("recon_enumeration_results") or {}).items():
+        for host in (payload or {}).get("subdomains", []):
+            add_asset(host, f"recon:{domain}")
+    for domain, hosts in (state.get("recon_results") or {}).items():
+        for host in hosts or []:
+            add_asset(host, f"recon:{domain}")
+
+    http_rows = []
+    for domain, payload in (state.get("recon_http_results") or {}).items():
+        entries = (payload or {}).get("httpx_data", [])
+        if not entries:
+            entries = [{"url": u} for u in (payload or {}).get("alive_urls", [])]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            url = str(entry.get("url") or entry.get("input") or "")
+            parsed = urlparse(url if "://" in url else "//" + url)
+            host = parsed.hostname or str(entry.get("host") or "")
+            add_asset(host, f"httpx:{domain}")
+            if host:
+                assets[host]["urls"].add(url)
+                ip = entry.get("host") or entry.get("ip") or entry.get("a")
+                if ip and str(ip) != host:
+                    assets[host]["ips"].add(str(ip))
+            http_rows.append({
+                "host": host, "url": url, "status": entry.get("status-code", entry.get("status_code", "")),
+                "title": entry.get("title", ""), "tech": entry.get("tech", entry.get("webserver", "")),
+                "ip": entry.get("host", entry.get("ip", "")),
+            })
+
+    for ip, ports in (state.get("open_ports") or {}).items():
+        add_asset(ip, "port-scan")
+        assets[str(ip).lower()]["ports"].update(str(p) for p in (ports or []))
+    for finding in vulnerabilities:
+        host = finding.get("target") or urlparse(str(finding.get("url") or "")).hostname
+        add_asset(host, finding.get("module", "finding"))
+        key = str(host or "").lower()
+        if key in assets:
+            assets[key]["findings"] += 1
+            if finding.get("resolved_ip") not in (None, "", "N/A"):
+                assets[key]["ips"].add(str(finding["resolved_ip"]))
+            if finding.get("port") not in (None, "", "N/A"):
+                assets[key]["ports"].add(str(finding["port"]))
+            if finding.get("url") not in (None, "", "N/A"):
+                assets[key]["urls"].add(str(finding["url"]))
+
+    def table_row(values, attrs=""):
+        return f"<tr {attrs}>" + "".join(f"<td>{esc(v)}</td>" for v in values) + "</tr>"
+
+    asset_rows = []
+    for item in sorted(assets.values(), key=lambda x: x["host"]):
+        urls = " · ".join(sorted(item["urls"]))
+        asset_rows.append(table_row([
+            item["host"], ", ".join(sorted(item["ips"])),
+            ", ".join(sorted(item["ports"], key=lambda p: int(p) if p.isdigit() else 99999)),
+            urls, ", ".join(sorted(item["sources"])), item["findings"],
+        ], 'class="searchable"'))
+
+    service_rows = [table_row([
+        r["host"], r["ip"], r["url"], r["status"], r["title"],
+        ", ".join(r["tech"]) if isinstance(r["tech"], list) else r["tech"],
+    ], 'class="searchable"') for r in http_rows]
+
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+    finding_rows = []
+    severity_counts = {name: 0 for name in severity_order}
+    for finding in sorted(vulnerabilities, key=lambda f: severity_order.get(str(f.get("severity", "INFO")).upper(), 9)):
+        sev = str(finding.get("severity", "INFO")).upper()
+        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+        finding_rows.append(table_row([
+            sev, finding.get("status", ""), finding.get("vulnerability", ""),
+            finding.get("target", ""), finding.get("resolved_ip", ""), finding.get("port", ""),
+            finding.get("url", ""), finding.get("module", ""), finding.get("details", ""),
+        ], f'class="searchable" data-severity="{esc(sev)}"'))
+
+    directory_rows = []
+    artifacts = []
+    if root and root.is_dir():
+        output_abs = Path(filename).resolve()
+        text_ext = {".txt", ".csv", ".json", ".jsonl", ".log", ".xml", ".yaml", ".yml"}
+        for path in sorted(p for p in root.rglob("*") if p.is_file()):
+            if path.resolve() == output_abs or path.suffix.lower() == ".html":
+                continue
+            rel = str(path.relative_to(root))
+            size = path.stat().st_size
+            preview = ""
+            truncated = False
+            if path.suffix.lower() in text_ext or path.name.startswith("dirsearch_report_"):
+                try:
+                    with path.open("r", encoding="utf-8", errors="replace") as handle:
+                        preview = handle.read(2_000_001)
+                    if len(preview) > 2_000_000:
+                        preview = preview[:2_000_000]
+                        truncated = True
+                except OSError:
+                    preview = ""
+            tool = rel.split(os.sep, 1)[0]
+            artifacts.append((rel, tool, size, preview, truncated))
+            if "dirsearch" in rel.lower():
+                for line in preview.splitlines():
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith(("#", "[", "_")):
+                        directory_rows.append(table_row([rel, stripped], 'class="searchable"'))
+
+    artifact_blocks = []
+    for rel, tool, size, preview, truncated in artifacts:
+        suffix = "\n[preview truncated at 2 MB; original artifact retained on disk]" if truncated else ""
+        body = esc(preview + suffix) if preview else "Binary or empty artifact; see the file on disk."
+        artifact_blocks.append(
+            f'<details class="artifact searchable"><summary>{esc(rel)} '
+            f'<span>{esc(tool)} · {size:,} bytes</span></summary><pre>{body}</pre></details>'
+        )
+
+    def section(identifier, title, body, count):
+        return (f'<section id="{identifier}"><h2>{esc(title)} '
+                f'<span class="count">{count}</span></h2>{body}</section>')
+
+    def table(headers, rows):
+        head = "".join(f"<th>{esc(h)}</th>" for h in headers)
+        empty = f'<tr><td colspan="{len(headers)}" class="empty">No data recorded.</td></tr>'
+        return f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{"".join(rows) or empty}</tbody></table></div>'
+
+    nav = "".join(
+        f'<a href="#{ident}">{esc(title)} <b>{count}</b></a>'
+        for ident, title, count in [
+            ("overview", "Overview", len(vulnerabilities)), ("assets", "Assets", len(asset_rows)),
+            ("services", "Web services", len(service_rows)), ("findings", "Findings", len(finding_rows)),
+            ("directories", "Directories", len(directory_rows)), ("artifacts", "Tool outputs", len(artifacts)),
+        ]
+    )
+    cards = "".join(
+        f'<div class="card"><strong>{value}</strong><span>{esc(name)}</span></div>'
+        for name, value in [
+            ("Assets", len(assets)), ("Live web services", len(http_rows)),
+            ("Open ports", sum(len(v.get("ports", [])) for v in assets.values())),
+            ("Findings", len(vulnerabilities)), ("Tool artifacts", len(artifacts)),
+        ]
+    )
+    sev_cards = "".join(
+        f'<span class="severity {name.lower()}">{name} {severity_counts.get(name, 0)}</span>'
+        for name in severity_order
+    )
+
+    css = """<style>
+:root{--bg:#0b1020;--panel:#121a2d;--panel2:#18233a;--line:#2a3856;--text:#e9eef8;--muted:#9eabc2;--accent:#50d5ff}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,ui-sans-serif,system-ui,sans-serif}
+aside{position:fixed;inset:0 auto 0 0;width:230px;background:#0e1628;border-right:1px solid var(--line);padding:24px 16px;overflow:auto}aside h1{font-size:18px;margin:0 8px 4px}aside p{margin:0 8px 22px;color:var(--muted);word-break:break-word}nav a{display:flex;justify-content:space-between;color:var(--muted);text-decoration:none;padding:9px 10px;border-radius:7px}nav a:hover{background:var(--panel2);color:var(--text)}nav b{color:var(--accent)}main{margin-left:230px;padding:28px;max-width:1800px}.toolbar{position:sticky;top:0;z-index:5;background:linear-gradient(var(--bg) 75%,transparent);padding:0 0 18px}#global-search{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--text);font-size:15px}section{scroll-margin-top:72px;margin-bottom:34px}h2{font-size:18px;margin:0 0 12px}.count{font-size:12px;color:var(--accent);background:var(--panel2);padding:3px 8px;border-radius:12px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:16px}.card strong{display:block;font-size:27px;color:var(--accent)}.card span{color:var(--muted)}.severities{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.severity{padding:5px 9px;border-radius:6px;background:var(--panel2)}.critical{color:#ff5d8f}.high{color:#ff8a65}.medium{color:#ffd166}.low{color:#64b5f6}.info{color:#aab4c8}.table-wrap{border:1px solid var(--line);border-radius:10px;overflow:auto;max-height:650px}table{border-collapse:collapse;width:100%;background:var(--panel);font-size:12px}th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top;word-break:break-word}th{position:sticky;top:0;background:var(--panel2);z-index:2;color:#cbd6e8}.empty{text-align:center;color:var(--muted);padding:25px}.artifact{background:var(--panel);border:1px solid var(--line);border-radius:9px;margin:8px 0}.artifact summary{padding:11px 13px;cursor:pointer}.artifact summary span{float:right;color:var(--muted);font-size:12px}.artifact pre{margin:0;border-top:1px solid var(--line);padding:14px;max-height:540px;overflow:auto;white-space:pre-wrap;color:#cbd6e8}.hidden{display:none!important}.meta{color:var(--muted);margin-bottom:18px}@media(max-width:800px){aside{position:static;width:auto}main{margin:0;padding:18px}nav{display:flex;overflow:auto}nav a{min-width:max-content;gap:8px}}
+</style>"""
+    js = """<script>
+const box=document.getElementById('global-search'),items=[...document.querySelectorAll('.searchable')];
+box.addEventListener('input',()=>{const q=box.value.trim().toLowerCase();items.forEach(el=>el.classList.toggle('hidden',q&&!el.textContent.toLowerCase().includes(q)));});
+</script>"""
+    body = (
+        section("overview", "Overview", f'<div class="meta">Generated {esc(generated)} · phase {esc(state.get("phase", "unknown"))}</div><div class="cards">{cards}</div><div class="severities">{sev_cards}</div>', len(vulnerabilities)) +
+        section("assets", "Asset inventory", table(["Host", "IPs", "Ports", "URLs", "Sources", "Findings"], asset_rows), len(asset_rows)) +
+        section("services", "Live web services", table(["Host", "IP", "URL", "Status", "Title", "Technology"], service_rows), len(service_rows)) +
+        section("findings", "Vulnerabilities and observations", table(["Severity", "Status", "Finding", "Target", "IP", "Port", "URL", "Module", "Details"], finding_rows), len(finding_rows)) +
+        section("directories", "Directory discoveries", table(["Source", "Result"], directory_rows), len(directory_rows)) +
+        section("artifacts", "All tool outputs", "".join(artifact_blocks) or '<div class="panel empty">No artifacts recorded.</div>', len(artifacts))
+    )
+    doc = (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+           f'<title>VaktScan unified report — {esc(label)}</title>{css}</head><body><aside><h1>VaktScan</h1><p>{esc(label)}</p><nav>{nav}</nav></aside>'
+           f'<main><div class="toolbar"><input id="global-search" type="search" placeholder="Search all assets, services, findings, directories and tool output…"></div>{body}</main>{js}</body></html>')
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(filename)), exist_ok=True)
+        with open(filename, "w", encoding="utf-8") as handle:
+            handle.write(doc)
+        print(f"{Colors.GREEN}[+] Unified HTML report saved to {filename}{Colors.RESET}")
+        return filename
+    except OSError as exc:
+        print(f"{Colors.RED}[!] Error saving unified HTML report: {exc}{Colors.RESET}")
         return None
 
 

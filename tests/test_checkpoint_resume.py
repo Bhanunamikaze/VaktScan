@@ -86,6 +86,26 @@ async def _noop_async(*a, **k):
     return None
 
 
+class ReconStagePayloadTest(_StateDirMixin, unittest.TestCase):
+    def setUp(self):
+        self._init_state_dir()
+
+    def tearDown(self):
+        self._restore_state_dir()
+
+    def test_payload_and_completion_survive_reload(self):
+        manager = _quiet_manager("example-stage", ["example.com"], "scope")
+        payload = [{"vulnerability": "saved finding", "target": "api.example.com"}]
+        manager.mark_recon_stage_payload("example.com", "nuclei", payload)
+
+        resumed = _quiet_manager("example-stage", ["example.com"], "scope")
+        self.assertTrue(resumed.load_existing_state())
+        self.assertTrue(resumed.is_recon_stage_done("example.com", "nuclei"))
+        self.assertEqual(
+            resumed.get_recon_stage_payload("example.com", "nuclei"), payload
+        )
+
+
 # ---------------------------------------------------------------------------
 # T4 - state written on interrupt mid-phase.
 # ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ from reporter import (
     save_results_to_csv,
     save_results_to_json,
     save_results_to_html,
+    save_unified_html_report,
     write_sarif_output,
     print_final_results,
 )
@@ -180,6 +181,55 @@ _partial_findings: list = []
 
 LOGO_PRINTED = False
 
+
+def _web_concurrency(requested):
+    """Bound aggregate HTTP work so a scan cannot starve the host network.
+
+    ``-c`` still controls port/service scanning. Web scanners make many more
+    requests per target, so they use a separate conservative ceiling.
+    """
+    try:
+        ceiling = max(1, min(int(os.environ.get("VAKT_WEB_CONCURRENCY", "10")), 100))
+    except (TypeError, ValueError):
+        ceiling = 10
+    try:
+        return max(1, min(int(requested), ceiling))
+    except (TypeError, ValueError):
+        return ceiling
+
+
+def _positive_int(value):
+    """argparse type for tunables that must be strictly positive."""
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
+def _apply_network_tuning_args(args):
+    """Expose safe scanner-specific network controls as normal CLI flags.
+
+    The underlying modules also honor these environment variables for library
+    callers and automation. CLI values take precedence for this process.
+    """
+    mapping = {
+        "web_concurrency": "VAKT_WEB_CONCURRENCY",
+        "nuclei_concurrency": "VAKT_NUCLEI_CONCURRENCY",
+        "nuclei_rate_limit": "VAKT_NUCLEI_RATE_LIMIT",
+        "nuclei_bulk_size": "VAKT_NUCLEI_BULK_SIZE",
+        "dirsearch_threads": "VAKT_DIRSEARCH_THREADS",
+        "dirsearch_parallel": "VAKT_DIRSEARCH_PARALLEL_TARGETS",
+        "js_threads": "VAKT_JS_THREADS",
+    }
+    applied = []
+    for attr, env_name in mapping.items():
+        value = getattr(args, attr, None)
+        if value is not None:
+            os.environ[env_name] = str(value)
+            applied.append(f"{attr.replace('_', '-')}={value}")
+    if applied:
+        print(f"[*] Network tuning: {', '.join(applied)}")
+
 def print_logo():
     """Display VaktScan ASCII logo with colors."""
     global LOGO_PRINTED
@@ -239,6 +289,7 @@ async def run_recon_followups(
 ):
     """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
     all_findings = []
+    web_concurrency = _web_concurrency(concurrency)
     # JS corpus for the client-side CVE scan (js_cve). We REUSE the JS VaktScan
     # already discovers - JS URLs from js_paths, JS-looking alive/absolute URLs,
     # and archived .js URLs - rather than adding a second crawl/download pass.
@@ -300,7 +351,7 @@ async def run_recon_followups(
             port_scan_results = await scan_ports(
                 recon_targets,
                 common_web_ports,
-                concurrency,
+                web_concurrency,
                 state_manager=None,
                 connect_timeout=connect_timeout,
                 retries=port_retries,
@@ -326,7 +377,7 @@ async def run_recon_followups(
             f"{Colors.CYAN}[*] Probing {len(probe_urls)} URLs with httpx "
             f"({len(default_probe_urls)} default hostname probes + shared-IP expanded port discoveries)...{Colors.RESET}"
         )
-        httpx_data = await http_runner.run_httpx(probe_urls, concurrency)
+        httpx_data = await http_runner.run_httpx(probe_urls, web_concurrency)
         if not httpx_data:
             print(f"{Colors.YELLOW}[!] No alive HTTP services detected by httpx.{Colors.RESET}")
             await _await_nmap_task()
@@ -356,7 +407,7 @@ async def run_recon_followups(
             print(
                 f"{Colors.CYAN}[*] Probing {len(ffuf_probe_urls)} ffuf-discovered default HTTP targets with httpx...{Colors.RESET}"
             )
-            ffuf_httpx = await http_runner.run_httpx(ffuf_probe_urls, concurrency)
+            ffuf_httpx = await http_runner.run_httpx(ffuf_probe_urls, web_concurrency)
             if ffuf_httpx:
                 http_runner.save_csv(ffuf_httpx, f"{recon_domain.replace('.', '_')}_ffuf")
                 httpx_data.extend(ffuf_httpx)
@@ -378,10 +429,14 @@ async def run_recon_followups(
             f"{Colors.RESET}"
         )
     
-    # Run domain scanner, dirsearch, nuclei, web checks, and JS paths concurrently -
-    # all are read-only against alive_urls and write to their own files in output_dir.
+    # Keep request-amplifying scanners in bounded phases. Running all five at
+    # once used to combine hundreds of sockets and could exhaust the local NAT
+    # table, temporarily taking the operator's Internet connection down.
     if alive_urls:
-        print(f"{Colors.CYAN}[*] Running domain scanner, dirsearch, nuclei, web checks, and JS paths in parallel on {len(alive_urls)} URL(s)...{Colors.RESET}")
+        print(
+            f"{Colors.CYAN}[*] Running web follow-ups in network-safe phases on "
+            f"{len(alive_urls)} URL(s) (max concurrency {web_concurrency})...{Colors.RESET}"
+        )
         nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
         js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=output_dir)
 
@@ -394,25 +449,41 @@ async def run_recon_followups(
             dashboard.add_task("web_checks", "Web Checks")
             dashboard.add_task("js_paths", "JS Paths Scan")
 
+        async def _capture_stage(awaitable):
+            try:
+                return await awaitable
+            except Exception as exc:
+                return exc
+
+        async def _checkpointed_stage(name, awaitable):
+            if (state_manager is not None
+                    and state_manager.is_recon_stage_done(recon_domain, name) is True):
+                close = getattr(awaitable, "close", None)
+                if close:
+                    close()
+                print(f"{Colors.GRAY}[*] Resume: {name.replace('_', ' ')} already complete; reusing checkpoint.{Colors.RESET}")
+                return state_manager.get_recon_stage_payload(recon_domain, name)
+            result = await _capture_stage(awaitable)
+            if state_manager is not None and not isinstance(result, Exception):
+                state_manager.mark_recon_stage_payload(recon_domain, name, result)
+            return result
+
         try:
-            (
-                domain_scan_findings,
-                _dirsearch,
-                nuclei_results,
-                wc_results,
-                js_result,
-            ) = await asyncio.gather(
-                scanner.run(
-                    domains=unique_targets,
-                    httpx_data=httpx_data,
-                    alive_urls=alive_urls,
-                    concurrency=concurrency,
-                ),
-                dir_enumerator.run_dirsearch(bulk_scan_urls),
-                nuclei_inst.run_nuclei(bulk_scan_urls),
-                web_checks.run_checks(alive_urls, concurrency),
-                js_scanner.run(),
-                return_exceptions=True,
+            domain_scan_findings = await _checkpointed_stage("domain_scan", scanner.run(
+                domains=unique_targets,
+                httpx_data=httpx_data,
+                alive_urls=alive_urls,
+                concurrency=web_concurrency,
+            ))
+            wc_results = await _checkpointed_stage("web_checks",
+                web_checks.run_checks(alive_urls, web_concurrency)
+            )
+            js_result = await _checkpointed_stage("js_paths", js_scanner.run())
+            nuclei_results = await _checkpointed_stage("nuclei",
+                nuclei_inst.run_nuclei(bulk_scan_urls)
+            )
+            _dirsearch = await _checkpointed_stage("dirsearch",
+                dir_enumerator.run_dirsearch(bulk_scan_urls)
             )
         finally:
             if dashboard.active:
@@ -508,7 +579,7 @@ async def run_recon_followups(
             _shot_urls = alive_urls[:_cap]
             if len(alive_urls) > _cap:
                 print(f"{Colors.YELLOW}[*] Screenshotting first {_cap} of {len(alive_urls)} alive URL(s).{Colors.RESET}")
-            _shot_findings = await screenshots.capture_screenshots(_shot_urls, output_dir, concurrency)
+            _shot_findings = await screenshots.capture_screenshots(_shot_urls, output_dir, web_concurrency)
             if _shot_findings:
                 print(f"{Colors.GREEN}[+] Screenshots: {len(_shot_findings)} finding(s).{Colors.RESET}")
                 all_findings.extend(_shot_findings)
@@ -516,22 +587,22 @@ async def run_recon_followups(
         # Optional alive-URL analyses (opt-in - each can be heavy at recon scale;
         # all gracefully skip when their external tool isn't installed).
         if "params" in extra_scans:
-            _pf = await param_discovery.discover_parameters(alive_urls, output_dir, concurrency)
+            _pf = await param_discovery.discover_parameters(alive_urls, output_dir, web_concurrency)
             if _pf:
                 print(f"{Colors.GREEN}[+] Parameter discovery: {len(_pf)} finding(s).{Colors.RESET}")
                 all_findings.extend(_pf)
         if "favicon" in extra_scans:
-            _ff = await favicon_jarm.fingerprint_favicon_jarm(alive_urls, output_dir, concurrency)
+            _ff = await favicon_jarm.fingerprint_favicon_jarm(alive_urls, output_dir, web_concurrency)
             if _ff:
                 print(f"{Colors.GREEN}[+] Favicon/JARM pivots: {len(_ff)} finding(s).{Colors.RESET}")
                 all_findings.extend(_ff)
         if "tech" in extra_scans:
-            _tf = await tech_fingerprint.fingerprint_tech(alive_urls, output_dir, concurrency)
+            _tf = await tech_fingerprint.fingerprint_tech(alive_urls, output_dir, web_concurrency)
             if _tf:
                 print(f"{Colors.GREEN}[+] Tech/EOL fingerprint: {len(_tf)} finding(s).{Colors.RESET}")
                 all_findings.extend(_tf)
         if "default_creds" in extra_scans:
-            _dcf = await default_creds.check_default_credentials(alive_urls, output_dir, concurrency)
+            _dcf = await default_creds.check_default_credentials(alive_urls, output_dir, web_concurrency)
             if _dcf:
                 print(f"{Colors.BRIGHT_RED}[!] Default credentials: {len(_dcf)} confirmed finding(s).{Colors.RESET}")
                 all_findings.extend(_dcf)
@@ -576,7 +647,9 @@ async def run_recon_followups(
                     if _looks_like_js(_u):
                         js_cve_corpus.add(_u)
             if _archived_urls:
-                _arch_findings = await archived_urls.scan_archived_urls(_archived_urls, output_dir, concurrency)
+                _arch_findings = await archived_urls.scan_archived_urls(
+                    _archived_urls, output_dir, web_concurrency
+                )
                 if _arch_findings:
                     print(f"{Colors.GREEN}[+] Archived-URL analysis: {len(_arch_findings)} finding(s).{Colors.RESET}")
                     all_findings.extend(_arch_findings)
@@ -588,7 +661,7 @@ async def run_recon_followups(
     # absent. Reuses the collected corpus - no extra crawl pass.
     if enable_js_cve and js_cve_corpus:
         all_findings.extend(
-            await _run_js_cve_over_corpus(js_cve_corpus, output_dir, concurrency)
+            await _run_js_cve_over_corpus(js_cve_corpus, output_dir, web_concurrency)
         )
 
     await _await_nmap_task()
@@ -955,11 +1028,12 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
     """Run the full web-probe pipeline (httpx→nuclei→web_checks→dirsearch→JS→js_cve)
     on one batch of URLs and return the collected findings."""
     findings = []
+    web_concurrency = _web_concurrency(concurrency)
     if not web_probe_urls:
         return findings
     print(f"{Colors.CYAN}[*] Probing {len(web_probe_urls)} open web port URL(s) with httpx...{Colors.RESET}")
     http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
-    httpx_data = await http_runner.run_httpx(web_probe_urls, concurrency)
+    httpx_data = await http_runner.run_httpx(web_probe_urls, web_concurrency)
     if not httpx_data:
         print(f"{Colors.YELLOW}[!] No alive web services found on open web ports.{Colors.RESET}")
         return findings
@@ -983,7 +1057,7 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
         print(f"{Colors.GREEN}[+] Nuclei: {len(nuclei_results)} finding(s).{Colors.RESET}")
         findings.extend(nuclei_results)
 
-    wc_results = await web_checks.run_checks(alive_urls, concurrency)
+    wc_results = await web_checks.run_checks(alive_urls, web_concurrency)
     if wc_results:
         print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
         findings.extend(wc_results)
@@ -1002,7 +1076,9 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
     # discovered JS - no extra crawl pass. Default-ON; --no-js-cve opts out.
     if enable_js_cve:
         corpus = _js_cve_corpus_from_web(js_result, alive_urls)
-        findings.extend(await _run_js_cve_over_corpus(corpus, output_dir, concurrency))
+        findings.extend(
+            await _run_js_cve_over_corpus(corpus, output_dir, web_concurrency)
+        )
     return findings
 
 
@@ -1018,7 +1094,8 @@ def _web_port_set(base_ports, custom_ports):
     return ports
 
 
-async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_output, output_format=None):
+async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_output,
+                             output_format=None):
     """Shared finalization tail for BOTH the non-streaming and streaming scan
     paths: NVD → CISA-KEV → EPSS → passive-intel enrichment, inventory delta +
     scan-run close-out, and CSV/JSON/SARIF output. The caller passes an already
@@ -1610,8 +1687,13 @@ async def main(
         # 5. web_tech_cve (header + tech CVE paths) + NVD/KEV/EPSS/CVSS enrichment,
         # and CSV/HTML (always) + JSON/SARIF (per --format / --sarif). run_id=None
         # skips inventory persistence (tech-only is an ad-hoc lightweight triage).
-        await _enrich_and_report(
+        tech_findings = await _enrich_and_report(
             tech_findings, None, output_dir, sarif_output, output_format=output_format,
+        )
+        save_unified_html_report(
+            tech_findings,
+            os.path.join(output_dir, f"vaktscan_unified_{time.strftime('%Y%m%d_%H%M%S')}.html"),
+            scan_label="tech-only", artifact_root=output_dir,
         )
 
         print(f"{Colors.BRIGHT_GREEN}[*] tech-only scan finished. "
@@ -2740,8 +2822,36 @@ async def main(
     
     # Enrich (NVD/KEV/EPSS/passive-intel), persist to inventory, and write
     # CSV/JSON/SARIF via the shared finalization tail (also used by streaming mode).
+    # Recon artifacts live under reports/<domain>. On a resumed recon scan the
+    # later port/web phase may legitimately have no new output directory, so
+    # finalize into that durable recon directory instead of dropping reports in
+    # the repository root.
+    report_output_dir = web_output_dir
+    if not report_output_dir and state_manager.primary_target:
+        safe_report_label = "".join(
+            ch if ch.isalnum() or ch in "._-" else "_"
+            for ch in str(state_manager.primary_target).lower()
+        )
+        candidate = os.path.join("reports", safe_report_label)
+        if os.path.isdir(candidate):
+            report_output_dir = candidate
+    if not report_output_dir:
+        report_output_dir = "reports"
+    os.makedirs(report_output_dir, exist_ok=True)
+
     final_vulnerabilities = await _enrich_and_report(
-        final_vulnerabilities, run_id, web_output_dir, sarif_output, output_format=output_format,
+        final_vulnerabilities, run_id, report_output_dir, sarif_output,
+        output_format=output_format,
+    )
+    save_unified_html_report(
+        final_vulnerabilities,
+        os.path.join(
+            report_output_dir,
+            f"vaktscan_unified_{time.strftime('%Y%m%d_%H%M%S')}.html",
+        ),
+        scan_label=state_manager.primary_target,
+        state=state_manager.state,
+        artifact_root=report_output_dir,
     )
 
     state_manager.mark_completed()
@@ -3421,6 +3531,20 @@ if __name__ == "__main__":
     sp_scan.add_argument("target", nargs="?", default=None,
                          help="Domain, IP, CIDR, or targets file (optional with --list-resumable)")
     sp_scan.add_argument("-c", "--concurrency", type=int, default=100)
+    sp_scan.add_argument("--web-concurrency", type=_positive_int, default=None, metavar="N",
+                         help="Maximum concurrency for HTTP-heavy stages (default: 10; also caps -c for those stages)")
+    sp_scan.add_argument("--nuclei-concurrency", type=_positive_int, default=None, metavar="N",
+                         help="Nuclei template concurrency (default: 10, hard cap: 100)")
+    sp_scan.add_argument("--nuclei-rate-limit", type=_positive_int, default=None, metavar="RPS",
+                         help="Nuclei request rate limit per second (default: 25, hard cap: 500)")
+    sp_scan.add_argument("--nuclei-bulk-size", type=_positive_int, default=None, metavar="N",
+                         help="Nuclei hosts processed in parallel (default: 20, hard cap: 100)")
+    sp_scan.add_argument("--dirsearch-threads", type=_positive_int, default=None, metavar="N",
+                         help="Threads per Dirsearch target (default: 5, hard cap: 50)")
+    sp_scan.add_argument("--dirsearch-parallel", type=_positive_int, default=None, metavar="N",
+                         help="Dirsearch target processes in parallel (default: 2, hard cap: 20)")
+    sp_scan.add_argument("--js-threads", type=_positive_int, default=None, metavar="N",
+                         help="JavaScript/path-analysis worker threads (default: 10, hard cap: 50)")
     sp_scan.add_argument("--connect-timeout", type=float, default=DEFAULT_CONNECT_TIMEOUT)
     sp_scan.add_argument("--port-retries", type=int, default=DEFAULT_PORT_RETRIES)
     # Resume UX (Phase 5). Default is AUTO-RESUME: the scan id is recomputed from
@@ -3591,6 +3715,9 @@ if __name__ == "__main__":
     sp_dork.add_argument("--proxy", metavar="URL", default=None, help="Route traffic through proxy (e.g. http://127.0.0.1:8080)")
 
     args = parser.parse_args()
+
+    if args.subcommand == "scan":
+        _apply_network_tuning_args(args)
 
     # --- Shared setup ---
     if hasattr(args, 'proxy') and args.proxy:

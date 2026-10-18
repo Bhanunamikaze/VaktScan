@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from reporter import save_results_to_html  # noqa: E402
+from reporter import save_results_to_html, save_unified_html_report  # noqa: E402
 
 
 class HtmlReportTests(unittest.TestCase):
@@ -57,6 +57,57 @@ class HtmlReportTests(unittest.TestCase):
         # Inlined CSS/JS only - no external stylesheet/script references.
         self.assertNotIn("http://", html.split("</head>")[0].replace("initial-scale", ""))
         self.assertIn("<style>", html)
+
+    def test_unified_report_combines_state_and_tool_artifacts(self):
+        artifact_dir = os.path.join(self.dir, "artifacts")
+        os.makedirs(os.path.join(artifact_dir, "dirsearch_reports"))
+        with open(os.path.join(artifact_dir, "subfinder_example.txt"), "w", encoding="utf-8") as fh:
+            fh.write("api.example.com\n")
+        with open(os.path.join(artifact_dir, "dirsearch_reports", "dirsearch_report_api.txt"), "w", encoding="utf-8") as fh:
+            fh.write("https://api.example.com/admin 200\n")
+        state = {
+            "phase": "vulnerability_scanning",
+            "primary_target": "example.com",
+            "recon_enumeration_results": {
+                "example.com": {"subdomains": ["api.example.com", "www.example.com"]}
+            },
+            "recon_http_results": {
+                "example.com": {"httpx_data": [{
+                    "url": "https://api.example.com", "status-code": 200,
+                    "title": "API", "tech": ["nginx"], "host": "192.0.2.5",
+                }]}
+            },
+            "open_ports": {"192.0.2.5": [80, 443]},
+        }
+        finding = [{
+            "severity": "HIGH", "status": "VULNERABLE", "vulnerability": "Example issue",
+            "target": "api.example.com", "resolved_ip": "192.0.2.5", "port": 443,
+            "url": "https://api.example.com", "module": "nuclei", "details": "evidence",
+        }]
+        out = save_unified_html_report(
+            finding, self.path, "example.com", state=state, artifact_root=artifact_dir
+        )
+        self.assertEqual(out, self.path)
+        with open(self.path, encoding="utf-8") as fh:
+            html = fh.read()
+        for expected in (
+            "Asset inventory", "Live web services", "Vulnerabilities and observations",
+            "Directory discoveries", "All tool outputs", "api.example.com", "Example issue",
+            "dirsearch_report_api.txt", "https://api.example.com/admin 200", "subfinder_example.txt",
+        ):
+            self.assertIn(expected, html)
+        self.assertIn('id="global-search"', html)
+
+    def test_unified_report_escapes_artifact_content(self):
+        artifact_dir = os.path.join(self.dir, "artifacts")
+        os.makedirs(artifact_dir)
+        with open(os.path.join(artifact_dir, "raw.txt"), "w", encoding="utf-8") as fh:
+            fh.write("<script>alert(1)</script>")
+        save_unified_html_report([], self.path, artifact_root=artifact_dir)
+        with open(self.path, encoding="utf-8") as fh:
+            html = fh.read()
+        self.assertNotIn("<script>alert(1)</script>", html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
 
 
 if __name__ == "__main__":

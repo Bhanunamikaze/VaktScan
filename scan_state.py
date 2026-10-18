@@ -151,6 +151,12 @@ class ScanStateManager:
             # set (DNS hygiene, company-only filtering, and similar stages).
             # {domain: {stage: [subdomains]}}
             "recon_stage_results": {},
+            # JSON-serializable payloads produced by expensive recon follow-up
+            # stages (domain checks, web checks, JS, nuclei, dirsearch). These
+            # let a mid-pipeline resume continue at the first unfinished stage
+            # without losing findings or replaying completed request bursts.
+            # {domain: {stage: object}}
+            "recon_stage_payloads": {},
             # Completed preliminary web-port/httpx discovery for recon domains.
             # This lets an interrupted Dirsearch/Nuclei stage reuse its alive
             # hosts instead of repeating the port sweep and HTTP probing.
@@ -615,6 +621,22 @@ class ScanStateManager:
     def get_recon_stage_result(self, domain: str, stage: str):
         result = ((self.state.get("recon_stage_results") or {}).get(domain) or {}).get(stage)
         return list(result) if isinstance(result, list) else None
+
+    def mark_recon_stage_payload(self, domain: str, stage: str, payload):
+        """Atomically persist a completed recon stage and its reusable payload."""
+        if not domain or not stage:
+            return
+        with self._lock:
+            payloads = self.state.setdefault("recon_stage_payloads", {})
+            payloads.setdefault(domain, {})[stage] = payload
+            by_domain = self.state.setdefault("completed_recon_stages", {})
+            stages = by_domain.setdefault(domain, [])
+            if stage not in stages:
+                stages.append(stage)
+        self.save_state(force=True)
+
+    def get_recon_stage_payload(self, domain: str, stage: str):
+        return ((self.state.get("recon_stage_payloads") or {}).get(domain) or {}).get(stage)
 
     def mark_scan_stage_done(self, stage: str):
         if not stage:

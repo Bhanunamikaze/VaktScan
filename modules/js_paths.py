@@ -540,9 +540,14 @@ class JSRecon:
 # ---------------------------------------------------------------------------
 
 class JSPathsScanner:
-    def __init__(self, target_urls: list, threads: int = 20, timeout: int = 10, output_dir: str = None):
+    def __init__(self, target_urls: list, threads: int = None, timeout: int = 10, output_dir: str = None):
         self.target_urls = target_urls
-        self.threads     = threads
+        if threads is None:
+            try:
+                threads = int(os.environ.get("VAKT_JS_THREADS", "10"))
+            except (TypeError, ValueError):
+                threads = 10
+        self.threads     = max(1, min(threads, 50))
         self.timeout     = timeout
         self.output_dir  = output_dir
 

@@ -118,13 +118,26 @@ class NucleiRunner:
             print(f"\033[91m[!] Error creating nuclei input file: {e}\033[0m")
             return []
 
-        # Construct command following ProjectDiscovery best practices (Ultimate Guide)
+        def _bounded_env(name, default, maximum):
+            try:
+                return max(1, min(int(os.environ.get(name, default)), maximum))
+            except (TypeError, ValueError):
+                return default
+
+        # Conservative defaults protect laptops and small NAT routers from the
+        # connection storm produced by the previous 150 RPS / concurrency 50
+        # settings.  Environment overrides remain bounded to prevent accidental
+        # unbounded scans.
+        nuclei_concurrency = _bounded_env("VAKT_NUCLEI_CONCURRENCY", 10, 100)
+        nuclei_rate = _bounded_env("VAKT_NUCLEI_RATE_LIMIT", 25, 500)
+        nuclei_bulk = _bounded_env("VAKT_NUCLEI_BULK_SIZE", 20, 100)
+
         cmd = [
             self.binary,
             "-l", input_file,
-            "-c", "50",
-            "-rl", "150",
-            "-bs", "100",
+            "-c", str(nuclei_concurrency),
+            "-rl", str(nuclei_rate),
+            "-bs", str(nuclei_bulk),
             "-timeout", "15",
             "-severity", "critical,high,medium",
             "-nc",
@@ -134,7 +147,10 @@ class NucleiRunner:
             cmd.append(self.output_flag)
         cmd.extend(["-silent", "-o", json_output_tmp])
 
-        print(f"\033[96m[*] Running nuclei on {len(targets)} alive services...\033[0m")
+        print(
+            f"\033[96m[*] Running nuclei on {len(targets)} alive services "
+            f"(concurrency {nuclei_concurrency}, rate {nuclei_rate}/s)...\033[0m"
+        )
         print(f"\033[90m[*] Nuclei targets file: {input_file}\033[0m")
 
         try:

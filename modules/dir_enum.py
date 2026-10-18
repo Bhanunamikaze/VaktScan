@@ -222,9 +222,14 @@ class DirEnumerator:
 
         return None
 
-    async def run_dirsearch(self, urls, threads=30, parallel_targets=20):
+    async def run_dirsearch(self, urls, threads=None, parallel_targets=None):
         """
         Runs dirsearch against a list of alive URLs with limited parallel execution.
+
+        The old defaults (20 targets x 30 threads) could create roughly 600
+        simultaneous connections and exhaust a workstation/router connection
+        table.  Keep the safe defaults deliberately conservative; operators on
+        larger links can opt in to more throughput with the environment knobs.
         """
         if not urls:
             print(f"{Colors.YELLOW}[!] No HTTP services provided to dirsearch.{Colors.RESET}")
@@ -238,13 +243,23 @@ class DirEnumerator:
 
         env = os.environ.copy()
 
+        def _setting(value, env_name, default, maximum):
+            raw = value if value is not None else os.environ.get(env_name, default)
+            try:
+                return max(1, min(int(raw), maximum))
+            except (TypeError, ValueError):
+                return default
+
+        threads = _setting(threads, "VAKT_DIRSEARCH_THREADS", 5, 50)
+        max_parallel = _setting(
+            parallel_targets, "VAKT_DIRSEARCH_PARALLEL_TARGETS", 2, 20
+        )
         unique_urls = select_unique_host_urls(urls)
-        max_parallel = max(1, parallel_targets)
         semaphore = asyncio.Semaphore(max_parallel)
 
         print(
             f"{Colors.CYAN}[*] Running dirsearch against {len(unique_urls)} alive targets "
-            f"(max {max_parallel} concurrent)...{Colors.RESET}"
+            f"(max {max_parallel} targets x {threads} threads)...{Colors.RESET}"
         )
 
         async def runner(target_url):
