@@ -65,6 +65,36 @@ class CSPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(limits.max_connections, 37)
         self.assertEqual(limits.max_keepalive_connections, 37)
 
+    async def test_web_check_progress_counts_individual_checks(self):
+        class Client:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+        progress = []
+
+        class Progress:
+            def __init__(self, task_id, total, noun):
+                progress.append((task_id, total, noun))
+
+            async def wrap(self, awaitable):
+                return await awaitable
+
+        async def empty_check(_url, _client):
+            return []
+
+        with patch("modules.web_checks.httpx.AsyncClient", Client), \
+             patch("modules.web_checks._ALL_CHECKS", [empty_check, empty_check]), \
+             patch("modules.web_checks.DashboardProgress", Progress):
+            await web_checks.run_checks(["https://a.example", "https://b.example"], concurrency=2)
+
+        self.assertEqual(progress, [("web_checks", 4, "checks")])
+
 
 class HorizontalPipelineTests(unittest.TestCase):
     def test_reverse_and_related_hosts_feed_pipeline_deduplicated(self):

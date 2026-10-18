@@ -1516,9 +1516,11 @@ async def _run_checks_for_url(
     url: str,
     client: httpx.AsyncClient,
     semaphore: asyncio.Semaphore,
+    progress: DashboardProgress | None = None,
 ) -> list[dict]:
     async with semaphore:
-        tasks = [check(url, client) for check in _ALL_CHECKS]
+        checks = [check(url, client) for check in _ALL_CHECKS]
+        tasks = [progress.wrap(check) for check in checks] if progress else checks
         results = await asyncio.gather(*tasks, return_exceptions=True)
         findings: list[dict] = []
         for res in results:
@@ -1565,9 +1567,10 @@ async def run_checks(alive_urls: list[str], concurrency: int = 20) -> list[dict]
             max_keepalive_connections=max(1, concurrency),
         ),
     ) as client:
-        prog = DashboardProgress("web_checks", total=len(alive_urls), noun="URLs")
+        total_checks = len(alive_urls) * len(_ALL_CHECKS)
+        prog = DashboardProgress("web_checks", total=total_checks, noun="checks")
         tasks = [
-            prog.wrap(_run_checks_for_url(url, client, semaphore))
+            _run_checks_for_url(url, client, semaphore, prog)
             for url in alive_urls
         ]
         # A URL runs several checks and endpoint probes before its URL-level
