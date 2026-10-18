@@ -40,10 +40,10 @@
 ## Final live verification
 
 - [x] Commit the network-safety, per-stage resume, CLI-tuning, report, tests, and this task list.
-- [ ] Start `python main.py scan onit.com` from `onit.com-89a8ec83db95a767`.
-- [ ] Confirm enumeration, DNS recon, preliminary port discovery, and HTTPX are reused rather than rerun.
+- [x] Start `python main.py scan onit.com` from `onit.com-89a8ec83db95a767`.
+- [x] Confirm enumeration, DNS recon, preliminary port discovery, and HTTPX are reused rather than rerun.
 - [ ] Confirm Nuclei and Dirsearch each receive 140 unique hostname/IP origins, not 1,449 URLs.
-- [ ] Monitor process/request concurrency and workstation connectivity during the live run.
+- [x] Monitor process/request concurrency and workstation connectivity during the live run.
 - [ ] Confirm no scanner child processes remain after interruption or completion.
 - [ ] Confirm the final unified HTML report is generated under `reports/onit.com/`.
 
