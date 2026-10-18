@@ -544,9 +544,9 @@ class JSPathsScanner:
         self.target_urls = target_urls
         if threads is None:
             try:
-                threads = int(os.environ.get("VAKT_JS_THREADS", "10"))
+                threads = int(os.environ.get("VAKT_JS_THREADS", "20"))
             except (TypeError, ValueError):
-                threads = 10
+                threads = 20
         self.threads     = max(1, min(threads, 50))
         self.timeout     = timeout
         self.output_dir  = output_dir

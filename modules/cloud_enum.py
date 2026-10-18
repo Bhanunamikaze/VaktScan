@@ -4,7 +4,10 @@ VaktScan cloud asset enumeration module.
 Permutation-based bucket/storage enumeration for:
   - AWS S3 (s3.amazonaws.com)
   - Azure Blob Storage (blob.core.windows.net)
+  - Azure Files, Queues, Tables, and Data Lake Storage
   - GCP Google Cloud Storage (storage.googleapis.com)
+  - DigitalOcean Spaces
+  - Alibaba Cloud OSS
 
 No API keys required - pure public HTTP probes.
 """
@@ -450,6 +453,117 @@ async def _enumerate_gcs(
     return deduped
 
 
+# ─── Additional object/storage providers ─────────────────────────────────────
+
+async def _probe_object_endpoint(client, sem, domain, perm, url, provider):
+    """Probe an S3-style provider endpoint and classify public/private buckets."""
+    try:
+        async with sem:
+            response = await client.get(url)
+    except Exception:
+        return []
+
+    body = response.text or ""
+    if response.status_code == 200:
+        return [_finding(
+            "VULNERABLE", "HIGH", f"{provider} Bucket Publicly Readable",
+            f'{provider} bucket "{perm}" is publicly readable (HTTP 200). '
+            f"Snippet: {body[:300].strip()!r}",
+            domain, url, url,
+        )]
+    if response.status_code == 403 and "NoSuchBucket" not in body:
+        return [_finding(
+            "INFO", "INFO", f"{provider} Bucket Exists (Access Denied)",
+            f'{provider} bucket "{perm}" exists but access is denied (HTTP 403).',
+            domain, url, url,
+        )]
+    return []
+
+
+async def _enumerate_digitalocean(client, sem, domain):
+    regions = ("nyc3", "sfo3", "ams3", "sgp1")
+    tasks = [
+        _probe_object_endpoint(
+            client, sem, domain, perm,
+            f"https://{perm}.{region}.digitaloceanspaces.com/",
+            "DigitalOcean Spaces",
+        )
+        for perm in _permutations(domain) for region in regions
+    ]
+    findings = []
+    for result in await asyncio.gather(*tasks, return_exceptions=True):
+        if isinstance(result, list):
+            findings.extend(result)
+    return findings
+
+
+async def _enumerate_alibaba(client, sem, domain):
+    endpoints = (
+        "oss-us-east-1", "oss-us-west-1", "oss-eu-central-1", "oss-ap-southeast-1"
+    )
+    tasks = [
+        _probe_object_endpoint(
+            client, sem, domain, perm,
+            f"https://{perm}.{endpoint}.aliyuncs.com/",
+            "Alibaba OSS",
+        )
+        for perm in _permutations(domain) for endpoint in endpoints
+    ]
+    findings = []
+    for result in await asyncio.gather(*tasks, return_exceptions=True):
+        if isinstance(result, list):
+            findings.extend(result)
+    return findings
+
+
+async def _probe_azure_service(client, sem, domain, perm, service, label):
+    url = f"https://{perm}.{service}.core.windows.net/"
+    try:
+        async with sem:
+            response = await client.get(url)
+    except Exception:
+        return []
+
+    body = response.text or ""
+    azure_response = (
+        any(key.lower().startswith("x-ms-") for key in response.headers)
+        or any(marker in body for marker in (
+            "AuthenticationFailed", "AuthorizationFailure", "InvalidQueryParameterValue",
+            "ResourceNotFound", "AccountIsDisabled", "UnsupportedHttpVerb",
+        ))
+    )
+    if response.status_code == 200:
+        return [_finding(
+            "VULNERABLE", "HIGH", f"Azure {label} Publicly Accessible",
+            f'Azure storage account "{perm}" exposes its {label} endpoint publicly (HTTP 200).',
+            domain, url, url,
+        )]
+    if response.status_code in (400, 401, 403) and azure_response:
+        return [_finding(
+            "INFO", "INFO", f"Azure {label} Endpoint Exists (Restricted)",
+            f'Azure storage account "{perm}" has a restricted {label} endpoint '
+            f"(HTTP {response.status_code}).",
+            domain, url, url,
+        )]
+    return []
+
+
+async def _enumerate_azure_services(client, sem, domain):
+    services = (
+        ("file", "Files"), ("queue", "Queues"),
+        ("table", "Tables"), ("dfs", "Data Lake Storage"),
+    )
+    tasks = [
+        _probe_azure_service(client, sem, domain, perm, service, label)
+        for perm in _permutations(domain) for service, label in services
+    ]
+    findings = []
+    for result in await asyncio.gather(*tasks, return_exceptions=True):
+        if isinstance(result, list):
+            findings.extend(result)
+    return findings
+
+
 # ─── CloudFront detection ──────────────────────────────────────────────────────
 
 _CLOUDFRONT_IP_RANGES = [
@@ -529,6 +643,7 @@ async def _detect_cloudfront(client: httpx.AsyncClient, domain: str) -> list[dic
         status, severity,
         f'CloudFront Distribution Detected - {domain}',
         ' '.join(details_parts),
+        host=domain,
         url=url,
     ))
     return findings
@@ -540,7 +655,8 @@ async def enumerate_cloud_assets(domain: str, concurrency: int = 50) -> list[dic
     """
     Enumerate publicly accessible cloud storage assets for *domain*.
 
-    Probes AWS S3, Azure Blob Storage, GCP GCS, and CloudFront.
+    Probes AWS S3, Azure storage services, GCP GCS, DigitalOcean Spaces,
+    Alibaba OSS, and CloudFront.
     No API keys required - pure public HTTP/DNS probes.
 
     Returns a list of finding dicts in VaktScan canonical format.
@@ -559,16 +675,19 @@ async def enumerate_cloud_assets(domain: str, concurrency: int = 50) -> list[dic
             transport=transport,
             headers={'User-Agent': 'VaktScan/1.0 cloud-enum'},
         ) as client:
-            s3_findings, azure_findings, gcs_findings, cf_findings = await asyncio.gather(
+            results = await asyncio.gather(
                 _enumerate_s3(client, sem, domain),
                 _enumerate_azure(client, sem, domain),
                 _enumerate_gcs(client, sem, domain),
+                _enumerate_digitalocean(client, sem, domain),
+                _enumerate_alibaba(client, sem, domain),
+                _enumerate_azure_services(client, sem, domain),
                 _detect_cloudfront(client, domain),
                 return_exceptions=True,
             )
 
         all_findings: list[dict] = []
-        for result in (s3_findings, azure_findings, gcs_findings, cf_findings):
+        for result in results:
             if isinstance(result, list):
                 all_findings.extend(result)
 

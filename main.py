@@ -94,6 +94,7 @@ from modules import (
     default_creds,
     notify,
     asset_classifier,
+    artifact_findings,
     proc,
 )
 
@@ -183,19 +184,23 @@ LOGO_PRINTED = False
 
 
 def _web_concurrency(requested):
-    """Bound aggregate HTTP work so a scan cannot starve the host network.
+    """Return HTTP-stage concurrency, defaulting to the global ``-c`` value.
 
-    ``-c`` still controls port/service scanning. Web scanners make many more
-    requests per target, so they use a separate conservative ceiling.
+    Heavy web tools run sequentially, so honoring the normal scan concurrency
+    here does not multiply their connection pools.  ``--web-concurrency`` (or
+    its environment equivalent) remains an optional, explicit override.
     """
     try:
-        ceiling = max(1, min(int(os.environ.get("VAKT_WEB_CONCURRENCY", "10")), 100))
+        requested = max(1, min(int(requested), 500))
     except (TypeError, ValueError):
-        ceiling = 10
+        requested = 100
+    raw_override = os.environ.get("VAKT_WEB_CONCURRENCY")
+    if raw_override is None:
+        return requested
     try:
-        return max(1, min(int(requested), ceiling))
+        return max(1, min(int(raw_override), 500))
     except (TypeError, ValueError):
-        return ceiling
+        return requested
 
 
 def _positive_int(value):
@@ -270,6 +275,30 @@ def _looks_like_js(url):
         return _urlparse((url or "").lower()).path.endswith((".js", ".mjs"))
     except Exception:
         return False
+
+
+def _horizontal_targets(expansion):
+    """Return normalized DNS names discovered by horizontal expansion."""
+    if not isinstance(expansion, dict):
+        return []
+    targets = []
+    for key in ("reverse_hosts", "related_domains"):
+        for value in expansion.get(key, []) or []:
+            host = normalize_host_value(str(value))
+            if host and is_valid_domain(host):
+                targets.append(host.lower())
+    return sorted(set(targets))
+
+
+def _recover_horizontal_payload(output_dir):
+    """Recover legacy horizontal-expansion artifacts created before payloads."""
+    result = {"reverse_hosts": [], "related_domains": [], "findings": []}
+    base = os.path.join(output_dir, "horizontal_expand")
+    for key in ("reverse_hosts", "related_domains"):
+        path = os.path.join(base, f"{key}.txt")
+        if os.path.isfile(path):
+            result[key] = load_subdomains_file(path)
+    return result if _horizontal_targets(result) else None
 
 
 async def run_recon_followups(
@@ -442,12 +471,13 @@ async def run_recon_followups(
 
         from modules.dashboard import LiveDashboard
         dashboard = LiveDashboard()
-        if dashboard.active:
-            dashboard.add_task("domain_scan", "Domain Scan")
-            dashboard.add_task("dirsearch", "Dirsearch Scan")
-            dashboard.add_task("nuclei", "Nuclei Scan")
-            dashboard.add_task("web_checks", "Web Checks")
-            dashboard.add_task("js_paths", "JS Paths Scan")
+        stage_labels = {
+            "domain_scan": "Domain Scan",
+            "web_checks": "Web Checks",
+            "js_paths": "JS Paths Scan",
+            "nuclei": "Nuclei Scan",
+            "dirsearch": "Dirsearch Scan",
+        }
 
         async def _capture_stage(awaitable):
             try:
@@ -456,12 +486,19 @@ async def run_recon_followups(
                 return exc
 
         async def _checkpointed_stage(name, awaitable):
+            if dashboard.active:
+                # Only display the stage that is actually executing.  Adding all
+                # tasks up front made queued stages look as if they were already
+                # running, which obscured the serialized execution guarantee.
+                dashboard.add_task(name, stage_labels[name])
             if (state_manager is not None
                     and state_manager.is_recon_stage_done(recon_domain, name) is True):
                 close = getattr(awaitable, "close", None)
                 if close:
                     close()
                 print(f"{Colors.GRAY}[*] Resume: {name.replace('_', ' ')} already complete; reusing checkpoint.{Colors.RESET}")
+                if dashboard.active:
+                    dashboard.complete_task(name, "Reused checkpoint")
                 return state_manager.get_recon_stage_payload(recon_domain, name)
             result = await _capture_stage(awaitable)
             if state_manager is not None and not isinstance(result, Exception):
@@ -556,6 +593,12 @@ async def run_recon_followups(
             print(f"{Colors.GREEN}[+] JS paths: {len(js_findings)} finding(s).{Colors.RESET}")
             all_findings.extend(js_findings)
 
+        if not isinstance(_dirsearch, Exception):
+            _dir_findings = artifact_findings.dirsearch_findings(_dirsearch)
+            if _dir_findings:
+                print(f"{Colors.GREEN}[+] Dirsearch normalized {len(_dir_findings)} target summary finding(s).{Colors.RESET}")
+                all_findings.extend(_dir_findings)
+
         # Harvest the JS that js_paths already discovered (JS file URLs + any
         # JS-looking absolute URLs it extracted) for the client-side CVE scan.
         if enable_js_cve and isinstance(js_result, dict):
@@ -630,6 +673,15 @@ async def run_recon_followups(
             if dashboard.active:
                 dashboard.complete_task("gau")
                 dashboard.complete_task("wayback")
+
+        _archive_summaries = (
+            artifact_findings.archive_findings("GAU", gau_result)
+            + artifact_findings.archive_findings("Wayback", wayback_result)
+        )
+        if _archive_summaries:
+            print(f"{Colors.GREEN}[+] Archived URL tools normalized "
+                  f"{len(_archive_summaries)} target summary finding(s).{Colors.RESET}")
+            all_findings.extend(_archive_summaries)
 
         # Weaponize the harvested archive: dedup → filter high-signal → re-probe
         # for live endpoints → secret-scan archived JS. Reuses the URLs gau/wayback
@@ -1063,7 +1115,8 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
         findings.extend(wc_results)
 
     dir_enumerator = dir_enum.DirEnumerator(domain_label, output_dir=output_dir)
-    await dir_enumerator.run_dirsearch(bulk_scan_urls)
+    dirsearch_result = await dir_enumerator.run_dirsearch(bulk_scan_urls)
+    findings.extend(artifact_findings.dirsearch_findings(dirsearch_result))
 
     js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=output_dir)
     js_result = await js_scanner.run()
@@ -2184,8 +2237,11 @@ async def main(
                 # Gracefully skips when the tools aren't installed.
                 if enable_horizontal:
                     if state_manager.is_recon_stage_done(domain, "horizontal") is True:
+                        _expansion = state_manager.get_recon_stage_payload(domain, "horizontal")
+                        if not isinstance(_expansion, dict):
+                            _expansion = _recover_horizontal_payload(domain_output_dir)
                         print(f"{Colors.CYAN}[*] Resume: horizontal expansion for {domain} "
-                              f"already complete; skipping.{Colors.RESET}")
+                              f"already complete; reusing saved discoveries.{Colors.RESET}")
                     else:
                         _expansion = await horizontal_expand.expand_horizontal([domain], domain_output_dir)
                         for _hf in _expansion.get("findings", []):
@@ -2194,7 +2250,15 @@ async def main(
                         if _rh or _rd:
                             print(f"{Colors.GREEN}[+] Horizontal expansion: {_rd} related domain(s), "
                                   f"{_rh} reverse-DNS host(s) discovered for {domain}.{Colors.RESET}")
-                        state_manager.mark_recon_stage_done(domain, "horizontal")
+                        state_manager.mark_recon_stage_payload(domain, "horizontal", _expansion)
+
+                    _expanded_targets = _horizontal_targets(_expansion)
+                    if _expanded_targets:
+                        _before = len(subdomains)
+                        subdomains = sorted(set(subdomains).union(_expanded_targets))
+                        print(f"{Colors.GREEN}[+] Horizontal expansion fed "
+                              f"{len(subdomains) - _before} new hostname(s) into the live-host pipeline."
+                              f"{Colors.RESET}")
 
                 # DNS hygiene (ON by default; --no-dns-hygiene to disable): wildcard-
                 # filter the enumerated subdomains before probing to drop catch-all
@@ -2749,7 +2813,28 @@ async def main(
                 state_manager.update_phase("vulnerability_scanning")
                 
                 if scan_tasks:
-                    await asyncio.gather(*scan_tasks, return_exceptions=True)
+                    from modules.dashboard import LiveDashboard
+                    from modules.progress import DashboardProgress
+                    _service_dashboard = LiveDashboard()
+                    if _service_dashboard.active:
+                        _service_dashboard.add_task(
+                            "service_scans", "Service Vulnerability Scans",
+                            total=len(scan_tasks),
+                        )
+                    _service_progress = DashboardProgress(
+                        "service_scans", len(scan_tasks), noun="services",
+                        dashboard=_service_dashboard,
+                    )
+                    try:
+                        await asyncio.gather(
+                            *(_service_progress.wrap(task) for task in scan_tasks),
+                            return_exceptions=True,
+                        )
+                    finally:
+                        if _service_dashboard.active:
+                            _service_dashboard.complete_task(
+                                "service_scans", f"{len(scan_tasks)} services scanned"
+                            )
             
         state_manager.update_phase("vulnerability_scanning_complete")
 
@@ -3063,7 +3148,27 @@ async def process_chunk_services(open_ports_results, service_ports, module_filte
             scan_tasks.append(scan_with_state_saving(scanner_func, target_obj, port, adjacent_open_ports=adj))
 
     if scan_tasks:
-        results = await asyncio.gather(*scan_tasks, return_exceptions=True)
+        from modules.dashboard import LiveDashboard
+        from modules.progress import DashboardProgress
+        dashboard = LiveDashboard()
+        if dashboard.active:
+            dashboard.add_task(
+                "service_scans", "Service Vulnerability Scans",
+                total=len(scan_tasks),
+            )
+        progress = DashboardProgress(
+            "service_scans", len(scan_tasks), noun="services", dashboard=dashboard
+        )
+        try:
+            results = await asyncio.gather(
+                *(progress.wrap(task) for task in scan_tasks),
+                return_exceptions=True,
+            )
+        finally:
+            if dashboard.active:
+                dashboard.complete_task(
+                    "service_scans", f"{len(scan_tasks)} services scanned"
+                )
         for res in results:
             if isinstance(res, list): chunk_vulnerabilities.extend(res)
             
@@ -3532,19 +3637,19 @@ if __name__ == "__main__":
                          help="Domain, IP, CIDR, or targets file (optional with --list-resumable)")
     sp_scan.add_argument("-c", "--concurrency", type=int, default=100)
     sp_scan.add_argument("--web-concurrency", type=_positive_int, default=None, metavar="N",
-                         help="Maximum concurrency for HTTP-heavy stages (default: 10; also caps -c for those stages)")
+                         help="Concurrency for HTTP-heavy stages (default: use -c; hard cap: 500)")
     sp_scan.add_argument("--nuclei-concurrency", type=_positive_int, default=None, metavar="N",
-                         help="Nuclei template concurrency (default: 10, hard cap: 100)")
+                         help="Nuclei template concurrency (default: 50, hard cap: 100)")
     sp_scan.add_argument("--nuclei-rate-limit", type=_positive_int, default=None, metavar="RPS",
-                         help="Nuclei request rate limit per second (default: 25, hard cap: 500)")
+                         help="Nuclei request rate limit per second (default: 150, hard cap: 500)")
     sp_scan.add_argument("--nuclei-bulk-size", type=_positive_int, default=None, metavar="N",
-                         help="Nuclei hosts processed in parallel (default: 20, hard cap: 100)")
+                         help="Nuclei hosts processed in parallel (default: 100, hard cap: 100)")
     sp_scan.add_argument("--dirsearch-threads", type=_positive_int, default=None, metavar="N",
-                         help="Threads per Dirsearch target (default: 5, hard cap: 50)")
+                         help="Threads per Dirsearch target (default: 30, hard cap: 50)")
     sp_scan.add_argument("--dirsearch-parallel", type=_positive_int, default=None, metavar="N",
-                         help="Dirsearch target processes in parallel (default: 2, hard cap: 20)")
+                         help="Dirsearch target processes in parallel (default: 20, hard cap: 20)")
     sp_scan.add_argument("--js-threads", type=_positive_int, default=None, metavar="N",
-                         help="JavaScript/path-analysis worker threads (default: 10, hard cap: 50)")
+                         help="JavaScript/path-analysis worker threads (default: 20, hard cap: 50)")
     sp_scan.add_argument("--connect-timeout", type=float, default=DEFAULT_CONNECT_TIMEOUT)
     sp_scan.add_argument("--port-retries", type=int, default=DEFAULT_PORT_RETRIES)
     # Resume UX (Phase 5). Default is AUTO-RESUME: the scan id is recomputed from

@@ -100,6 +100,16 @@ def _is_error_page(body: str, status: int) -> bool:
 
 _VERSION_RE = re.compile(r"[\d]+\.[\d]+", re.I)
 
+
+def _parse_csp(value: str) -> dict[str, list[str]]:
+    """Parse a CSP header into lower-cased directive/source tokens."""
+    directives: dict[str, list[str]] = {}
+    for chunk in (value or "").split(";"):
+        tokens = chunk.strip().split()
+        if tokens:
+            directives[tokens[0].lower()] = [token.lower() for token in tokens[1:]]
+    return directives
+
 async def check_security_headers(url: str, client: httpx.AsyncClient) -> list[dict]:
     findings: list[dict] = []
     try:
@@ -131,8 +141,11 @@ async def check_security_headers(url: str, client: httpx.AsyncClient) -> list[di
             ),
         ))
 
-    # Missing X-Frame-Options AND CSP (clickjacking)
-    if "x-frame-options" not in h and "content-security-policy" not in h:
+    csp_value = h.get("content-security-policy", "")
+    csp = _parse_csp(csp_value)
+
+    # Missing X-Frame-Options AND a CSP frame-ancestors directive.
+    if "x-frame-options" not in h and "frame-ancestors" not in csp:
         findings.append(_make_finding(
             **base,
             vulnerability="Missing Clickjacking Protection (X-Frame-Options / CSP)",
@@ -144,6 +157,30 @@ async def check_security_headers(url: str, client: httpx.AsyncClient) -> list[di
                 "clickjacking attacks that trick users into performing unintended actions."
             ),
         ))
+
+    if csp_value:
+        weak = []
+        for directive in ("script-src", "style-src", "default-src"):
+            sources = csp.get(directive, [])
+            if "'unsafe-inline'" in sources:
+                weak.append(f"{directive} permits 'unsafe-inline'")
+            if "'unsafe-eval'" in sources:
+                weak.append(f"{directive} permits 'unsafe-eval'")
+            if "*" in sources:
+                weak.append(f"{directive} permits wildcard (*) sources")
+        # A wildcard host such as https://* is broad too, but do not flag nonce,
+        # hash, scheme-only, or path sources merely because they contain '*'.
+        for directive, sources in csp.items():
+            if any(source.startswith(("http://*", "https://*", "*.")) for source in sources):
+                weak.append(f"{directive} permits wildcard host sources")
+        if weak:
+            findings.append(_make_finding(
+                **base,
+                vulnerability="Weak Content-Security-Policy Directives",
+                status="POTENTIAL",
+                severity="MEDIUM",
+                details="; ".join(dict.fromkeys(weak)) + f". Raw CSP: {csp_value}",
+            ))
 
     # Combine all INFO-level missing headers into a single finding to reduce noise
     _info_headers = {

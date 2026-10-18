@@ -25,6 +25,7 @@ import socket
 import httpx
 
 from modules import proc as proc_runner
+from modules.progress import heartbeat
 
 MODULE_NAME = 'ServiceRecon'
 
@@ -54,7 +55,9 @@ def _finding(status, severity, vulnerability, details, target, resolved_ip, port
 async def _run(cmd, timeout=30):
     """Run a command, return (stdout, stderr, returncode). None on exception."""
     try:
-        result = await proc_runner.run_tool(cmd, timeout=timeout)
+        tool = os.path.basename(str(cmd[0])) if cmd else "tool"
+        async with heartbeat("service_scans", f"service_recon: {tool}"):
+            result = await proc_runner.run_tool(cmd, timeout=timeout)
         return (result.stdout.decode('utf-8', errors='replace'),
                 result.stderr.decode('utf-8', errors='replace'),
                 result.returncode)
@@ -389,9 +392,10 @@ async def check_postgresql(host, port, target, resolved_ip):
             env = os.environ.copy()
             env['PGPASSWORD'] = 'postgres'
             try:
-                result = await proc_runner.run_tool(
-                    ['psql', '-h', host, '-p', str(port), '-U', 'postgres', '-c', r'\conninfo'],
-                    timeout=10, env=env)
+                async with heartbeat("service_scans", "service_recon: psql"):
+                    result = await proc_runner.run_tool(
+                        ['psql', '-h', host, '-p', str(port), '-U', 'postgres', '-c', r'\conninfo'],
+                        timeout=10, env=env)
                 stdout_bytes = result.stdout
                 if result.returncode == 0 and stdout_bytes:
                     out.append(_finding('VULNERABLE', 'CRITICAL', 'PostgreSQL Default Credentials (postgres:postgres)',

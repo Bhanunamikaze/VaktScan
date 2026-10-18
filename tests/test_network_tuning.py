@@ -9,8 +9,14 @@ import main
 class NetworkTuningTests(unittest.TestCase):
     def test_web_concurrency_respects_requested_value_and_ceiling(self):
         with mock.patch.dict(os.environ, {"VAKT_WEB_CONCURRENCY": "12"}, clear=False):
-            self.assertEqual(main._web_concurrency(8), 8)
+            self.assertEqual(main._web_concurrency(8), 12)
             self.assertEqual(main._web_concurrency(100), 12)
+
+    def test_web_concurrency_defaults_to_global_concurrency(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VAKT_WEB_CONCURRENCY", None)
+            self.assertEqual(main._web_concurrency(100), 100)
+            self.assertEqual(main._web_concurrency(37), 37)
 
     def test_cli_tuning_maps_to_module_environment(self):
         args = SimpleNamespace(

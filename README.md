@@ -2,10 +2,9 @@
 
 > *"vakt"* is the Nordic word for *"guard"* or *"watch"*.
 
-VaktScan is an async, high-throughput attack-surface / ASM scanner. Point it at a domain, IP, CIDR, or a mixed targets file and it runs the full pipeline - subdomain enumeration, passive recon (DNS, cloud, certificate-transparency, Google dorking), HTTP probing, service/CVE checks, JavaScript secret hunting, archived-URL weaponization, TLS posture, and multi-source vulnerability enrichment - concurrently, then writes de-duplicated findings and maintains a SQLite asset inventory with delta alerting.
+VaktScan is an async, high-throughput attack-surface / ASM scanner. Point it at a domain, IP, CIDR, or a mixed targets file and it runs the full pipeline - subdomain enumeration, passive recon (DNS, cloud, certificate-transparency, Google dorking), HTTP probing, service/CVE checks, JavaScript secret hunting, archived-URL weaponization, TLS posture, and multi-source vulnerability enrichment - then writes de-duplicated findings and maintains a SQLite asset inventory with delta alerting. Independent passive collectors run concurrently; request-heavy web scanners run one tool at a time at high per-tool concurrency.
 
 Every external tool it drives is **optional**: if a binary is missing, that stage is skipped gracefully and the rest of the scan continues.
-
 
 ## Key Features
 
@@ -22,7 +21,7 @@ Every external tool it drives is **optional**: if a binary is missing, that stag
 - **Port scanning + service modules** - async TCP scan, then per-service CVE modules (Elasticsearch, Kibana, Grafana, Prometheus, Next.js, AEM, cPanel/WHM, Jenkins, plus a broad `service_recon` covering 80+ ports) and `testssl.sh` TLS posture.
 - **Nmap CVE scripts** - `nmap --script vuln,vulners` runs **only on the open ports the port scanner already found** (no separate full 1-65535 sweep), gated behind `--nmap`.
 - **Enrichment & version-based CVEs** - maps product+version (service banners, `Server`/`X-Powered-By` headers, webanalyze/whatweb tech detection) to CVEs via a local **offline NVD CVE database** (daily-refreshable, live-API fallback), cross-referenced with CISA KEV + EPSS, plus Shodan/Censys passive intel. JavaScript libraries are covered separately by the Retire.js scanner.
-- **Reporting & state** - CSV + HTML reports are **always** written to `reports/`; JSON and SARIF 2.1 are opt-in. A SQLite inventory tracks assets and emits "new vs resolved" deltas, and `notify.py` sends Slack/Discord/webhook/email alerts on new findings (env-gated).
+- **Reporting & state** - CSV plus a self-contained, searchable unified HTML report are **always** written to `reports/`; JSON and SARIF 2.1 are opt-in. The HTML report combines assets, HTTP services, findings, directory discoveries, and raw tool artifacts on one navigable page. A SQLite inventory tracks assets and emits "new vs resolved" deltas, and `notify.py` sends Slack/Discord/webhook/email alerts on new findings (env-gated).
 - **Opt-in expansions** - screenshots, parameter discovery, favicon (mmh3) + JARM pivots, confirmed default-credential checks, and horizontal/infra expansion (asnmap, reverse-DNS, amass intel). *(Technology fingerprint + EOL + web-tech CVE now runs by default; use `--no-tech` to disable, or `--tech-only` for a fingerprint+CVE-only pass.)*
 - **Scale features** - streaming mode for large CIDRs, **resumable scans** (auto-resume for any target type - domain/IP/CIDR/file - with graceful Ctrl+C shutdown that checkpoints progress to `.vaktscan/state/` and cleanly terminates every running tool), IPv6, proxy support, and a live multi-row progress dashboard.
 
@@ -137,16 +136,12 @@ flowchart TD
     HYG --> HZ["Horizontal expand (--horizontal)<br/>asnmap · reverse-DNS · amass intel"]
     HZ --> PROBE["Web-port scan -> httpx probe -> alive URLs"]
 
-    subgraph WEB ["Stage 2 · web analysis on alive URLs (parallel)"]
-        direction LR
-        DS["domain_scan<br/>classify · takeover · CORS · headers"]
-        DIR["dirsearch"]
-        NUC["nuclei"]
-        WC["web_checks"]
-        JS["js_paths secrets"]
-    end
-    PROBE --> WEB
-    WEB --> OPT["Optional per-flag: screenshots ·<br/>params · favicon · tech · default-creds"]
+    PROBE --> DS["domain_scan<br/>classify · takeover · CORS · headers"]
+    DS --> WC["web_checks"]
+    WC --> JS["js_paths secrets"]
+    JS --> NUC["nuclei"]
+    NUC --> DIR["dirsearch"]
+    DIR --> OPT["Optional per-flag: screenshots ·<br/>params · favicon · tech · default-creds"]
     OPT --> ARCH["gau + waybackurls -> archived-URL weaponization"]
 
     ARCH --> PS2["Full port scan<br/>(all service ports + --ports)"]
@@ -215,6 +210,13 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 |---|---|---|
 | `target` | - | Domain, IP, CIDR, or a targets file (positional) |
 | `-c`, `--concurrency` | `100` | Concurrent connections |
+| `--web-concurrency` | value of `-c` | HTTP-stage concurrency (heavy tools remain serialized) |
+| `--nuclei-concurrency` | `50` | Nuclei template concurrency |
+| `--nuclei-rate-limit` | `150` | Nuclei requests per second |
+| `--nuclei-bulk-size` | `100` | Nuclei hosts processed in parallel |
+| `--dirsearch-threads` | `30` | Threads per Dirsearch target |
+| `--dirsearch-parallel` | `20` | Dirsearch target processes in parallel |
+| `--js-threads` | `20` | JavaScript/path-analysis workers |
 | `--connect-timeout` | tool default | TCP connect timeout (seconds) |
 | `--port-retries` | tool default | Port-scan connect retries |
 | `-r`, `--resume` | off | Require + resume an existing checkpointed scan (errors if none). Scans **auto-resume by target** by default |

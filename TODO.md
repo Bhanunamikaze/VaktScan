@@ -3,9 +3,10 @@
 Current pipeline: subcommand CLI (scan / enum / probe / dns / cloud / js-paths / google-dork)
 → subdomain enum → scope filter (`--exclude` → `--include-only` → `--company-only`)
 → DNS hygiene + dangling-CNAME takeover → DNS recon + cloud enum + CT monitor (parallel)
-→ port scan → httpx → web checks → nuclei → service vuln checks → dirsearch → gau/wayback
+→ port scan → httpx → domain scan → web checks → JS paths → nuclei → dirsearch (heavy web tools serial)
+→ service vuln checks → gau/wayback
 → archived-URL scan → JS paths → NVD/EPSS/CISA-KEV enrichment → Nmap CVE scripts (open ports only)
-→ inventory delta → CSV + HTML (always) / JSON / SARIF (opt-in).
+→ inventory delta → CSV + unified searchable HTML (always) / JSON / SARIF (opt-in).
 
 Everything in the original roadmap (false-positive oracles, service/recon checks, CLI redesign,
 SSL/TLS, extra security modules, orchestration §12, ASM roadmap §13 HIGH/MEDIUM, HTML report,
@@ -14,16 +15,15 @@ scope control, asset classifier) is shipped. Only the items below are still open
 ---
 
 ## Documentation
-- [ ] Add a screenshot / GIF of a real scan run to README.
+- [x] Add a screenshot / GIF of a real scan run to README. (`docs/scan-resume.png`)
 
 ## Progress-feedback follow-ups (deferred from the frozen-dashboard fix)
-- [ ] Per-tool heartbeats in the recon phase - ffuf vhost fuzz, `testssl` (300s silent/host),
-      and `service_recon` shell-outs still run without a live task update. Needs `main.py` task
-      wiring (these are silent-but-working, not frozen-dashboard bugs).
+- [x] Per-tool heartbeats in the recon phase - ffuf vhost fuzz, `testssl` (300s silent/host),
+      and `service_recon` shell-outs now update live dashboard tasks.
 
 ## Recon breadth
-- [ ] Email security (extend `dns_recon`): MX record banner grabbing (mail server version),
-      SMTP open-relay test, BIMI record check.
+- [x] Email security: MX record banner grabbing, SMTP open-relay tests, and BIMI checks are
+      implemented in `dns_recon` and run from the standard DNS scan.
 
 ## Resume
 - [x] Make an *interrupted* web-probe itself resumable - DONE. The web-probe is now a
@@ -33,10 +33,11 @@ scope control, asset classifier) is shipped. Only the items below are still open
       entirely. Hostname attribution on resume was already fixed. (Closes B8.)
 
 ## Horizontal expansion follow-up
-- [ ] Feed `reverse_hosts` / `related_domains` from `horizontal_expand` back into the live-host
-      pipeline to compound scope (currently reported but not re-scanned).
+- [x] Feed `reverse_hosts` / `related_domains` from `horizontal_expand` back into the live-host
+      pipeline, with checkpoint payload reuse on resume.
 
 ## LOW
-- [ ] Integrate raw dirsearch/gau/wayback outputs into the unified findings/inventory/SARIF pipeline.
-- [ ] Cloud provider breadth (DigitalOcean Spaces, Alibaba OSS, non-Blob Azure).
-- [ ] CSP directive analysis (`unsafe-inline`, wildcard sources, missing `frame-ancestors`).
+- [x] Integrate Dirsearch/GAU/Wayback discoveries into findings/inventory/SARIF as compact
+      per-target summaries; retain every raw URL in the unified HTML artifacts.
+- [x] Cloud provider breadth: DigitalOcean Spaces, Alibaba OSS, and non-Blob Azure services.
+- [x] CSP directive analysis (`unsafe-inline`, `unsafe-eval`, wildcard sources, missing `frame-ancestors`).

@@ -12,6 +12,7 @@ import tempfile
 from datetime import datetime, timezone
 
 from modules import proc as proc_runner
+from modules.progress import heartbeat
 from modules.schema import validate_finding
 
 MODULE_NAME = "testssl"
@@ -185,7 +186,8 @@ async def run_scans(target_obj, port, **_):
         ]
 
         # Run the scan (buffered) with a per-host timeout of 5 minutes
-        result = await proc_runner.run_tool(cmd, timeout=300)
+        async with heartbeat("service_scans", f"testssl {display}:{port}"):
+            result = await proc_runner.run_tool(cmd, timeout=300)
         stdout, stderr = result.stdout, result.stderr
         
         if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:

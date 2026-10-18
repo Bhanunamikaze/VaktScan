@@ -10,7 +10,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from modules import proc
-from modules.progress import DashboardProgress
+from modules.progress import DashboardProgress, heartbeat
 from utils import select_unique_host_urls
 
 
@@ -117,12 +117,21 @@ class DirEnumerator:
         )
 
         print(f"{Colors.CYAN}[*] Running ffuf for active vhost fuzzing (DirEnumerator)...{Colors.RESET}")
+        dashboard = None
+        if _dashboard_active():
+            from modules.dashboard import LiveDashboard
+            dashboard = LiveDashboard()
+            dashboard.add_task("ffuf", "FFUF Vhost Fuzz")
         try:
-            result = await proc.run_tool(cmd)
+            async with heartbeat("ffuf", "Fuzzing virtual hosts", dashboard=dashboard):
+                result = await proc.run_tool(cmd)
             stderr = result.stderr
         except Exception as exc:
             print(f"{Colors.RED}[!] Error starting ffuf: {exc}{Colors.RESET}")
             return []
+        finally:
+            if dashboard is not None:
+                dashboard.complete_task("ffuf")
 
         if not os.path.exists(outfile):
             if stderr:
@@ -226,10 +235,9 @@ class DirEnumerator:
         """
         Runs dirsearch against a list of alive URLs with limited parallel execution.
 
-        The old defaults (20 targets x 30 threads) could create roughly 600
-        simultaneous connections and exhaust a workstation/router connection
-        table.  Keep the safe defaults deliberately conservative; operators on
-        larger links can opt in to more throughput with the environment knobs.
+        Heavy tools are orchestrated serially, so preserve Dirsearch's original
+        high-throughput pool without overlapping Nuclei or the other
+        request-amplifying stages.
         """
         if not urls:
             print(f"{Colors.YELLOW}[!] No HTTP services provided to dirsearch.{Colors.RESET}")
@@ -250,9 +258,9 @@ class DirEnumerator:
             except (TypeError, ValueError):
                 return default
 
-        threads = _setting(threads, "VAKT_DIRSEARCH_THREADS", 5, 50)
+        threads = _setting(threads, "VAKT_DIRSEARCH_THREADS", 30, 50)
         max_parallel = _setting(
-            parallel_targets, "VAKT_DIRSEARCH_PARALLEL_TARGETS", 2, 20
+            parallel_targets, "VAKT_DIRSEARCH_PARALLEL_TARGETS", 20, 20
         )
         unique_urls = select_unique_host_urls(urls)
         semaphore = asyncio.Semaphore(max_parallel)

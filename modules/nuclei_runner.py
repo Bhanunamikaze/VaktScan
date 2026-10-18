@@ -124,13 +124,12 @@ class NucleiRunner:
             except (TypeError, ValueError):
                 return default
 
-        # Conservative defaults protect laptops and small NAT routers from the
-        # connection storm produced by the previous 150 RPS / concurrency 50
-        # settings.  Environment overrides remain bounded to prevent accidental
-        # unbounded scans.
-        nuclei_concurrency = _bounded_env("VAKT_NUCLEI_CONCURRENCY", 10, 100)
-        nuclei_rate = _bounded_env("VAKT_NUCLEI_RATE_LIMIT", 25, 500)
-        nuclei_bulk = _bounded_env("VAKT_NUCLEI_BULK_SIZE", 20, 100)
+        # Preserve the scanner's established high-throughput defaults.  Network
+        # safety comes from running heavy tools one at a time, rather than
+        # throttling each tool to workstation-scale throughput.
+        nuclei_concurrency = _bounded_env("VAKT_NUCLEI_CONCURRENCY", 50, 100)
+        nuclei_rate = _bounded_env("VAKT_NUCLEI_RATE_LIMIT", 150, 500)
+        nuclei_bulk = _bounded_env("VAKT_NUCLEI_BULK_SIZE", 100, 100)
 
         cmd = [
             self.binary,
