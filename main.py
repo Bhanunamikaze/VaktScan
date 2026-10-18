@@ -744,13 +744,15 @@ async def run_recon_followups(
     # concurrency. This preserves high throughput without stacking two process
     # pools and their outbound connections on top of one another.
     domain_hosts = collect_domain_hosts(alive_urls)
+    archive_roots = _archive_query_roots(domain_hosts)
     if domain_hosts and not (
         _tool_skipped(skip_tools, "gau")
         and _tool_skipped(skip_tools, "waybackurls")
     ):
         print(
             f"{Colors.CYAN}[*] Harvesting archived URLs for {len(domain_hosts)} host(s) "
-            f"(GAU then Wayback, up to {web_concurrency} hosts per tool)...{Colors.RESET}"
+            f"via {len(archive_roots)} registrable apex query/queries "
+            f"(GAU then Wayback; both include subdomains)...{Colors.RESET}"
         )
         gau_inst = gau_runner.GAURunner(
             output_dir=output_dir, concurrency=web_concurrency
@@ -768,11 +770,11 @@ async def run_recon_followups(
         try:
             gau_result = (
                 {} if _tool_skipped(skip_tools, "gau")
-                else await _capture_stage(gau_inst.run(domain_hosts))
+                else await _capture_stage(gau_inst.run(archive_roots))
             )
             wayback_result = (
                 {} if _tool_skipped(skip_tools, "waybackurls")
-                else await _capture_stage(wayback_inst.run(domain_hosts))
+                else await _capture_stage(wayback_inst.run(archive_roots))
             )
         finally:
             if dashboard.active:
@@ -1060,6 +1062,20 @@ def _registrable_domain(host):
     if ".".join(labels[-2:]) in _MULTI_LABEL_TLDS and len(labels) >= 3:
         return ".".join(labels[-3:])
     return ".".join(labels[-2:])
+
+
+def _archive_query_roots(hosts):
+    """Collapse discovered hosts to one archive query per registrable apex.
+
+    Both ``gau --subs`` and waybackurls' default mode include subdomains. Running
+    either command once for every discovered subdomain therefore repeats the
+    same provider queries and can create hundreds of needless processes and
+    sockets without increasing coverage.
+    """
+    return sorted({
+        root for root in (_registrable_domain(host) for host in (hosts or ()))
+        if root
+    })
 
 
 # Number of URLs to fully probe before persisting a web-probe checkpoint. Sized

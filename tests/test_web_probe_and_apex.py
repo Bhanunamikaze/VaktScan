@@ -28,6 +28,15 @@ class RegistrableDomainTest(unittest.TestCase):
             with self.subTest(host=host):
                 self.assertEqual(main._registrable_domain(host), expected)
 
+    def test_archive_queries_are_collapsed_to_registrable_apexes(self):
+        self.assertEqual(
+            main._archive_query_roots([
+                "a.example.com", "b.example.com", "deep.example.co.uk",
+                "other.example.co.uk",
+            ]),
+            ["example.co.uk", "example.com"],
+        )
+
 
 class WebPortSetTest(unittest.TestCase):
     def test_includes_custom_ports(self):
