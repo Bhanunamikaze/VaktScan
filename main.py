@@ -9,6 +9,7 @@ import re
 import signal
 import time
 import traceback
+from urllib.parse import urlparse
 
 # Load .env if present (optional dependency - silently skipped if not installed)
 try:
@@ -990,15 +991,42 @@ def _recover_recon_http_results(domain, output_dir, state_manager):
     try:
         with open(source, newline="", encoding="utf-8", errors="replace") as handle:
             for row in csv.DictReader(handle):
-                url = (row.get("URL") or "").strip()
+                url = (row.get("Source URL") or row.get("URL") or "").strip()
                 if not url:
                     continue
+                parsed_url = urlparse(url if "://" in url else f"//{url}")
+                row_domain = (row.get("Domain") or "").strip()
+                # Legacy CSVs derived Domain by splitting a full URL on ':',
+                # producing the bogus values "http" / "https".  Prefer the
+                # source URL hostname so old checkpoints recover cleanly too.
+                source_host = parsed_url.hostname or row_domain
+                if row_domain and row_domain.lower() not in {"http", "https", "n/a"}:
+                    source_host = row_domain
+
+                ip_value = (row.get("IP Address") or "").strip()
+                try:
+                    ipaddress.ip_address(ip_value)
+                except ValueError:
+                    # The old exporter put the hostname in the IP column.
+                    host_ip = ""
+                    if not source_host and ip_value.lower() != "n/a":
+                        source_host = ip_value
+                else:
+                    host_ip = ip_value
                 rows.append({
-                    "input": (row.get("Domain") or "").strip(),
+                    "input": url,
                     "url": url,
-                    "host": (row.get("IP Address") or "").strip(),
+                    "source_url": url,
+                    "final_url": (row.get("Final URL") or url).strip(),
+                    "host": source_host,
+                    "host_ip": host_ip,
                     "port": (row.get("Port") or "").strip(),
                     "status_code": (row.get("Status Code") or "").strip(),
+                    "chain_status_codes": [
+                        int(code.strip()) if code.strip().isdigit() else code.strip()
+                        for code in (row.get("Redirect Status Chain") or "").split("->")
+                        if code.strip()
+                    ],
                     "title": row.get("Title") or "",
                     "tech": [item for item in (row.get("Technologies") or "").split(",") if item],
                 })

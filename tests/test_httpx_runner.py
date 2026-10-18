@@ -1,4 +1,5 @@
 import asyncio
+import csv
 import json
 import os
 import shutil
@@ -195,6 +196,81 @@ class HTTPXRunnerTests(unittest.IsolatedAsyncioTestCase):
             help_text = runner._get_help_output("/fake/httpx")
 
         self.assertEqual(help_text, "stdout textstderr text")
+
+    def test_save_csv_distinguishes_source_endpoint_from_redirect_destination(self):
+        tmp = tempfile.mkdtemp(prefix="vaktscan_httpx_csv_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        with patch.object(HTTPXRunner, "_resolve_binary", return_value=None):
+            runner = HTTPXRunner(output_dir=tmp)
+
+        output = runner.save_csv([{
+            "input": "http://ads.example.com:2082",
+            "url": "http://ads.example.com:2082",
+            "host": "ads.example.com",
+            "host_ip": "192.0.2.10",
+            "port": "2082",
+            "final_url": "https://www.example.com/",
+            "chain_status_codes": [301, 301, 200],
+            "status_code": 200,
+            "title": "Example site",
+            "tech": ["Cloudflare", "WordPress"],
+        }], "redirect")
+
+        with open(output, newline="", encoding="utf-8") as handle:
+            row = next(csv.DictReader(handle))
+
+        self.assertEqual(row["IP Address"], "192.0.2.10")
+        self.assertEqual(row["Domain"], "ads.example.com")
+        self.assertEqual(row["Port"], "2082")
+        self.assertEqual(row["URL"], "http://ads.example.com:2082")
+        self.assertEqual(row["Source URL"], "http://ads.example.com:2082")
+        self.assertEqual(row["Final URL"], "https://www.example.com/")
+        self.assertEqual(row["Redirect Status Chain"], "301 -> 301 -> 200")
+        self.assertEqual(row["Status Code"], "200")
+        self.assertEqual(row["Title"], "Example site")
+        self.assertEqual(row["Technologies"], "Cloudflare,WordPress")
+
+    async def test_library_fallback_keeps_sources_that_share_a_final_url(self):
+        tmp = tempfile.mkdtemp(prefix="vaktscan_httpx_library_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        with patch.object(HTTPXRunner, "_resolve_binary", return_value=None):
+            runner = HTTPXRunner(output_dir=tmp)
+
+        class Response:
+            def __init__(self, source):
+                self.url = "https://www.example.com/"
+                self.status_code = 200
+                self.history = [MagicMock(status_code=301)]
+                self.text = "<title>Example site</title>"
+                self.headers = {"server": "cloudflare"}
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def get(self, source):
+                return Response(source)
+
+        targets = [
+            "http://ads.example.com:2082",
+            "http://ads.example.com:8880",
+        ]
+        with patch("modules.httpx_runner.python_httpx.AsyncClient", return_value=Client()):
+            results = await runner._run_httpx_library(targets, concurrency=2)
+
+        self.assertEqual([item["url"] for item in results], targets)
+        self.assertEqual(
+            [item["final_url"] for item in results],
+            ["https://www.example.com/", "https://www.example.com/"],
+        )
+        self.assertEqual(
+            [item["port"] for item in results],
+            [2082, 8880],
+        )
+        self.assertEqual(results[0]["chain_status_codes"], [301, 200])
 
 
 if __name__ == "__main__":

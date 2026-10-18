@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import ipaddress
 import json
 import math
 import os
@@ -339,26 +340,37 @@ class HTTPXRunner:
                             _print_httpx_progress(completed, total, len(results), progress_step)
                         return
 
+                    source_url = target
                     final_url = str(response.url)
                     completed += 1
                     if dashboard.active:
                         dashboard.update_task("httpx", completed=completed, status=_library_status())
                     else:
                         _print_httpx_progress(completed, total, len(results), progress_step)
-                    if final_url in seen_urls:
+                    # Keep every distinct source endpoint in inventory even when
+                    # several ports/hosts redirect to the same canonical page.
+                    # ProjectDiscovery httpx uses this same source-url meaning
+                    # for its ``url`` field when redirects are followed.
+                    if source_url in seen_urls:
                         return
-                    seen_urls.add(final_url)
+                    seen_urls.add(source_url)
 
-                    parsed = urlparse(final_url)
-                    input_parsed = urlparse(target)
+                    parsed = urlparse(source_url)
+                    input_parsed = parsed
                     input_value = input_parsed.netloc or input_parsed.path or target
                     port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                    chain_status_codes = [
+                        redirect.status_code for redirect in response.history
+                    ] + [response.status_code]
                     results.append({
                         "input": input_value,
-                        "url": final_url,
+                        "url": source_url,
+                        "source_url": source_url,
+                        "final_url": final_url,
                         "host": parsed.hostname or "",
                         "port": port,
                         "status_code": response.status_code,
+                        "chain_status_codes": chain_status_codes,
                         "title": self._extract_title(response.text),
                         "tech": self._extract_tech(response),
                     })
@@ -397,7 +409,16 @@ class HTTPXRunner:
 
     def save_csv(self, httpx_data, domain_label):
         """
-        Saves parsed httpx data to CSV with columns: IP, Domain, Port, etc.
+        Save parsed httpx data while keeping source and redirect attribution
+        explicit.
+
+        ProjectDiscovery httpx deliberately leaves ``url``, ``host``, and
+        ``port`` pointing at the probed source endpoint when
+        ``-follow-redirects`` is enabled, while the status/title/technology
+        fields describe the terminal response.  Preserve that source inventory
+        and expose the terminal URL and compact status-only redirect chain in
+        separate columns.  Raw chain requests/responses are intentionally not
+        requested or stored because they can contain cookies or credentials.
         """
         if not httpx_data:
             return None
@@ -406,9 +427,13 @@ class HTTPXRunner:
         filename = f"httpx_alive_{domain_label}_{timestamp}.csv"
         filepath = os.path.join(self.output_dir, filename)
         
-        # requested columns: IP, Domain, Port
-        # added useful context: URL, Status, Title
-        headers = ['IP Address', 'Domain', 'Port', 'URL', 'Status Code', 'Title', 'Technologies']
+        # ``URL`` remains the source URL for backwards compatibility with scan
+        # resume and downstream consumers.  ``Source URL`` makes that contract
+        # unambiguous to humans reading the CSV.
+        headers = [
+            'IP Address', 'Domain', 'Port', 'URL', 'Source URL', 'Final URL',
+            'Redirect Status Chain', 'Status Code', 'Title', 'Technologies',
+        ]
 
         try:
             with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
@@ -416,25 +441,50 @@ class HTTPXRunner:
                 writer.writerow(headers)
                 
                 for entry in httpx_data:
-                    # Extract Data
-                    ip = entry.get('host', 'N/A')
-                    port = entry.get('port', '')
-                    url = entry.get('url', '')
+                    source_url = str(
+                        entry.get('source_url')
+                        or entry.get('url')
+                        or entry.get('input')
+                        or ''
+                    ).strip()
+                    parse_value = source_url
+                    if parse_value and '://' not in parse_value:
+                        parse_value = f'//{parse_value}'
+                    parsed = urlparse(parse_value)
+
+                    domain = parsed.hostname or str(entry.get('host') or '').strip() or 'N/A'
+                    try:
+                        parsed_port = parsed.port
+                    except ValueError:
+                        parsed_port = None
+                    port = parsed_port or entry.get('port', '')
+
+                    ip = str(entry.get('host_ip') or entry.get('ip') or '').strip()
+                    if not ip and domain != 'N/A':
+                        try:
+                            ipaddress.ip_address(domain)
+                        except ValueError:
+                            pass
+                        else:
+                            ip = domain
+                    if not ip:
+                        ip = 'N/A'
+
+                    final_url = str(entry.get('final_url') or source_url).strip()
+                    status_chain = entry.get('chain_status_codes') or []
+                    if isinstance(status_chain, (list, tuple)):
+                        status_chain = ' -> '.join(str(code) for code in status_chain)
+                    else:
+                        status_chain = str(status_chain)
                     title = entry.get('title', '')
                     status = entry.get('status_code', '')
-                    tech = ",".join(entry.get('tech', []))
-                    
-                    # Extract Domain
-                    domain = 'N/A'
-                    if 'input' in entry:
-                         # input is usually "domain:port"
-                         parts = entry['input'].split(':')
-                         domain = parts[0]
-                    elif url:
-                        parsed = urlparse(url)
-                        domain = parsed.hostname
+                    technologies = entry.get('tech', [])
+                    tech = technologies if isinstance(technologies, str) else ",".join(technologies)
 
-                    writer.writerow([ip, domain, port, url, status, title, tech])
+                    writer.writerow([
+                        ip, domain, port, source_url, source_url, final_url,
+                        status_chain, status, title, tech,
+                    ])
             
             print(f"\033[92m[+] Alive services CSV saved to: \033[1m{filepath}\033[0m")
             return filepath

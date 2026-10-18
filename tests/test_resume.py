@@ -19,6 +19,7 @@ Everything here is fully offline: network/subprocess collaborators are mocked.
 """
 
 import asyncio
+import csv
 import json
 import os
 import shutil
@@ -216,6 +217,85 @@ class WebUrlCheckpointStateTest(_TempCwd):
         self.assertTrue(mgr2.load_existing_state())
         self.assertEqual(mgr2.get_completed_web_urls(),
                          {"http://a:80", "https://a:443", "http://b:80"})
+
+
+class RecoverReconHttpResultsTest(unittest.TestCase):
+    class State:
+        def __init__(self):
+            self.state = {"phase": "recon", "start_time": 0}
+            self.saved = None
+
+        def get_recon_http_results(self, domain):
+            return None
+
+        def mark_recon_http_done(self, domain, alive_urls, rows):
+            self.saved = (domain, alive_urls, rows)
+
+        def mark_recon_stage_done(self, domain, stage):
+            pass
+
+    def test_recovers_explicit_source_and_final_redirect_fields(self):
+        output_dir = tempfile.mkdtemp(prefix="vaktscan_resume_httpx_")
+        self.addCleanup(shutil.rmtree, output_dir, ignore_errors=True)
+        path = os.path.join(output_dir, "httpx_alive_onit_com_20261018_063007.csv")
+        with open(path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=[
+                "IP Address", "Domain", "Port", "URL", "Source URL",
+                "Final URL", "Redirect Status Chain", "Status Code",
+                "Title", "Technologies",
+            ])
+            writer.writeheader()
+            writer.writerow({
+                "IP Address": "192.0.2.10",
+                "Domain": "ads.onit.com",
+                "Port": "2082",
+                "URL": "http://ads.onit.com:2082",
+                "Source URL": "http://ads.onit.com:2082",
+                "Final URL": "https://www.onit.com/",
+                "Redirect Status Chain": "301 -> 301 -> 200",
+                "Status Code": "200",
+                "Title": "Onit",
+                "Technologies": "Cloudflare,WordPress",
+            })
+
+        state = self.State()
+        alive_urls, rows = main._recover_recon_http_results(
+            "onit.com", output_dir, state
+        )
+
+        self.assertEqual(alive_urls, ["http://ads.onit.com:2082"])
+        self.assertEqual(rows[0]["host"], "ads.onit.com")
+        self.assertEqual(rows[0]["host_ip"], "192.0.2.10")
+        self.assertEqual(rows[0]["final_url"], "https://www.onit.com/")
+        self.assertEqual(rows[0]["chain_status_codes"], [301, 301, 200])
+
+    def test_legacy_misattributed_columns_are_recovered_from_source_url(self):
+        output_dir = tempfile.mkdtemp(prefix="vaktscan_resume_httpx_legacy_")
+        self.addCleanup(shutil.rmtree, output_dir, ignore_errors=True)
+        path = os.path.join(output_dir, "httpx_alive_onit_com_20261018_063007.csv")
+        with open(path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=[
+                "IP Address", "Domain", "Port", "URL", "Status Code",
+                "Title", "Technologies",
+            ])
+            writer.writeheader()
+            writer.writerow({
+                "IP Address": "ads.onit.com",
+                "Domain": "http",
+                "Port": "2082",
+                "URL": "http://ads.onit.com:2082",
+                "Status Code": "200",
+                "Title": "Onit",
+                "Technologies": "Cloudflare,WordPress",
+            })
+
+        result = main._recover_recon_http_results(
+            "onit.com", output_dir, self.State()
+        )
+
+        self.assertEqual(result[1][0]["host"], "ads.onit.com")
+        self.assertEqual(result[1][0]["host_ip"], "")
+        self.assertEqual(result[1][0]["final_url"], "http://ads.onit.com:2082")
 
 
 # ---------------------------------------------------------------------------

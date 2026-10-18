@@ -338,7 +338,7 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `scan_results_*.json` | `--format json` / `all` | Same findings as JSON |
 | `scan_results_*.sarif` | `--format sarif` / `all`, or `--sarif FILE` | SARIF 2.1 for GitHub/GitLab security tabs |
 | `portscan_results_*.csv` | port scan | Open ports per host |
-| `httpx_*.csv` | probing | Alive URLs: status, title, tech |
+| `httpx_*.csv` | probing | Alive source endpoints, resolved IPs, final redirect URLs/status chains, status, title, tech |
 | `domain_scan_vulns_*.csv` | `scan --posture` | Classification / takeover / CORS / header findings |
 | `company_assets.txt` / `customer_sites.txt` | `--company-only` | The company-vs-customer subdomain split |
 | `excluded_subdomains.txt` | `--exclude` | Subdomains matched by exclusion patterns (listed, not scanned) |
