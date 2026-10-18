@@ -14,8 +14,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from modules import domain_scan  # noqa: E402
 
 
-def _entry(url='https://orphan.example.com/'):
-    return {
+def _entry(url='https://orphan.example.com/', cname=None):
+    entry = {
         'url': url,
         'input': url,
         'host': '203.0.113.10',
@@ -25,6 +25,9 @@ def _entry(url='https://orphan.example.com/'):
         'webserver': 'cloudfront',
         'content_length': 0,
     }
+    if cname:
+        entry['cname'] = [cname]
+    return entry
 
 
 class TakeoverDetectionTests(unittest.TestCase):
@@ -43,7 +46,9 @@ class TakeoverDetectionTests(unittest.TestCase):
 
     def test_github_pages_takeover_detected(self):
         body = "<html>There isn't a GitHub Pages site here.</html>"
-        finding = self.scanner.detect_takeover_from_response(_entry(), 404, body)
+        finding = self.scanner.detect_takeover_from_response(
+            _entry(cname='orphan.github.io'), 404, body
+        )
         self.assertIsNotNone(finding)
         self.assertIn('GitHub Pages', finding['vulnerability'])
         self.assertEqual(finding['status'], 'CRITICAL')
@@ -51,15 +56,16 @@ class TakeoverDetectionTests(unittest.TestCase):
         for key in ('module', 'target', 'url', 'details', 'severity', 'http_status'):
             self.assertIn(key, finding)
 
-    def test_cpanel_orphan_takeover_detected(self):
+    def test_cpanel_default_page_is_not_claimability_evidence(self):
         body = '<title>Default Web Site Page</title><body>nothing here</body>'
         finding = self.scanner.detect_takeover_from_response(_entry(), 200, body)
-        self.assertIsNotNone(finding)
-        self.assertIn('cPanel orphan', finding['vulnerability'])
+        self.assertIsNone(finding)
 
     def test_aws_s3_takeover_detected(self):
         body = "<Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message>"
-        finding = self.scanner.detect_takeover_from_response(_entry(), 404, body)
+        finding = self.scanner.detect_takeover_from_response(
+            _entry(cname='missing-bucket.s3.amazonaws.com'), 404, body
+        )
         self.assertIsNotNone(finding)
         self.assertIn('AWS S3', finding['vulnerability'])
         self.assertEqual(finding['status'], 'CRITICAL')
@@ -70,10 +76,18 @@ class TakeoverDetectionTests(unittest.TestCase):
         # No vendor marker → must not fire.
         self.assertIsNone(finding)
 
+    def test_vendor_body_without_matching_cname_is_not_reported(self):
+        body = "<html>There isn't a GitHub Pages site here.</html>"
+        self.assertIsNone(
+            self.scanner.detect_takeover_from_response(_entry(), 404, body)
+        )
+
     def test_status_code_gate_holds(self):
         body = "There isn't a GitHub Pages site here."
         # GitHub Pages signature is valid for 200/404; 500 must NOT fire.
-        self.assertIsNone(self.scanner.detect_takeover_from_response(_entry(), 500, body))
+        self.assertIsNone(self.scanner.detect_takeover_from_response(
+            _entry(cname='orphan.github.io'), 500, body
+        ))
 
 
 if __name__ == '__main__':

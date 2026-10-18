@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -112,6 +112,39 @@ TAKEOVER_SIGNATURES = [
     ("Campaign Monitor", "Trying to send email?",                                              (200, 404),       "HIGH"),
 ]
 
+# An HTTP error-page fingerprint is not sufficient evidence of a dangling DNS
+# record.  Require the target's CNAME to point at the matching provider before
+# reporting a takeover candidate.  The hints are deliberately conservative;
+# providers without a stable, claimable CNAME pattern are not auto-reported.
+TAKEOVER_CNAME_HINTS = {
+    "GitHub Pages": ("github.io",),
+    "AWS S3": ("s3.amazonaws.com", "s3-website"),
+    "Heroku": ("herokudns.com", "herokuapp.com"),
+    "Shopify": ("myshopify.com",),
+    "Pantheon": ("pantheonsite.io",),
+    "Surge.sh": ("surge.sh",),
+    "Tumblr": ("domains.tumblr.com",),
+    "UserVoice": ("uservoice.com",),
+    "Uservoice": ("uservoice.com",),
+    "WordPress.com": ("wordpress.com",),
+    "Fastly": ("fastly.net", "fastlylb.net"),
+    "Cloudfront": ("cloudfront.net",),
+    "Webflow": ("proxy-ssl.webflow.com", "webflow.io"),
+    "Unbounce": ("unbouncepages.com",),
+    "Vercel": ("vercel-dns.com", "vercel.app"),
+    "Netlify": ("netlify.app", "netlify.com"),
+    "Azure": ("azurewebsites.net", "cloudapp.azure.com", "trafficmanager.net"),
+    "Read the Docs": ("readthedocs.io",),
+    "Help Scout": ("helpscoutdocs.com",),
+    "Statuspage": ("statuspage.io",),
+    "Zendesk": ("zendesk.com",),
+    "Kinsta": ("kinsta.cloud",),
+    "Thinkific": ("thinkific.com",),
+    "Wpengine": ("wpengine.com", "wpenginepowered.com"),
+    "Fly.io": ("fly.dev",),
+    "Readme.io": ("readme.io",),
+}
+
 class SubResourceParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -177,8 +210,18 @@ class DomainScanner:
             print(f"{Colors.RED}[!] Failed to save classification CSV: {e}{Colors.RESET}")
             return ""
 
-    def _create_vuln_entry(self, httpx_entry: dict, finding_name: str, status: str, severity: str, details: str) -> dict:
-        url = httpx_entry.get('url', '')
+    def _create_vuln_entry(
+        self, httpx_entry: dict, finding_name: str, status: str,
+        severity: str, details: str, *, evidence_url: str | None = None,
+        http_status=None, page_title=None, content_length=None,
+    ) -> dict:
+        """Create a canonical finding using the URL that produced the evidence.
+
+        Historically this copied the parent httpx URL even for a child resource
+        or payload URL.  That made the final CSV lose the path being tested and
+        also attached the parent's status/title/length to the finding.
+        """
+        url = evidence_url or httpx_entry.get('url', '')
         parsed = urlparse(url)
         return {
             "target":          parsed.hostname or httpx_entry.get('input', '').split(':')[0],
@@ -192,9 +235,9 @@ class DomainScanner:
             "url":             url,
             "payload_url":     url,
             "details":         details,
-            "http_status":     str(httpx_entry.get('status_code', 'N/A')),
-            "page_title":      httpx_entry.get('title', 'N/A'),
-            "content_length":  str(httpx_entry.get('content_length', 'N/A')),
+            "http_status":     str(http_status if http_status is not None else httpx_entry.get('status_code', 'N/A')),
+            "page_title":      page_title if page_title is not None else httpx_entry.get('title', 'N/A'),
+            "content_length":  str(content_length if content_length is not None else httpx_entry.get('content_length', 'N/A')),
             "timestamp":       datetime.utcnow().isoformat() + "Z",
         }
 
@@ -206,11 +249,22 @@ class DomainScanner:
         """
         if not body_excerpt:
             return None
+        raw_cnames = httpx_entry.get("cname") or httpx_entry.get("cnames") or []
+        if isinstance(raw_cnames, str):
+            raw_cnames = [raw_cnames]
+        cnames = [str(value).rstrip(".").lower() for value in raw_cnames if value]
         lower = body_excerpt[:8192].lower()
         for vendor, marker, allowed_codes, severity in TAKEOVER_SIGNATURES:
             if status_code not in allowed_codes:
                 continue
             if marker.lower() not in lower:
+                continue
+            hints = TAKEOVER_CNAME_HINTS.get(vendor, ())
+            matched_cname = next(
+                (cname for cname in cnames if any(hint in cname for hint in hints)),
+                None,
+            )
+            if not matched_cname:
                 continue
             status = "CRITICAL" if severity == "CRITICAL" else "VULNERABLE"
             return self._create_vuln_entry(
@@ -220,9 +274,10 @@ class DomainScanner:
                 severity,
                 (
                     f"HTTP {status_code} response body matches a known {vendor} takeover fingerprint "
-                    f"('{marker[:80]}'). DNS still resolves to {vendor} but the back-end service is "
-                    "deprovisioned - re-registering the slot lets an attacker serve content on this hostname."
+                    f"('{marker[:80]}'). DNS evidence: CNAME {matched_cname} points to the matching "
+                    "provider. Manual claimability confirmation is still required before reporting impact."
                 ),
+                http_status=status_code,
             )
         return None
 
@@ -244,8 +299,13 @@ class DomainScanner:
         return findings
 
     async def check_broken_components(self, httpx_data: list, concurrency: int = 50) -> list[dict]:
-        """Scan alive URLs for broken sub-resources (JS, CSS, Img, API)."""
-        findings = []
+        """Collect confirmed same-origin broken resources as diagnostics.
+
+        Broken images/scripts are quality observations, not security
+        vulnerabilities.  They are kept in a separate CSV artifact and are not
+        added to the vulnerability report.
+        """
+        diagnostics = []
         # One shared request budget makes ``-c`` the actual aggregate ceiling.
         # Parent GETs release it before awaiting child HEAD probes, so a shared
         # semaphore cannot deadlock and page fetching is no longer capped at 10.
@@ -255,14 +315,25 @@ class DomainScanner:
             async def probe_resource(parent_entry, resource_url, parent_url):
                 async with request_sem:
                     try:
-                        resp = await client.head(resource_url)
-                        if resp.status_code >= 400 and resp.status_code not in (401, 403):
-                            findings.append(self._create_vuln_entry(
+                        head_resp = await client.head(resource_url)
+                        if head_resp.status_code not in (404, 410):
+                            return
+                        # Some CDNs reject HEAD while serving GET normally.  A
+                        # GET confirmation prevents those false positives.
+                        get_resp = await client.get(resource_url)
+                        if get_resp.status_code not in (404, 410):
+                            return
+                        diagnostics.append(self._create_vuln_entry(
                                 parent_entry,
                                 f"Broken Component: {urlparse(resource_url).path}",
-                                "POTENTIAL",
-                                "MEDIUM",
-                                f"Sub-resource '{resource_url}' returned HTTP {resp.status_code}. Parent: {parent_url}"
+                                "INFO",
+                                "INFO",
+                                f"Diagnostic only: sub-resource '{resource_url}' returned HTTP "
+                                f"{get_resp.status_code} to GET. Parent: {parent_url}",
+                                evidence_url=resource_url,
+                                http_status=get_resp.status_code,
+                                page_title="N/A",
+                                content_length=len(get_resp.content),
                             ))
                     except Exception:
                         pass
@@ -275,11 +346,21 @@ class DomainScanner:
                 async with request_sem:
                     try:
                         resp = await client.get(url)
+                        if not 200 <= resp.status_code < 300:
+                            return
+                        if "html" not in resp.headers.get("content-type", "").lower() and "<html" not in resp.text[:2048].lower():
+                            return
                         parser = SubResourceParser()
                         parser.feed(resp.text)
                         for res in parser.resources:
                             abs_url = urljoin(url, res)
-                            if abs_url.startswith('http'):
+                            parsed_parent = urlparse(url)
+                            parsed_resource = urlparse(abs_url)
+                            if (
+                                parsed_resource.scheme in ("http", "https")
+                                and parsed_resource.hostname == parsed_parent.hostname
+                                and not parsed_resource.path.startswith("/cdn-cgi/")
+                            ):
                                 resource_tasks.append(probe_resource(entry, abs_url, url))
                     except Exception:
                         pass
@@ -292,10 +373,33 @@ class DomainScanner:
             if page_tasks:
                 await asyncio.gather(*page_tasks, return_exceptions=True)
 
-        return findings
+        return diagnostics
+
+    def save_broken_component_diagnostics(self, diagnostics: list[dict]) -> str:
+        """Persist non-vulnerability broken-resource observations."""
+        if not diagnostics:
+            return ""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(self.output_dir, f"broken_components_{timestamp}.csv")
+        with open(filename, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["Parent_or_Evidence_URL", "Resource_URL", "HTTP_Status", "Details"])
+            for item in diagnostics:
+                writer.writerow([
+                    item.get("url", ""), item.get("payload_url", ""),
+                    item.get("http_status", ""), item.get("details", ""),
+                ])
+        print(f"{Colors.GREEN}[+] Broken-resource diagnostics saved to {filename}{Colors.RESET}")
+        return filename
 
     async def run_anomaly_checks(self, alive_urls: list, httpx_data: list = None, concurrency: int = 50) -> list[dict]:
-        """Run additional misconfiguration/anomaly checks on alive URLs."""
+        """Run evidence-backed vulnerability checks on alive URLs.
+
+        Operational anomalies such as 5xx responses, unusual body sizes, and
+        generic missing headers are deliberately excluded from vulnerability
+        output.  They are not proof of a security defect and created substantial
+        false-positive noise in earlier reports.
+        """
         # We need httpx_data to create proper vuln entries
         url_to_entry = {entry.get('url'): entry for entry in (httpx_data or []) if entry.get('url')}
         
@@ -307,56 +411,22 @@ class DomainScanner:
                 entry = url_to_entry.get(url, {'url': url, 'input': url})
                 async with semaphore:
                     try:
-                        # 1. Base response anomalies and headers
+                        # 1. Base response and high-confidence body checks.
                         resp = await client.get(url)
-                        headers = resp.headers
-                        
-                        # 5xx on base
-                        if resp.status_code >= 500:
-                            findings.append(self._create_vuln_entry(
-                                entry, "5xx Server Error on Base Path", "POTENTIAL", "LOW",
-                                f"HTTP {resp.status_code} returned on root"
-                            ))
-                            
-                        # Response size
-                        body_len = len(resp.content)
-                        if body_len < 50:
-                            findings.append(self._create_vuln_entry(
-                                entry, "Anomalous Response Size (Too Small)", "INFO", "INFO",
-                                f"Response body is {body_len} bytes"
-                            ))
-                        elif body_len > 2 * 1024 * 1024:
-                            findings.append(self._create_vuln_entry(
-                                entry, "Anomalous Response Size (Too Large)", "INFO", "INFO",
-                                f"Response body is {body_len} bytes"
-                            ))
-                            
-                        # Missing security headers
-                        missing_headers = []
-                        if 'strict-transport-security' not in headers: missing_headers.append('HSTS')
-                        if 'x-frame-options' not in headers and 'content-security-policy' not in headers: missing_headers.append('X-Frame-Options/CSP')
-                        if 'x-content-type-options' not in headers: missing_headers.append('X-Content-Type-Options')
-                        
-                        if missing_headers:
-                            findings.append(self._create_vuln_entry(
-                                entry, "Missing Security Headers", "INFO", "INFO",
-                                f"Headers absent: {', '.join(missing_headers)}"
-                            ))
-                            
-                        # JSON leak in HTML
-                        if 'text/html' in headers.get('content-type', '').lower():
-                            text_body = resp.text.strip()
-                            if text_body.startswith('{') and text_body.endswith('}'):
-                                findings.append(self._create_vuln_entry(
-                                    entry, "Potential JSON Data Leak in HTML", "POTENTIAL", "MEDIUM",
-                                    "Response has Content-Type text/html but body appears to be JSON"
-                                ))
-                                
+
                         # Directory Listing
-                        if "Index of /" in resp.text:
+                        if (
+                            resp.status_code == 200
+                            and re.search(r"<title>\s*Index of /", resp.text, re.I)
+                            and re.search(r"<a[^>]+href=[\"'][^\"']+[\"']", resp.text, re.I)
+                        ):
                             findings.append(self._create_vuln_entry(
                                 entry, "Directory Listing Enabled", "VULNERABLE", "HIGH",
-                                "Found 'Index of /' in response body"
+                                "Confirmed directory-index title and browsable file links in the response.",
+                                evidence_url=url,
+                                http_status=resp.status_code,
+                                page_title="Index of /",
+                                content_length=len(resp.content),
                             ))
 
                         # Subdomain-takeover signatures (also re-fetches a
@@ -376,25 +446,43 @@ class DomainScanner:
                                 pass
 
                         # 2. CORS Misconfig
-                        cors_headers = {'Origin': 'https://evil.com'}
-                        cors_resp = await client.options(url, headers=cors_headers)
+                        canary_origin = 'https://cors-test.invalid'
+                        cors_headers = {'Origin': canary_origin}
+                        cors_resp = await client.get(url, headers=cors_headers)
                         acao = cors_resp.headers.get('access-control-allow-origin', '')
-                        if acao == '*' or acao == 'https://evil.com':
+                        acac = cors_resp.headers.get('access-control-allow-credentials', '')
+                        if acao == canary_origin and acac.lower() == 'true':
                             findings.append(self._create_vuln_entry(
-                                entry, "Permissive CORS Configuration", "POTENTIAL", "MEDIUM",
-                                f"Access-Control-Allow-Origin returned: {acao} for origin evil.com"
+                                entry, "CORS: Arbitrary Origin Reflection with Credentials", "VULNERABLE", "HIGH",
+                                f"Confirmed arbitrary origin reflection with credentials: ACAO={acao}; ACAC={acac}.",
+                                evidence_url=url,
+                                http_status=cors_resp.status_code,
+                                page_title="N/A",
+                                content_length=len(cors_resp.content),
                             ))
 
-                        # 3. Open Redirect (Basic smoke test)
+                        # 3. Open redirect.  Compare the parsed Location host to
+                        # an exact canary; substring matching mistakes a query
+                        # string echoed into a same-origin redirect for a flaw.
+                        redirect_host = "redirect-test.invalid"
                         for param in ['url', 'redirect', 'next', 'return']:
-                            or_url = f"{url}?{param}=https://example.com"
+                            parsed_url = urlparse(url)
+                            query = dict(parse_qsl(parsed_url.query, keep_blank_values=True))
+                            query[param] = f"https://{redirect_host}/vaktscan"
+                            or_url = urlunparse(parsed_url._replace(query=urlencode(query)))
                             or_resp = await client.get(or_url)
                             if or_resp.status_code in (301, 302, 307, 308):
                                 loc = or_resp.headers.get('location', '')
-                                if 'example.com' in loc:
+                                resolved = urlparse(urljoin(or_url, loc))
+                                if resolved.hostname == redirect_host:
                                     findings.append(self._create_vuln_entry(
-                                        entry, f"Potential Open Redirect ({param})", "POTENTIAL", "MEDIUM",
-                                        f"Redirected to {loc} via parameter {param}"
+                                        entry, f"Confirmed Open Redirect ({param})", "VULNERABLE", "MEDIUM",
+                                        f"Confirmed external redirect host {redirect_host}: HTTP "
+                                        f"{or_resp.status_code} Location={loc} via parameter {param}.",
+                                        evidence_url=or_url,
+                                        http_status=or_resp.status_code,
+                                        page_title="N/A",
+                                        content_length=len(or_resp.content),
                                     ))
                                     break
                     except Exception:
@@ -423,7 +511,8 @@ class DomainScanner:
 
         # 2. Web Checks
         findings = self.detect_default_pages(httpx_data)
-        findings += await self.check_broken_components(httpx_data, concurrency)
+        broken_diagnostics = await self.check_broken_components(httpx_data, concurrency)
+        self.save_broken_component_diagnostics(broken_diagnostics)
         findings += await self.run_anomaly_checks(alive_urls, httpx_data, concurrency)
 
         print(f"{Colors.GREEN}[+] Domain scan finished. Found {len(findings)} web anomalies/issues.{Colors.RESET}")

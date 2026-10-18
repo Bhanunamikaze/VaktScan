@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
 from reporter import (
     Colors,
     deduplicate_vulnerabilities,
+    prepare_findings_for_report,
     save_port_scan_csv,
     save_results_to_csv,
     save_results_to_json,
@@ -1396,6 +1397,20 @@ async def _enrich_and_report(final_vulnerabilities, run_id, output_dir, sarif_ou
     Extracted so streaming mode (>1000 targets) gets the same enrichment and
     outputs as a normal scan instead of silently dropping them.
     """
+    final_vulnerabilities, rejected_findings = prepare_findings_for_report(
+        final_vulnerabilities, include_rejections=True
+    )
+    if rejected_findings:
+        reason_counts = {}
+        for _finding, _reason in rejected_findings:
+            reason_counts[_reason] = reason_counts.get(_reason, 0) + 1
+        summary = "; ".join(
+            f"{count} {reason}" for reason, count in sorted(reason_counts.items())
+        )
+        print(
+            f"{Colors.YELLOW}[*] Report accuracy gate excluded "
+            f"{len(rejected_findings)} unsupported/noise result(s): {summary}.{Colors.RESET}"
+        )
     # ── Web-layer version->CVE (modules/web_tech_cve) ──────────────────────────
     # Turn the concrete versions VaktScan already detected at the WEB layer into
     # NVD CVE findings so they reach KEV/EPSS/CVSS enrichment like js_cve does.

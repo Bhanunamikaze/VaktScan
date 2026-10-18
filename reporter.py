@@ -12,6 +12,7 @@ import json
 import time
 import ipaddress
 import os
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -65,13 +66,214 @@ class Colors:
 # Deduplication utility
 # ---------------------------------------------------------------------------
 
+_DOMAIN_SCAN_DIAGNOSTICS = (
+    "Broken Component:",
+    "Anomalous Response Size",
+    "5xx Server Error on Base Path",
+    "Missing Security Headers",
+    "Potential JSON Data Leak in HTML",
+)
+
+_ORACLE_GATED_WEB_FINDINGS = (
+    "Git Repository Exposed",
+    "Environment File Exposed",
+    "PHP Info Page Exposed",
+    "PHP Test Page Exposed",
+    "WordPress Config Exposed",
+    "Config File Exposed",
+    "Database Credentials File Exposed",
+    "Secrets File Exposed",
+    "Credentials File Exposed",
+    "Backup Archive Exposed",
+    "Site Archive Exposed",
+    "Adminer Database UI Exposed",
+    "phpMyAdmin Exposed",
+)
+
+
+def normalize_finding_for_report(finding):
+    """Return a copy with the actual tested/evidence URL as canonical URL."""
+    normalized = dict(finding or {})
+    current_url = str(normalized.get("url") or "").strip()
+    payload_url = str(normalized.get("payload_url") or "").strip()
+
+    def _is_http_url(value):
+        try:
+            parsed = urlparse(value)
+            return parsed.scheme in ("http", "https") and bool(parsed.hostname)
+        except ValueError:
+            return False
+
+    # Payload_URL is the exact request which generated the evidence.  Earlier
+    # writers left URL at the parent origin, losing paths from the main column.
+    if _is_http_url(payload_url):
+        current_parsed = urlparse(current_url) if _is_http_url(current_url) else None
+        payload_parsed = urlparse(payload_url)
+        current_is_origin = bool(
+            current_parsed
+            and current_parsed.path in ("", "/")
+            and not current_parsed.query
+            and not current_parsed.fragment
+        )
+        if not current_parsed or (
+            current_is_origin
+            and payload_parsed.hostname == current_parsed.hostname
+            and payload_parsed.path not in ("", "/")
+        ):
+            current_url = payload_url
+    elif not _is_http_url(current_url):
+        # Recover legacy broken-resource rows whose full URL only survived in
+        # Details. These rows are filtered from vulnerability output, but the
+        # normalization keeps exports and migration tools internally correct.
+        match = re.search(r"Sub-resource\s+['\"](https?://[^'\"\s]+)", str(normalized.get("details") or ""), re.I)
+        if match:
+            current_url = payload_url = match.group(1)
+
+    if not current_url or current_url.lower() in ("n/a", "unknown"):
+        target = str(normalized.get("target") or "").strip()
+        if target and target.lower() not in ("n/a", "unknown") and str(normalized.get("module") or "").lower() in {
+            "dns", "dns_resolve", "dns_recon",
+        }:
+            normalized["url"] = f"dns://{target}"
+
+    if _is_http_url(current_url):
+        normalized["url"] = current_url
+        if _is_http_url(payload_url):
+            normalized["payload_url"] = payload_url
+        parsed = urlparse(current_url)
+        if str(normalized.get("target") or "").strip().lower() in ("", "n/a", "unknown"):
+            normalized["target"] = parsed.hostname
+        if str(normalized.get("port") or "").strip().lower() in ("", "n/a", "unknown"):
+            normalized["port"] = str(parsed.port or (443 if parsed.scheme == "https" else 80))
+
+    details = str(normalized.get("details") or "")
+    if str(normalized.get("http_status") or "").strip().lower() in ("", "n/a", "unknown"):
+        status_match = re.search(r"\bHTTP\s+(\d{3})\b", details, re.I)
+        if status_match:
+            normalized["http_status"] = status_match.group(1)
+    if str(normalized.get("content_length") or "").strip().lower() in ("", "n/a", "unknown"):
+        length_match = re.search(r"\b([0-9]+)\s+bytes\b", details, re.I)
+        if length_match:
+            normalized["content_length"] = length_match.group(1)
+    return normalized
+
+
+def finding_rejection_reason(finding):
+    """Explain why a legacy/unsupported result is not report-quality evidence."""
+    module = str(finding.get("module") or "")
+    title = str(finding.get("vulnerability") or "")
+    details = str(finding.get("details") or "")
+    status = str(finding.get("status") or "").upper()
+
+    if module == "domain_scan":
+        if title.startswith(_DOMAIN_SCAN_DIAGNOSTICS):
+            return "operational diagnostic, not a vulnerability"
+        if title.startswith("Potential Open Redirect"):
+            return "legacy substring-only redirect result lacks exact Location-host proof"
+        if title.startswith("Confirmed Open Redirect") and "Confirmed external redirect host" not in details:
+            return "open redirect lacks exact external Location-host proof"
+        if title == "Permissive CORS Configuration":
+            return "legacy CORS result lacks reflected-origin plus credential proof"
+        if title.startswith("CORS:") and "arbitrary origin reflection with credentials" not in details.lower():
+            return "CORS result lacks reflected-origin plus credential proof"
+        if title.startswith("Subdomain takeover candidate:") and "DNS evidence: CNAME" not in details:
+            return "takeover fingerprint lacks matching DNS/CNAME evidence"
+
+    if module == "WebChecks":
+        try:
+            response_status = int(str(finding.get("http_status", "0")))
+        except ValueError:
+            response_status = 0
+        if response_status >= 400 and title in {
+            "Missing Strict-Transport-Security Header",
+            "Missing Clickjacking Protection (X-Frame-Options / CSP)",
+            "Weak Content-Security-Policy Directives",
+            "Security Headers Missing",
+            "Server Header Discloses Version",
+            "X-Powered-By Header Discloses Technology",
+            "Insecure Cookie Attributes",
+        }:
+            return "policy inferred from an error/block/rate-limit response"
+        if title.startswith("Admin Path Accessible:"):
+            return "HTTP 200 path without an admin authentication oracle"
+        if title in ("Admin Panel Detected", "WordPress Admin Panel Detected"):
+            return "legacy HTTP 200 admin-path result lacks a login/admin oracle"
+        if title == "security.txt Accessible" and "Contact:" not in details:
+            return "security.txt result lacks a valid Contact field"
+        if title in ("robots.txt Accessible", "crossdomain.xml Accessible") and "Evidence:" not in details:
+            return "legacy well-known-file result lacks a content oracle"
+        if title.startswith(_ORACLE_GATED_WEB_FINDINGS) and "Evidence:" not in details:
+            return "sensitive endpoint lacks a path-specific content oracle"
+        if title == "WordPress Default Credentials" and "wordpress_logged_in_*" not in details:
+            return "legacy login result lacks redirect plus authentication-cookie proof"
+        if title == "Insecure Cookie Attributes" and any(
+            name in details.lower() for name in ("'__cf_bm'", "'cf_clearance'", "'_cfuvid'", "'awsalb'")
+        ):
+            return "edge/infrastructure cookie is not an application authentication cookie"
+        if title == "Insecure Cookie Attributes" and "application authentication/session cookie" not in details:
+            return "legacy cookie result lacks evidence that the cookie carries authentication state"
+
+    if module == "cPanel":
+        if title.startswith("Service port reachable on"):
+            return "port reachability belongs in service inventory, not vulnerability findings"
+        if title in {
+            "Host-header allow-list bypass possible",
+            "cPHulk brute-force protection not directly observed",
+            "HTTP request smuggling differential observed",
+        }:
+            return "heuristic differential/absence is not exploit proof"
+        if title == "CRLF / response header injection" and "Evidence:" not in details:
+            return "legacy CRLF result lacks a separately parsed injected response header"
+        if title.startswith("CVE-2022-44762") and "exact external host" not in details:
+            return "legacy open-redirect result lacks exact Location-host proof"
+        if title.startswith("cPanel service identified") and not any(
+            marker in details for marker in ("body:", "header:", "version:", "magic_revision:")
+        ):
+            return "legacy cPanel identity used weak reflected path markers"
+        if "reachable over plaintext HTTP" in title and "independently verified" not in details:
+            return "legacy plaintext finding lacks verified cPanel identity evidence"
+
+    if module == "js_paths":
+        if title.startswith("Hardcoded Secret:") and "Evidence:" not in details:
+            return "legacy regex-only secret result lacks first-party/credential validation"
+        if title.startswith("Sensitive Path Accessible:") and "Evidence:" not in details:
+            return "legacy path result is based only on HTTP status"
+        if title == "Unauthenticated JSON Endpoint":
+            return "public JSON alone is not a vulnerability"
+        if title == "Exposed JS Source Map" and "Evidence:" not in details:
+            return "legacy source-map result lacks embedded-source impact evidence"
+
+    if module == "js_cve":
+        service_version = str(finding.get("service_version") or "")
+        version = service_version.rsplit(" ", 1)[-1]
+        if re.fullmatch(r"[a-f0-9]{7,}", version, re.I) and "." not in version:
+            return "asset fingerprint/hash was misparsed as a library version"
+        if not title.startswith(("CVE-", "GHSA-", "Advisory ")):
+            return "non-CVE advisory identifier is ambiguous/malformed"
+
+    return None
+
+
+def prepare_findings_for_report(vulnerabilities, *, include_rejections=False):
+    """Normalize report rows and remove known unsupported scanner output."""
+    accepted = []
+    rejected = []
+    for finding in vulnerabilities or []:
+        normalized = normalize_finding_for_report(finding)
+        reason = finding_rejection_reason(normalized)
+        if reason:
+            rejected.append((normalized, reason))
+        else:
+            accepted.append(normalized)
+    return (accepted, rejected) if include_rejections else accepted
+
 def deduplicate_vulnerabilities(vulnerabilities):
     """
     Deduplicates a list of vulnerabilities.
     """
     unique_vulns = {}
 
-    for vuln in vulnerabilities:
+    for vuln in prepare_findings_for_report(vulnerabilities):
         vuln_key = (
             vuln.get('resolved_ip', vuln.get('target')),
             vuln.get('port'),
@@ -147,6 +349,7 @@ def save_port_scan_csv(scan_results, domain, output_dir=None):
 
 def save_results_to_csv(vulnerabilities, filename=None):
     """Save vulnerability results to CSV format."""
+    vulnerabilities = prepare_findings_for_report(vulnerabilities)
     if not filename:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         filename = f"scan_results_{timestamp}.csv"
@@ -197,6 +400,7 @@ def save_results_to_csv(vulnerabilities, filename=None):
 
 def save_results_to_json(vulnerabilities, filename=None):
     """Save vulnerability results to JSON format."""
+    vulnerabilities = prepare_findings_for_report(vulnerabilities)
     if not filename:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         filename = f"scan_results_{timestamp}.json"
@@ -255,6 +459,7 @@ def save_results_to_html(vulnerabilities, filename=None, scan_label=None):
     client-side text/severity filter.
     """
     import html as _html
+    vulnerabilities = prepare_findings_for_report(vulnerabilities)
 
     if not filename:
         timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -384,7 +589,7 @@ def save_unified_html_report(vulnerabilities, filename, scan_label=None,
     import html as _html
 
     state = state if isinstance(state, dict) else {}
-    vulnerabilities = list(vulnerabilities or [])
+    vulnerabilities = prepare_findings_for_report(vulnerabilities)
     root = Path(artifact_root) if artifact_root else None
     esc = lambda value: _html.escape(str(value if value is not None else ""))
     generated = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -577,6 +782,7 @@ box.addEventListener('input',()=>{const q=box.value.trim().toLowerCase();items.f
 
 def write_sarif_output(vulnerabilities, output_path):
     """Write vulnerability findings to SARIF 2.1.0 format for GitHub/GitLab security tab integration."""
+    vulnerabilities = prepare_findings_for_report(vulnerabilities)
 
     SEVERITY_MAP = {
         "CRITICAL": "error",

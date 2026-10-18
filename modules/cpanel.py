@@ -30,7 +30,7 @@ import secrets
 import socket
 import ssl
 import string
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -158,10 +158,21 @@ def _looks_like_cpanel_body(text):
     if not text:
         return False
     lower = text[:8192].lower()
-    return any(marker in lower for marker in (
-        'cpsrvd', 'cpanel', 'webhost manager', 'paper_lantern', 'jupiter',
-        'cpsess', 'cpanelbranding', 'cpanel_magic_revision', 'webmaild',
-    ))
+    # A bare "cpanel" token is weak: generic catch-all pages often echo the
+    # requested /cpanelbranding or /json-api/cpanel path. Require a product-
+    # specific server/template/session marker or a branded login title.
+    return bool(
+        any(marker in lower for marker in (
+            'cpsrvd', 'webhost manager', 'paper_lantern', 'cpsess',
+            'cpanel_magic_revision', 'webmaild',
+        ))
+        or re.search(r'<title>[^<]*(?:cpanel|whm|webmail)[^<]*login', lower)
+        or (
+            re.search(r'<form[^>]+(?:action=["\']/login|id=["\']login)', lower)
+            and re.search(r'name=["\'](?:user|login_username)["\']', lower)
+            and re.search(r'name=["\'](?:pass|login_password)["\']', lower)
+        )
+    )
 
 
 def _looks_like_whm_body(text):
@@ -353,8 +364,8 @@ async def identify_cpanel_target(client, origin_url, version_info, port=80):
         if r.status_code in (200, 301, 302, 401, 403, 404):
             body = (r.text or '')[:8192].lower()
             loc = r.headers.get('location', '').lower()
-            if _looks_like_cpanel_body(body) or 'cpsess' in loc or 'cpanel' in loc:
-                evidence.append(label)
+            if _looks_like_cpanel_body(body) or 'cpsess' in loc:
+                evidence.append(f'body:{label}')
                 score += weight
 
     for hdr_name in ('x-cpanel-server', 'x-cpanel-mailloop', 'x-cpanel-redirect', 'x-cpanel-request-id'):
@@ -373,19 +384,17 @@ async def identify_cpanel_target(client, origin_url, version_info, port=80):
 
     evidence = list(dict.fromkeys(evidence))
 
-    # On generic HTTP/S ports (80, 443, 8080, 8443) a score of 3 is trivially
-    # reached by any server that 302-redirects /login/. Require at least one
-    # hard cPanel signal (cpsrvd Server header, x-cpanel response header,
-    # detected version, or magic_revision asset) before identifying.
-    generic_port = port in (80, 443, 8080, 8443)
-    if generic_port:
-        has_hard_signal = any(
-            ev.startswith(('header:cpsrvd', 'header:x-cpanel', 'version:', 'magic_revision:'))
-            for ev in evidence
-        )
-        identified = has_hard_signal and score >= 3
-    else:
-        identified = score >= 3
+    # Port number is not identity: Cloudflare and reverse proxies can serve an
+    # unrelated site on traditional cPanel ports. Require an actual cPanel
+    # banner/version/header/template signal on every port.
+    has_hard_signal = any(
+        ev.startswith((
+            'header:cpsrvd', 'header:x-cpanel', 'version:',
+            'magic_revision:', 'body:',
+        ))
+        for ev in evidence
+    )
+    identified = has_hard_signal and score >= 3
 
     return {'identified': identified, 'score': score, 'evidence': evidence[:10]}
 
@@ -493,7 +502,11 @@ def _oracle_cve_2022_44762_indicator(r_pos, r_neg):
     if r_pos.status_code not in (301, 302, 303, 307, 308):
         return False
     loc = r_pos.headers.get('location', '')
-    return 'attacker.example' in loc.lower()
+    try:
+        resolved = urlparse(urljoin(str(r_pos.request.url), loc))
+    except (TypeError, ValueError):
+        return False
+    return resolved.hostname == 'attacker.example'
 
 
 async def _oracle_cve_2022_44763_positive(client, origin):
@@ -589,7 +602,10 @@ OBSERVABLE_CVE_CHECKS = {
         'severity': 'MEDIUM',
         'status': 'VULNERABLE',
         'surface': ['cPanel', 'WHM'],
-        'details': 'The goto_uri parameter on /login/ accepts off-site hosts, enabling phishing.',
+        'details': (
+            'The goto_uri parameter on /login/ accepts off-site hosts, enabling phishing. '
+            'Evidence: redirect Location resolved to the exact external host attacker.example.'
+        ),
         'oracle': {
             'positive': _oracle_cve_2022_44762_positive,
             'control':  _oracle_cve_2022_44762_control,
@@ -975,25 +991,12 @@ async def check_http_method_tampering(client, ctx, baselines):
 # ─── Check: host-header bypass ────────────────────────────────────────────────
 
 async def check_host_header_bypass(client, ctx):
-    out = []
-    origin = ctx['origin_url']
-    parsed = urlparse(origin)
-    real_host_url = f"{parsed.scheme}://{parsed.netloc}/"
+    """A status/body differential alone does not demonstrate an allow-list bypass.
 
-    r_real = await _safe_get(client, real_host_url, timeout=5)
-    r_local = await _safe_get(client, real_host_url, timeout=5, headers={'Host': 'localhost'})
-    if r_real is None or r_local is None:
-        return out
-    if r_real.status_code != r_local.status_code and _response_size_delta(r_local, r_real, threshold=128):
-        out.append(_finding(
-            status='POTENTIAL',
-            severity='MEDIUM',
-            vulnerability='Host-header allow-list bypass possible',
-            details=f"Host: localhost returns HTTP {r_local.status_code} (vs {r_real.status_code} for the real host) - source-IP allow-list may be bypassable.",
-            payload_url=real_host_url,
-            surface=ctx['surface'],
-        ))
-    return out
+    Keep this probe out of vulnerability output until a protected resource is
+    shown to become accessible with the alternate Host header.
+    """
+    return []
 
 
 # ─── Check: session bypass via cpsess prediction ──────────────────────────────
@@ -1103,7 +1106,10 @@ async def check_crlf_injection(client, ctx):
             status='VULNERABLE',
             severity='HIGH',
             vulnerability='CRLF / response header injection',
-            details=f'goto_uri parameter on /login/ allows CRLF injection - attacker-controlled header reflected.',
+            details=(
+                f'goto_uri parameter on /login/ allows CRLF injection. Evidence: the HTTP '
+                f'client parsed a distinct attacker-controlled response header {marker}: 1.'
+            ),
             payload_url=origin + payload,
             surface=ctx['surface'],
         ))
@@ -1410,7 +1416,11 @@ async def check_plaintext_control_panel(client, ctx):
         status='VULNERABLE',
         severity='HIGH',
         vulnerability=f'cPanel {ctx["surface"]} reachable over plaintext HTTP (port {ctx["port"]})',
-        details=f'Port {ctx["port"]} serves cPanel/WHM/Webmail over unencrypted HTTP. Credentials are transmitted in clear.',
+        details=(
+            f'Port {ctx["port"]} serves cPanel/WHM/Webmail over unencrypted HTTP. '
+            'Credentials are transmitted in clear. Evidence: cPanel identity was independently '
+            'verified before this transport check ran.'
+        ),
         payload_url=ctx['origin_url'] + '/',
         surface=ctx['surface'],
     )]
@@ -1470,20 +1480,8 @@ async def check_cphulk_present(client, ctx):
                 break
         if saw_header:
             break
-    if not saw_header:
-        return [_finding(
-            status='INFO',
-            severity='LOW',
-            vulnerability='cPHulk brute-force protection not directly observed',
-            details=(
-                'Three failed logins did not surface X-Cphulkd-* response headers. '
-                'cPHulkd may be enabled but only surface headers after the lockout '
-                'threshold is hit, OR it may be disabled. Verify with `whmapi1 '
-                'gethulkstatus`. Not a confirmed vulnerability - just a posture note.'
-            ),
-            payload_url=origin + '/login/',
-            surface=ctx['surface'],
-        )]
+    # Absence of an implementation-specific response header cannot establish
+    # that brute-force protection is disabled. Do not emit a finding.
     return []
 
 
@@ -1967,18 +1965,9 @@ async def check_request_smuggling(client, ctx):
     codes = {r_smug.status_code, r_baseline.status_code}
     if codes & {401, 403} and codes & {200, 302}:
         return out
-    out.append(_finding(
-        status='POTENTIAL',
-        severity='HIGH',
-        vulnerability='HTTP request smuggling differential observed',
-        details=(
-            f'Smug (TE+CL) HTTP {r_smug.status_code}, size {len(r_smug.text or "")}; '
-            f'baseline (CL only, same body) HTTP {r_baseline.status_code}, size {len(r_baseline.text or "")}. '
-            f'Front-end / back-end may disagree on framing precedence; manual desync confirmation required.'
-        ),
-        payload_url=origin + '/',
-        surface=ctx['surface'],
-    ))
+    # A one-request status/length differential is not proof of a desync. A
+    # reportable result requires a safe follow-up response-queue oracle, which
+    # this scanner intentionally does not perform automatically.
     return out
 
 

@@ -97,13 +97,45 @@ def _is_error_page(body: str, status: int) -> bool:
     """Heuristic: treat as error/non-content page."""
     if status >= 400:
         return True
-    if len(body) < 50:
-        return True
     lower = body[:2048].lower()
-    for marker in ("not found", "404", "error", "forbidden", "access denied"):
-        if marker in lower:
-            return True
+    if "<html" in lower:
+        for marker in ("not found", "404", "forbidden", "access denied"):
+            if marker in lower:
+                return True
     return False
+
+
+def _normalized_body(body: str) -> str:
+    """Normalize common per-request tokens before catch-all comparison."""
+    value = (body or "")[:131072].lower()
+    value = re.sub(r"\b[a-f0-9]{16,}\b", "<hex-token>", value)
+    value = re.sub(r"\b\d{10,}\b", "<numeric-token>", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _same_catchall_page(candidate, negative_control) -> bool:
+    """Return True when a successful probe is the site's generic 200 page."""
+    if not negative_control or candidate.status_code != 200 or negative_control.status_code != 200:
+        return False
+    candidate_body = _normalized_body(candidate.text)
+    control_body = _normalized_body(negative_control.text)
+    if not candidate_body or not control_body:
+        return False
+    if candidate_body == control_body:
+        return True
+    # Dynamic edge tokens can survive normalization. Matching title, content
+    # type, and nearly identical lengths is enough to identify the same shell.
+    candidate_title = _extract_title(candidate.text)
+    control_title = _extract_title(negative_control.text)
+    candidate_type = candidate.headers.get("content-type", "").split(";", 1)[0].lower()
+    control_type = negative_control.headers.get("content-type", "").split(";", 1)[0].lower()
+    length_ratio = min(len(candidate_body), len(control_body)) / max(len(candidate_body), len(control_body))
+    return (
+        candidate_title != "N/A"
+        and candidate_title == control_title
+        and candidate_type == control_type
+        and length_ratio >= 0.98
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -129,12 +161,19 @@ async def check_security_headers(url: str, client: httpx.AsyncClient) -> list[di
     except Exception:
         return findings
 
+    # Error, block, and rate-limit pages do not represent the application's
+    # normal header policy and must not generate vulnerability findings.
+    if not 200 <= resp.status_code < 300:
+        return findings
+
     h = {k.lower(): v for k, v in resp.headers.items()}
     parsed = urlparse(url)
     is_https = parsed.scheme == "https"
     title = _extract_title(resp.text)
     http_status = str(resp.status_code)
     cl = str(len(resp.content))
+    content_type = h.get("content-type", "").lower()
+    is_html = "html" in content_type or (not content_type and (not resp.text or "<html" in resp.text[:2048].lower()))
 
     base = dict(url=url, payload_url=url, http_status=http_status,
                 page_title=title, content_length=cl)
@@ -144,8 +183,8 @@ async def check_security_headers(url: str, client: httpx.AsyncClient) -> list[di
         findings.append(_make_finding(
             **base,
             vulnerability="Missing Strict-Transport-Security Header",
-            status="VULNERABLE",
-            severity="HIGH",
+            status="INFO",
+            severity="LOW",
             details=(
                 "The HTTPS response does not include a Strict-Transport-Security (HSTS) header. "
                 "Without HSTS, browsers will not enforce HTTPS for subsequent visits, leaving "
@@ -157,7 +196,7 @@ async def check_security_headers(url: str, client: httpx.AsyncClient) -> list[di
     csp = _parse_csp(csp_value)
 
     # Missing X-Frame-Options AND a CSP frame-ancestors directive.
-    if "x-frame-options" not in h and "frame-ancestors" not in csp:
+    if is_html and "x-frame-options" not in h and "frame-ancestors" not in csp:
         findings.append(_make_finding(
             **base,
             vulnerability="Missing Clickjacking Protection (X-Frame-Options / CSP)",
@@ -170,7 +209,7 @@ async def check_security_headers(url: str, client: httpx.AsyncClient) -> list[di
             ),
         ))
 
-    if csp_value:
+    if is_html and csp_value:
         weak = []
         for directive in ("script-src", "style-src", "default-src"):
             sources = csp.get(directive, [])
@@ -207,7 +246,7 @@ async def check_security_headers(url: str, client: httpx.AsyncClient) -> list[di
         ),
     }
     missing_info_headers = [desc for hdr, desc in _info_headers.items() if hdr not in h]
-    if missing_info_headers:
+    if is_html and missing_info_headers:
         findings.append(_make_finding(
             **base,
             vulnerability="Security Headers Missing",
@@ -285,9 +324,6 @@ _SENSITIVE_PATHS: list[tuple[str, str, str]] = [
     ("/adminer",               "CRITICAL", "Adminer Database UI Exposed"),
     ("/phpMyAdmin/",           "HIGH",     "phpMyAdmin Exposed"),
     ("/phpmyadmin/",           "HIGH",     "phpMyAdmin Exposed"),
-    ("/admin/",                "INFO",     "Admin Panel Detected"),
-    ("/administrator/",        "INFO",     "Admin Panel Detected"),
-    ("/wp-admin/",             "INFO",     "WordPress Admin Panel Detected"),
 ]
 
 _SEVERITY_TO_STATUS = {
@@ -302,6 +338,11 @@ _SEVERITY_TO_STATUS = {
 async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dict]:
     findings: list[dict] = []
     origin = _origin(url)
+    negative_control = None
+    try:
+        negative_control = await client.get(origin + _CATCHALL_PROBE)
+    except Exception:
+        pass
 
     async def probe(path: str, severity: str, label: str):
         probe_url = origin + path
@@ -316,6 +357,9 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
         cl = str(len(resp.content))
         http_status = str(status_code)
 
+        if _same_catchall_page(resp, negative_control):
+            return
+
         # robots.txt - INFO regardless, enumerate disallowed
         if path == "/robots.txt":
             if status_code == 200 and len(body) > 10:
@@ -325,7 +369,7 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
                 if not re.search(r"(?i)^user-agent:", body, re.MULTILINE):
                     return
                 disallowed = re.findall(r"(?im)^disallow:\s*(.+)$", body)
-                details = "robots.txt is publicly accessible."
+                details = "robots.txt is publicly accessible. Evidence: valid User-agent directive."
                 if disallowed:
                     sample = disallowed[:20]
                     details += f" Disallowed paths ({len(disallowed)} total): {', '.join(sample)}"
@@ -346,9 +390,10 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
         if path == "/.well-known/security.txt":
             if status_code == 200 and len(body) > 10:
                 contact = re.findall(r"(?im)^contact:\s*(.+)$", body)
-                details = "security.txt is present."
-                if contact:
-                    details += f" Contact: {', '.join(contact[:5])}"
+                if not contact:
+                    return
+                details = "security.txt is present. Evidence: valid Contact field."
+                details += f" Contact: {', '.join(contact[:5])}"
                 findings.append(_make_finding(
                     url=url,
                     payload_url=probe_url,
@@ -369,7 +414,7 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
                 if "<cross-domain-policy" not in body.lower():
                     return
                 wildcard = 'domain="*"' in body or "domain='*'" in body
-                details = "crossdomain.xml is accessible."
+                details = "crossdomain.xml is accessible. Evidence: cross-domain-policy XML element."
                 sev = "MEDIUM"
                 st = "VULNERABLE"
                 if wildcard:
@@ -394,6 +439,7 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
 
         # Generic sensitive file - only fire if 200 and not an error page
         if status_code == 200 and not _is_error_page(body, status_code):
+            oracle = ""
 
             # ── Content validation to eliminate catch-all false positives ──────
 
@@ -403,16 +449,19 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
                     return
                 if not re.search(r"ref: refs/", body):
                     return
+                oracle = "canonical Git ref marker"
 
             # .git/config - require [core] section typical of git config
             if path == "/.git/config":
                 if "[core]" not in body and "[remote" not in body:
                     return
+                oracle = "Git configuration section"
 
             # .env variants - require at least one KEY=VALUE line
             if path in ("/.env", "/.env.local", "/.env.production", "/.env.backup"):
                 if not re.search(r"^[A-Z_][A-Z0-9_]*=.+", body, re.MULTILINE):
                     return
+                oracle = "environment KEY=VALUE assignment"
 
             # Backup / archive files - require binary content type or substantial size
             _backup_exts = (".zip", ".tar.gz", ".bak", ".old")
@@ -429,21 +478,56 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
                     return
                 if "text/html" in content_type or "<html" in body.lower():
                     return
+                oracle = f"archive content type/size ({content_type or 'unknown type'})"
 
-            # phpinfo.php / info.php - require PHP output markers
-            if path in ("/phpinfo.php", "/info.php"):
+            # PHP test/info files must actually expose phpinfo output.
+            if path in ("/phpinfo.php", "/info.php", "/test.php"):
                 if "PHP Version" not in body and "phpinfo()" not in body:
                     return
+                oracle = "PHP information-page marker"
 
             # wp-config.php - require WordPress config constants
             if path == "/wp-config.php":
                 if not any(k in body for k in ("DB_NAME", "DB_PASSWORD", "table_prefix")):
                     return
+                oracle = "WordPress configuration constants"
+
+            if path in ("/config.php", "/configuration.php"):
+                lower_body = body.lower()
+                config_markers = (
+                    "<?php", "db_password", "database_password", "$db", "$config",
+                    "define('db_", 'define("db_', "public $password",
+                )
+                if not any(marker in lower_body for marker in config_markers):
+                    return
+                oracle = "PHP source/configuration marker"
+
+            if path in ("/database.yml", "/secrets.yml", "/credentials.yml"):
+                if "<html" in body.lower() or not re.search(
+                    r"(?im)^\s*(?:database|adapter|host|username|user|password|secret|token|key)\s*:\s*\S+",
+                    body,
+                ):
+                    return
+                oracle = "YAML credential/configuration assignment"
 
             # adminer - require Adminer UI markers
             if path in ("/adminer.php", "/adminer"):
-                if not any(k in body for k in ("adminer", "Adminer", "Login")):
+                lower_body = body.lower()
+                if "adminer" not in lower_body or not any(
+                    marker in lower_body
+                    for marker in ("name=\"auth[server]\"", "name='auth[server]'", "adminer.php")
+                ):
                     return
+                oracle = "Adminer-branded database login form"
+
+            if path in ("/phpMyAdmin/", "/phpmyadmin/"):
+                lower_body = body.lower()
+                if "phpmyadmin" not in lower_body or not any(
+                    marker in lower_body
+                    for marker in ("pma_username", "pma_password", "pma_version")
+                ):
+                    return
+                oracle = "phpMyAdmin-specific login/UI marker"
 
             # ──────────────────────────────────────────────────────────────────
 
@@ -468,6 +552,7 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
                 ),
             }
             details = details_map.get(severity, f"Path '{path}' returned HTTP {status_code}.")
+            details += f" Evidence: {oracle or 'path-specific content oracle matched'}."
             findings.append(_make_finding(
                 url=url,
                 payload_url=probe_url,
@@ -700,6 +785,11 @@ _LOGIN_FORM_RE = re.compile(
 async def check_admin_panels(url: str, client: httpx.AsyncClient) -> list[dict]:
     findings: list[dict] = []
     origin = _origin(url)
+    negative_control = None
+    try:
+        negative_control = await client.get(origin + _CATCHALL_PROBE)
+    except Exception:
+        pass
 
     async def probe(path: str):
         probe_url = origin + path
@@ -711,17 +801,19 @@ async def check_admin_panels(url: str, client: httpx.AsyncClient) -> list[dict]:
         sc = resp.status_code
         if sc not in (200, 401, 403):
             return
+        if _same_catchall_page(resp, negative_control):
+            return
 
         title = _extract_title(resp.text)
         cl = str(len(resp.content))
         base = dict(url=url, payload_url=probe_url, http_status=str(sc),
                     page_title=title, content_length=cl)
 
-        has_login_form = (
-            'type="password"' in resp.text or "type='password'" in resp.text
-        )
+        has_login_form = bool(_LOGIN_FORM_RE.search(resp.text))
+        context = f"{title} {resp.text[:4096]}".lower()
+        has_admin_context = any(keyword in context for keyword in _ADMIN_REALM_KEYWORDS)
 
-        if sc == 200 and has_login_form:
+        if sc == 200 and has_login_form and has_admin_context:
             findings.append(_make_finding(
                 **base,
                 vulnerability=f"Admin Panel Publicly Accessible: {path}",
@@ -731,18 +823,6 @@ async def check_admin_panels(url: str, client: httpx.AsyncClient) -> list[dict]:
                     f"An admin/management login panel is directly accessible at '{probe_url}' "
                     f"(HTTP {sc}). Exposed admin panels are a primary target for credential "
                     "brute-force, credential stuffing, and authentication bypass attacks."
-                ),
-            ))
-        elif sc == 200:
-            # Accessible path but no login form - low noise finding only
-            findings.append(_make_finding(
-                **base,
-                vulnerability=f"Admin Path Accessible: {path}",
-                status="INFO",
-                severity="LOW",
-                details=(
-                    f"The path '{probe_url}' returned HTTP 200 but no login form was detected. "
-                    "Verify the content does not expose sensitive functionality."
                 ),
             ))
         elif sc == 401:
@@ -902,7 +982,9 @@ async def _try_wp_default_creds(origin: str, client: httpx.AsyncClient) -> list[
                 details=(
                     f"WordPress admin panel accepted default credentials "
                     f"'{username}:{password}' at '{login_url}'. "
-                    "Full administrative access to the CMS is possible without any brute-force."
+                    "Full administrative access to the CMS is possible without any brute-force. "
+                    "Evidence: same-origin /wp-admin redirect and a new wordpress_logged_in_* "
+                    "authentication cookie were both observed."
                 ),
                 http_status=str(post_resp.status_code),
             ))
@@ -1155,7 +1237,10 @@ async def check_cookie_flags(url: str, client: httpx.AsyncClient) -> list[dict]:
         return findings
 
     # Look for Set-Cookie headers
-    cookie_headers = [v for k, v in resp.headers.items() if k.lower() == "set-cookie"]
+    if hasattr(resp.headers, "get_list"):
+        cookie_headers = resp.headers.get_list("set-cookie")
+    else:
+        cookie_headers = [v for k, v in resp.headers.items() if k.lower() == "set-cookie"]
     if not cookie_headers:
         return findings
 
@@ -1170,6 +1255,19 @@ async def check_cookie_flags(url: str, client: httpx.AsyncClient) -> list[dict]:
         if not parts:
             continue
         cookie_name = cookie_header.split("=")[0].strip()
+        cookie_name_lower = cookie_name.lower()
+        infrastructure_cookies = (
+            "__cf_bm", "cf_clearance", "_cfuvid", "awsalb", "awsalbcors",
+            "incap_ses", "visid_incap", "ak_bmsc", "bm_sv",
+        )
+        if cookie_name_lower in infrastructure_cookies:
+            continue
+        # Only security-relevant application session/authentication cookies
+        # warrant a vulnerability. Preference, analytics, and anonymous edge
+        # cookies missing SameSite are not evidence of account impact.
+        auth_markers = ("session", "sess", "auth", "token", "jwt", "login", "sid", "wordpress_logged_in")
+        if not any(marker in cookie_name_lower for marker in auth_markers):
+            continue
 
         missing_flags = []
         if is_https and not any(p == "secure" for p in parts):
@@ -1180,16 +1278,22 @@ async def check_cookie_flags(url: str, client: httpx.AsyncClient) -> list[dict]:
             missing_flags.append("SameSite")
 
         if missing_flags:
+            impacts = {
+                "Secure": "may be transmitted over plaintext HTTP",
+                "HttpOnly": "can be read by injected JavaScript",
+                "SameSite": "may be included in cross-site requests",
+            }
             findings.append(_make_finding(
                 **base,
                 vulnerability="Insecure Cookie Attributes",
                 status="VULNERABLE",
                 severity="LOW",
                 details=(
-                    f"The cookie '{cookie_name}' was set without the following security attributes: "
-                    f"{', '.join(missing_flags)}. Missing HttpOnly allows access via XSS, missing "
-                    "Secure allows transmission over HTTP (plain text), and missing SameSite leaves "
-                    "the cookie vulnerable to CSRF attacks."
+                    f"Evidence: application authentication/session cookie '{cookie_name}' was set "
+                    "without the following security attributes: "
+                    f"{', '.join(missing_flags)}. "
+                    + "; ".join(f"without {flag} it {impacts[flag]}" for flag in missing_flags)
+                    + "."
                 ),
             ))
     return findings

@@ -333,11 +333,25 @@ def _strip_min(version: str) -> str:
     return _MIN_TRAIL.sub("", version)
 
 
+def _plausible_version(version: str) -> bool:
+    """Reject asset fingerprints accidentally captured as library versions."""
+    value = str(version or "").strip()
+    if not value or len(value) > 40 or not value[0].isdigit():
+        return False
+    # Bundlers commonly emit jquery-<git/content hash>.js. A 7+ character
+    # hexadecimal token with letters and no version separator is not a release.
+    if "." not in value and "-" not in value and re.fullmatch(r"[a-f0-9]{7,}", value, re.I):
+        return False
+    return True
+
+
 def _uniq(results):
     """Dedup detections by ``"{component} {version}"`` (keep first) - retire.js uniq()."""
     seen = set()
     out = []
     for lib, ver, det in results:
+        if not _plausible_version(ver):
+            continue
         key = f"{lib} {ver}"
         if key in seen:
             continue
@@ -551,12 +565,14 @@ def _findings_for_detection(url, lib, version, detection, entry, seen):
                 out.append(_make_finding(url, lib, version, detection, cve, True, vuln))
         else:
             idents = vuln.get("identifiers") or {}
-            alt_id = (
-                idents.get("githubID")
-                or idents.get("issue")
-                or idents.get("bug")
-                or "advisory"
-            )
+            if idents.get("githubID"):
+                alt_id = str(idents["githubID"])
+            elif idents.get("issue"):
+                alt_id = f"Advisory {lib} issue {idents['issue']}"
+            elif idents.get("bug"):
+                alt_id = f"Advisory {lib} bug {idents['bug']}"
+            else:
+                alt_id = f"Advisory {lib}"
             key = (url, lib, version, alt_id)
             if key in seen:
                 continue

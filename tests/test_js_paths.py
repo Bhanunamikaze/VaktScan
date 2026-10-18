@@ -151,7 +151,7 @@ class JSPathsTests(unittest.TestCase):
         self.assertEqual(len(recon.probe_results), 1)
         self.assertEqual(recon.probe_results[0]["Status Code"], 401)
 
-    def test_probe_endpoint_keeps_sensitive_path_finding_for_302(self):
+    def test_probe_endpoint_records_302_as_inventory_not_vulnerability(self):
         recon = JSRecon([])
         recon.session.get = Mock(return_value=Mock(
             status_code=302,
@@ -161,9 +161,9 @@ class JSPathsTests(unittest.TestCase):
 
         recon.probe_endpoint(("https://api.example.com", "/api/v1/users"))
 
-        self.assertEqual(len(recon.findings), 1)
-        self.assertEqual(recon.findings[0]["status"], "POTENTIAL")
-        self.assertEqual(recon.findings[0]["http_status"], "302")
+        self.assertEqual(recon.findings, [])
+        self.assertEqual(len(recon.probe_results), 1)
+        self.assertEqual(recon.probe_results[0]["Status Code"], 302)
 
 
 if __name__ == "__main__":

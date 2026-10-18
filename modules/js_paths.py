@@ -57,6 +57,7 @@ def _make_finding(url: str, vulnerability: str, status: str,
         "module":          "js_paths",
         "service_version": "N/A",
         "url":             url,
+        "payload_url":     url,
         "details":         details,
         "http_status":     str(http_status),
         "page_title":      "N/A",
@@ -463,27 +464,78 @@ class JSRecon:
             r = self.session.get(map_url, verify=False, timeout=self.timeout,
                                  allow_redirects=False)
             if r.status_code == 200 and 'mappings' in r.text[:1000]:
+                includes_source = '"sourcesContent"' in r.text[:200000]
                 self.findings.append(_make_finding(
                     map_url,
                     "Exposed JS Source Map",
-                    "VULNERABLE", "HIGH",
-                    f"Source map at {map_url} - leaks original source code.",
+                    "POTENTIAL" if includes_source else "INFO",
+                    "MEDIUM" if includes_source else "LOW",
+                    (
+                        f"Source map at {map_url}. Evidence: valid mappings field"
+                        + (" and embedded sourcesContent expose original source." if includes_source
+                           else "; no embedded sourcesContent was confirmed.")
+                    ),
                     http_status=200,
                 ))
         except Exception:
             pass
 
+    def _is_first_party_js(self, js_url: str) -> bool:
+        """Limit secret findings to the organization-owned target domain set."""
+        js_host = (urlparse(js_url).hostname or "").lower()
+        if not js_host:
+            return False
+        target_hosts = {
+            (urlparse(origin).hostname or "").lower()
+            for origin in self._scope_origins
+        }
+        if not target_hosts:
+            return True
+        for target_host in target_hosts:
+            labels = target_host.split(".")
+            root = ".".join(labels[-2:]) if len(labels) >= 2 else target_host
+            if js_host == target_host or js_host == root or js_host.endswith("." + root):
+                return True
+        return False
+
+    @staticmethod
+    def _credible_generic_secret(value: str) -> bool:
+        value = str(value or "").strip()
+        lower = value.lower()
+        if len(value) < 12 or lower in {
+            "password", "secret", "changeme", "your_password", "your_secret",
+            "api_key", "undefined", "null", "example", "placeholder",
+        }:
+            return False
+        # Translation strings, identifier names, and cache/build hashes are not
+        # credentials. Require mixed character classes and reject pure hex.
+        if re.fullmatch(r"[a-f0-9]{16,}", value, re.I):
+            return False
+        classes = sum(bool(re.search(pattern, value)) for pattern in (
+            r"[a-z]", r"[A-Z]", r"[0-9]", r"[^A-Za-z0-9]",
+        ))
+        return classes >= 2
+
     def _check_secrets(self, js_url: str, content: str) -> None:
         """Scan JS content for hardcoded secrets."""
+        if not self._is_first_party_js(js_url):
+            return
         for name, pattern in self.SECRET_PATTERNS.items():
             matches = pattern.findall(content)
             if matches:
                 sample = str(matches[0])[:60]
+                if name in ("Generic API Key", "Hardcoded Password", "Generic Secret"):
+                    if not self._credible_generic_secret(sample):
+                        continue
+                    status, severity = "POTENTIAL", "MEDIUM"
+                else:
+                    status, severity = "VULNERABLE", "CRITICAL"
                 self.findings.append(_make_finding(
                     js_url,
                     f"Hardcoded Secret: {name}",
-                    "VULNERABLE", "CRITICAL",
-                    f"Pattern matched in {js_url}. Sample: {sample}…",
+                    status, severity,
+                    f"Evidence: credential-format pattern matched in first-party JavaScript {js_url}. "
+                    f"Redacted sample prefix: {sample[:8]}… Manual validity confirmation required.",
                     http_status=200,
                 ))
 
@@ -552,6 +604,61 @@ class JSRecon:
     # Phase 3 - probe host × path permutations
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _sensitive_path_oracle(label: str, response) -> str | None:
+        """Return concrete evidence for a sensitive path, or None."""
+        body = response.text or ""
+        lower = body[:200000].lower()
+        content_type = response.headers.get('Content-Type', '').lower()
+        if label == "Environment File Exposed":
+            return "environment KEY=VALUE assignment" if re.search(
+                r"(?m)^[A-Z_][A-Z0-9_]*=.+$", body
+            ) else None
+        if label == "Git Repository Exposed":
+            return "Git ref/config marker" if (
+                re.search(r"ref:\s*refs/", body) or "[core]" in body or "[remote" in body
+            ) else None
+        if label == "GraphQL Endpoint":
+            return "GraphQL schema/data envelope" if re.search(
+                r'"(?:__schema|data|errors)"\s*:', body
+            ) else None
+        if label == "Swagger/OpenAPI Docs":
+            return "OpenAPI/Swagger document marker" if (
+                re.search(r'"(?:openapi|swagger)"\s*:', body)
+                or "swagger-ui" in lower
+            ) else None
+        if label == "Admin Panel":
+            has_password = bool(re.search(r'type=["\']password["\']', lower))
+            has_admin = any(token in lower for token in ("admin", "administrator", "management"))
+            return "admin-branded password login form" if has_password and has_admin else None
+        if label == "Spring Actuator":
+            return "Spring Boot actuator response marker" if any(
+                token in lower for token in ('"_links"', 'jvm.memory', 'spring boot', 'applicationconfig')
+            ) else None
+        if label == "Debug Interface":
+            return "debugger stack/console marker" if any(
+                token in lower for token in ("werkzeug debugger", "django debug", "stack trace", "debug toolbar")
+            ) else None
+        if label == "Metrics/Telemetry Exposed":
+            return "Prometheus metric exposition" if re.search(
+                r"(?m)^#\s*(?:help|type)\s+[a-z_:][a-z0-9_:]*", lower
+            ) else None
+        if label == "Backup File":
+            is_archive = any(token in content_type for token in (
+                "application/zip", "application/gzip", "application/x-tar", "application/octet-stream",
+            ))
+            return "archive content type" if is_archive and "<html" not in lower else None
+        if label == "Upload Endpoint":
+            return "HTML file-upload control" if re.search(
+                r'<input[^>]+type=["\']file["\']', lower
+            ) else None
+        if label == "Config Endpoint":
+            return "configuration/credential assignment" if re.search(
+                r'(?i)(?:password|secret|token|api[_-]?key|database)["\']?\s*[:=]\s*["\']?\S+', body
+            ) else None
+        # API/version/health paths are inventory, not vulnerabilities by name.
+        return None
+
     def probe_endpoint(self, combo: tuple) -> None:
         if self._stop.is_set():
             return
@@ -585,34 +692,39 @@ class JSRecon:
             # --- Sensitive path detection ---
             for kw, (label, base_sev) in self.SENSITIVE_PATH_KEYWORDS.items():
                 if kw in path.lower():
-                    if status == 200:
-                        vuln_status = "VULNERABLE"
-                        sev         = base_sev
-                    else:
-                        vuln_status = "POTENTIAL"
-                        sev         = "MEDIUM"
-                    self.findings.append(_make_finding(
-                        url,
-                        f"Sensitive Path Accessible: {label}",
-                        vuln_status, sev,
-                        f"HTTP {status} on '{path}'. Server: {server}",
-                        http_status=status,
-                    ))
+                    evidence = self._sensitive_path_oracle(label, r) if status == 200 else None
+                    if evidence:
+                        self.findings.append(_make_finding(
+                            url,
+                            f"Sensitive Path Accessible: {label}",
+                            "VULNERABLE", base_sev,
+                            f"HTTP 200 on '{path}'. Evidence: {evidence}. Server: {server}",
+                            http_status=status,
+                        ))
                     break
 
-            # --- Unauthenticated JSON data ---
+            # --- Unauthenticated sensitive JSON data ---
             if status == 200 and 'application/json' in content_type:
-                preview = r.text[:150].strip()
-                self.findings.append(_make_finding(
-                    url,
-                    "Unauthenticated JSON Endpoint",
-                    "POTENTIAL", "MEDIUM",
-                    f"Open JSON response at '{path}'. Preview: {preview}",
-                    http_status=status,
-                ))
+                sensitive_keys = sorted(set(re.findall(
+                    r'(?i)"(password|passwd|secret|access_token|refresh_token|api_key|private_key|ssn|credit_card)"\s*:',
+                    r.text[:200000],
+                )))
+                if sensitive_keys:
+                    self.findings.append(_make_finding(
+                        url,
+                        "Unauthenticated Sensitive JSON Data Exposure",
+                        "VULNERABLE", "HIGH",
+                        f"Open JSON response at '{path}'. Evidence: sensitive keys present: "
+                        f"{', '.join(sensitive_keys)}.",
+                        http_status=status,
+                    ))
 
             # --- Directory listing ---
-            if status == 200 and 'text/html' in content_type and 'Index of /' in r.text:
+            if (
+                status == 200 and 'text/html' in content_type
+                and re.search(r'<title>\s*Index of /', r.text, re.I)
+                and re.search(r'<a[^>]+href=["\'][^"\']+["\']', r.text, re.I)
+            ):
                 self.findings.append(_make_finding(
                     url,
                     "Directory Listing Enabled",
