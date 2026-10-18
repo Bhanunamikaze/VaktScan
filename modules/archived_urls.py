@@ -468,6 +468,12 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
         )
 
         # Live dashboard task for the re-probe / secret-scan loop.
+        request_sem = asyncio.Semaphore(max(1, int(concurrency)))
+
+        async def _bounded(awaitable):
+            async with request_sem:
+                return await awaitable
+
         try:
             from modules.dashboard import LiveDashboard
             dashboard = LiveDashboard()
@@ -528,7 +534,8 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
                 # false positive (JSON error envelopes, plain-text soft-404s, etc.).
                 origins = sorted({_origin(l) for _s, l, _c in live_sensitive})
                 base_results = await asyncio.gather(
-                    *(_soft404_baseline(o) for o in origins), return_exceptions=True
+                    *(_bounded(_soft404_baseline(o)) for o in origins),
+                    return_exceptions=True,
                 )
                 baselines = {
                     o: (r if isinstance(r, tuple) else (False, "", 0))
@@ -545,7 +552,7 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
                     is_catchall, base_body, base_len = baselines.get(_origin(lurl), (False, "", 0))
                     ext = _matched_ext(src)
                     if ext:
-                        status, body, ctype, clen = await _fetch_meta(lurl)
+                        status, body, ctype, clen = await _bounded(_fetch_meta(lurl))
                         if body is None or status != 200:
                             return
                         # On a catch-all host, drop candidates that merely echo the
@@ -575,7 +582,7 @@ async def scan_archived_urls(archived_urls: list[str], output_dir: str, concurre
                 prog = DashboardProgress("archived_urls", total=len(live_js), noun="js")
 
                 async def _scan_one(src, lurl, code):
-                    content = await _fetch_text(lurl)
+                    content = await _bounded(_fetch_text(lurl))
                     for f in _extract_secret_findings(lurl, content):
                         findings.append(f)
 

@@ -480,7 +480,7 @@ class JSRecon:
         self._run_bounded(
             self.js_urls,
             self.parse_js_file,
-            phase="Parsing JS files",
+            phase="Parse JS",
             total=len(self.js_urls),
         )
 
@@ -581,7 +581,7 @@ class JSRecon:
         self._run_bounded(
             product(self.hosts, self.paths),
             self.probe_endpoint,
-            phase="Probing JS paths",
+            phase="Probe paths",
             total=total,
         )
 
@@ -592,20 +592,24 @@ class JSRecon:
     def run(self) -> dict:
         """Run full workflow. Returns dict with findings + raw data."""
         try:
-            self.progress_phase = "Collecting JS files"
-            self.progress_done = 0
-            self.progress_total = len(self.target_urls)
-            for url in self.target_urls:
-                if self._stop.is_set():
-                    break
-                self.collect_js_files(url)
-                self.progress_done += 1
+            self._run_bounded(
+                self.target_urls,
+                self.collect_js_files,
+                phase="Collect JS",
+                total=len(self.target_urls),
+            )
+
+            if self._stop.is_set():
+                return self._result_dict()
 
             if not self.js_urls:
                 print(f"{Colors.YELLOW}[-] No JS files found. Exiting.{Colors.RESET}")
                 return self._result_dict()
 
             self.run_js_analysis()
+
+            if self._stop.is_set():
+                return self._result_dict()
 
             if not self.paths or not self.hosts:
                 print(f"{Colors.YELLOW}[-] No paths/hosts extracted. Skipping probing.{Colors.RESET}")

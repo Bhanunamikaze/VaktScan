@@ -463,7 +463,7 @@ async def run_recon_followups(
     if len(bulk_scan_urls) < len(alive_urls):
         print(
             f"{Colors.CYAN}[*] Collapsed {len(alive_urls)} alive URLs to "
-            f"{len(bulk_scan_urls)} unique host/IP origins for Dirsearch and Nuclei."
+            f"{len(bulk_scan_urls)} unique host/IP origins for Dirsearch, Nuclei, and JS Paths."
             f"{Colors.RESET}"
         )
     
@@ -476,7 +476,7 @@ async def run_recon_followups(
             f"{len(alive_urls)} URL(s) (max concurrency {web_concurrency})...{Colors.RESET}"
         )
         nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
-        js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=output_dir)
+        js_scanner = js_paths.JSPathsScanner(bulk_scan_urls, output_dir=output_dir)
 
         from modules.dashboard import LiveDashboard
         dashboard = LiveDashboard()
@@ -659,12 +659,21 @@ async def run_recon_followups(
                 print(f"{Colors.BRIGHT_RED}[!] Default credentials: {len(_dcf)} confirmed finding(s).{Colors.RESET}")
                 all_findings.extend(_dcf)
 
-    # GAU + waybackurls in parallel
+    # GAU and waybackurls run one tool at a time, each at the configured scan
+    # concurrency. This preserves high throughput without stacking two process
+    # pools and their outbound connections on top of one another.
     domain_hosts = collect_domain_hosts(alive_urls)
     if domain_hosts:
-        print(f"{Colors.CYAN}[*] Harvesting archived URLs for {len(domain_hosts)} host(s) (gau + waybackurls in parallel)...{Colors.RESET}")
-        gau_inst = gau_runner.GAURunner(output_dir=output_dir)
-        wayback_inst = waybackurls_runner.WaybackURLsRunner(output_dir=output_dir)
+        print(
+            f"{Colors.CYAN}[*] Harvesting archived URLs for {len(domain_hosts)} host(s) "
+            f"(GAU then Wayback, up to {web_concurrency} hosts per tool)...{Colors.RESET}"
+        )
+        gau_inst = gau_runner.GAURunner(
+            output_dir=output_dir, concurrency=web_concurrency
+        )
+        wayback_inst = waybackurls_runner.WaybackURLsRunner(
+            output_dir=output_dir, concurrency=web_concurrency
+        )
 
         from modules.dashboard import LiveDashboard
         dashboard = LiveDashboard()
@@ -673,11 +682,8 @@ async def run_recon_followups(
             dashboard.add_task("wayback", "Wayback Archival")
 
         try:
-            gau_result, wayback_result = await asyncio.gather(
-                gau_inst.run(domain_hosts),
-                wayback_inst.run(domain_hosts),
-                return_exceptions=True,
-            )
+            gau_result = await _capture_stage(gau_inst.run(domain_hosts))
+            wayback_result = await _capture_stage(wayback_inst.run(domain_hosts))
         finally:
             if dashboard.active:
                 dashboard.complete_task("gau")
@@ -1108,7 +1114,7 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
     if len(bulk_scan_urls) < len(alive_urls):
         print(
             f"{Colors.CYAN}[*] Collapsed {len(alive_urls)} alive URLs to "
-            f"{len(bulk_scan_urls)} unique host/IP origins for Dirsearch and Nuclei."
+            f"{len(bulk_scan_urls)} unique host/IP origins for Dirsearch, Nuclei, and JS Paths."
             f"{Colors.RESET}"
         )
 
@@ -1127,7 +1133,7 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
     dirsearch_result = await dir_enumerator.run_dirsearch(bulk_scan_urls)
     findings.extend(artifact_findings.dirsearch_findings(dirsearch_result))
 
-    js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=output_dir)
+    js_scanner = js_paths.JSPathsScanner(bulk_scan_urls, output_dir=output_dir)
     js_result = await js_scanner.run()
     js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
     findings.extend(js_findings)

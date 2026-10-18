@@ -76,7 +76,7 @@ class ProbeWebUrlsTest(unittest.TestCase):
 
         class FakeJS:
             def __init__(self, urls, output_dir=None):
-                pass
+                captured["js_paths"] = urls
 
             async def run(self):
                 return []
@@ -97,6 +97,7 @@ class ProbeWebUrlsTest(unittest.TestCase):
         expected = ["https://192.0.2.10:8443", "https://a.example.com"]
         self.assertEqual(captured["nuclei"], expected)
         self.assertEqual(captured["dirsearch"], expected)
+        self.assertEqual(captured["js_paths"], expected)
 
     def test_collects_nuclei_webchecks_js_findings(self):
         nuc = {"vulnerability": "nuclei-hit"}

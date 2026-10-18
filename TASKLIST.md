@@ -9,12 +9,14 @@
 - [x] Checkpoint domain checks, web checks, JS analysis, Nuclei, and Dirsearch independently.
 - [x] Reuse completed preliminary web-port and HTTPX discovery instead of repeating it.
 - [x] Ensure resumed scans do not skip required downstream work after recon.
-- [x] Send only one canonical HTTPS-preferred origin per unique hostname/IP to Nuclei and Dirsearch.
+- [x] Send only one canonical HTTPS-preferred origin per unique hostname/IP to Nuclei, Dirsearch, and JS active probing.
 - [x] Apply the same target deduplication inside the Nuclei and Dirsearch modules as defense in depth.
 - [x] Prevent two processes from sharing and corrupting the same scan checkpoint.
 - [x] Reduce network pressure that could exhaust the local router/NAT table:
   - [x] Keep HTTP-heavy stages at the normal `-c 100` throughput by default.
   - [x] Run request-amplifying recon stages sequentially.
+  - [x] Run GAU and Wayback sequentially at global scan concurrency.
+  - [x] Bound archived-URL validation/fetches to global scan concurrency.
   - [x] Keep Dirsearch at its original 20 targets × 30 threads (up to 600 workers).
   - [x] Keep Nuclei at concurrency 50, 150 requests/second, and bulk size 100.
   - [x] Run JS analysis at the normal `-c 100` throughput by default, with bounded scheduling.
