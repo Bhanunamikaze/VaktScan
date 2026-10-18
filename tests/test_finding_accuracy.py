@@ -97,6 +97,35 @@ class ReportAccuracyTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
         self.assertEqual(rows[0]["URL"], "https://example.com/admin/login")
 
+    def test_legacy_cors_redirect_is_rejected(self):
+        finding = {
+            "module": "domain_scan",
+            "vulnerability": "CORS: Arbitrary Origin Reflection with Credentials",
+            "status": "VULNERABLE",
+            "http_status": "302",
+            "details": "Confirmed arbitrary origin reflection with credentials.",
+        }
+        self.assertIn("redirect/error", reporter.finding_rejection_reason(finding))
+
+    def test_invalid_internal_ip_is_rejected(self):
+        finding = {
+            "module": "js_paths",
+            "vulnerability": "Internal IP Disclosure",
+            "status": "POTENTIAL",
+            "details": "RFC-1918 address '10.934.661.508' found in app.js",
+        }
+        self.assertIn("not a valid IP", reporter.finding_rejection_reason(finding))
+
+    def test_dependency_cve_without_exploit_path_is_rejected(self):
+        finding = {
+            "module": "js_cve",
+            "vulnerability": "CVE-2020-11023 - jquery 3.3.1",
+            "status": "VULNERABLE",
+            "service_version": "jquery 3.3.1",
+            "details": "Vulnerable client-side library detected via filename.",
+        }
+        self.assertIn("reachable vulnerable-code", reporter.finding_rejection_reason(finding))
+
 
 class WebCheckAccuracyTests(unittest.IsolatedAsyncioTestCase):
     async def test_sensitive_file_catchall_is_suppressed(self):
@@ -138,6 +167,42 @@ class WebCheckAccuracyTests(unittest.IsolatedAsyncioTestCase):
             "https://example.com/", RouteClient(default=catchall)
         )
         self.assertEqual(findings, [])
+
+    async def test_admin_login_form_is_inventory_not_high_severity(self):
+        routes = {
+            "/admin": FakeResponse(
+                200,
+                '<html><title>Admin Login</title><form><input type="password"></form></html>',
+                {"content-type": "text/html"},
+            ),
+        }
+        findings = await web_checks.check_admin_panels(
+            "https://example.com/", RouteClient(routes=routes)
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "INFO")
+        self.assertEqual(findings[0]["status"], "INFO")
+
+
+class DomainScanAccuracyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cors_headers_on_redirect_are_not_a_finding(self):
+        redirect = FakeResponse(
+            302,
+            "",
+            {
+                "access-control-allow-origin": "https://cors-test.invalid",
+                "access-control-allow-credentials": "true",
+                "location": "https://access.example/login",
+            },
+        )
+        scanner = domain_scan.DomainScanner(tempfile.gettempdir())
+        with patch("modules.domain_scan.httpx.AsyncClient", return_value=ContextClient(default=redirect)):
+            findings = await scanner.run_anomaly_checks(
+                ["https://example.com"],
+                [{"url": "https://example.com", "input": "example.com"}],
+                concurrency=2,
+            )
+        self.assertFalse(any(f["vulnerability"].startswith("CORS:") for f in findings))
 
 
 class BrokenResourceAccuracyTests(unittest.IsolatedAsyncioTestCase):

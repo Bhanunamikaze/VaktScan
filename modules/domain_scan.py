@@ -451,10 +451,21 @@ class DomainScanner:
                         cors_resp = await client.get(url, headers=cors_headers)
                         acao = cors_resp.headers.get('access-control-allow-origin', '')
                         acac = cors_resp.headers.get('access-control-allow-credentials', '')
-                        if acao == canary_origin and acac.lower() == 'true':
+                        # A reflected ACAO on an authentication redirect (for
+                        # example Cloudflare Access) does not expose protected
+                        # response data to JavaScript.  Require a successful,
+                        # non-empty response before recording a candidate.
+                        if (
+                            acao == canary_origin
+                            and acac.lower() == 'true'
+                            and 200 <= cors_resp.status_code < 300
+                            and bool(cors_resp.content)
+                        ):
                             findings.append(self._create_vuln_entry(
-                                entry, "CORS: Arbitrary Origin Reflection with Credentials", "VULNERABLE", "HIGH",
-                                f"Confirmed arbitrary origin reflection with credentials: ACAO={acao}; ACAC={acac}.",
+                                entry, "CORS: Arbitrary Origin Reflection with Credentials", "POTENTIAL", "MEDIUM",
+                                f"Reflected credentialed CORS headers on a successful non-empty response: "
+                                f"ACAO={acao}; ACAC={acac}. Manual proof that sensitive data is "
+                                "readable cross-origin is still required.",
                                 evidence_url=url,
                                 http_status=cors_resp.status_code,
                                 page_title="N/A",

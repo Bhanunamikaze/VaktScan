@@ -176,6 +176,15 @@ def finding_rejection_reason(finding):
             return "legacy CORS result lacks reflected-origin plus credential proof"
         if title.startswith("CORS:") and "arbitrary origin reflection with credentials" not in details.lower():
             return "CORS result lacks reflected-origin plus credential proof"
+        if title.startswith("CORS:"):
+            try:
+                cors_status = int(str(finding.get("http_status") or "0"))
+            except ValueError:
+                cors_status = 0
+            if not 200 <= cors_status < 300:
+                return "CORS headers on a redirect/error do not prove cross-origin data exposure"
+            if status == "POTENTIAL" or "Manual proof" in details:
+                return "credentialed CORS candidate lacks proof of readable sensitive data"
         if title.startswith("Subdomain takeover candidate:") and "DNS evidence: CNAME" not in details:
             return "takeover fingerprint lacks matching DNS/CNAME evidence"
 
@@ -196,6 +205,8 @@ def finding_rejection_reason(finding):
             return "policy inferred from an error/block/rate-limit response"
         if title.startswith("Admin Path Accessible:"):
             return "HTTP 200 path without an admin authentication oracle"
+        if title.startswith("Admin Panel Publicly Accessible:"):
+            return "login panel exposure alone does not demonstrate a security impact"
         if title in ("Admin Panel Detected", "WordPress Admin Panel Detected"):
             return "legacy HTTP 200 admin-path result lacks a login/admin oracle"
         if title == "security.txt Accessible" and "Contact:" not in details:
@@ -234,12 +245,27 @@ def finding_rejection_reason(finding):
             return "legacy plaintext finding lacks verified cPanel identity evidence"
 
     if module == "js_paths":
-        if title.startswith("Hardcoded Secret:") and "Evidence:" not in details:
-            return "legacy regex-only secret result lacks first-party/credential validation"
+        if title.startswith("Hardcoded Secret:"):
+            if "Evidence:" not in details:
+                return "legacy regex-only secret result lacks first-party/credential validation"
+            if status == "POTENTIAL" or "Manual validity confirmation required" in details:
+                return "generic secret pattern was not validated as a working credential"
         if title.startswith("Sensitive Path Accessible:") and "Evidence:" not in details:
             return "legacy path result is based only on HTTP status"
         if title == "Unauthenticated JSON Endpoint":
             return "public JSON alone is not a vulnerability"
+        if title == "Unauthenticated Sensitive JSON Data Exposure" and "non-empty scalar values" not in details:
+            return "JSON key-name match does not prove that secret data was exposed"
+        if title == "Internal IP Disclosure":
+            match = re.search(r"RFC-1918 address ['\"]([^'\"]+)", details)
+            if not match:
+                return "internal-address finding lacks a validated IP literal"
+            try:
+                candidate_ip = ipaddress.ip_address(match.group(1))
+            except ValueError:
+                return "internal-address match is not a valid IP address"
+            if not candidate_ip.is_private:
+                return "address is not in a private range"
         if title == "Exposed JS Source Map" and "Evidence:" not in details:
             return "legacy source-map result lacks embedded-source impact evidence"
 
@@ -250,6 +276,8 @@ def finding_rejection_reason(finding):
             return "asset fingerprint/hash was misparsed as a library version"
         if not title.startswith(("CVE-", "GHSA-", "Advisory ")):
             return "non-CVE advisory identifier is ambiguous/malformed"
+        if "Exploit evidence:" not in details:
+            return "dependency/version correlation lacks a reachable vulnerable-code proof"
 
     return None
 

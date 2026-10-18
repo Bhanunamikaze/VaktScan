@@ -816,13 +816,13 @@ async def check_admin_panels(url: str, client: httpx.AsyncClient) -> list[dict]:
         if sc == 200 and has_login_form and has_admin_context:
             findings.append(_make_finding(
                 **base,
-                vulnerability=f"Admin Panel Publicly Accessible: {path}",
-                status="VULNERABLE",
-                severity="HIGH",
+                vulnerability=f"Admin Panel Detected: {path}",
+                status="INFO",
+                severity="INFO",
                 details=(
-                    f"An admin/management login panel is directly accessible at '{probe_url}' "
-                    f"(HTTP {sc}). Exposed admin panels are a primary target for credential "
-                    "brute-force, credential stuffing, and authentication bypass attacks."
+                    f"Inventory only: an admin/management login form is present at "
+                    f"'{probe_url}' (HTTP {sc}). A login page alone does not demonstrate "
+                    "authentication bypass or unauthorized access."
                 ),
             ))
         elif sc == 401:

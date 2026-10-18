@@ -165,6 +165,38 @@ class JSPathsTests(unittest.TestCase):
         self.assertEqual(len(recon.probe_results), 1)
         self.assertEqual(recon.probe_results[0]["Status Code"], 302)
 
+    def test_css_module_identifier_is_not_a_generic_secret(self):
+        recon = JSRecon(["https://app.example.com/"])
+        recon._check_secrets(
+            "https://app.example.com/main.js",
+            'requestToken:"ConnectModal_requestToken__bm0S9"',
+        )
+        self.assertEqual(recon.findings, [])
+
+    def test_invalid_private_ip_shape_is_not_reported(self):
+        recon = JSRecon(["https://app.example.com/"])
+        recon._check_internal_ips(
+            "https://app.example.com/main.js",
+            'const artifact = "10.934.661.508";',
+        )
+        self.assertEqual(recon.findings, [])
+
+    def test_valid_private_ip_is_reported(self):
+        recon = JSRecon(["https://app.example.com/"])
+        recon._check_internal_ips(
+            "https://app.example.com/main.js",
+            'const backend = "10.23.42.7";',
+        )
+        self.assertEqual(len(recon.findings), 1)
+
+    def test_json_schema_password_property_is_not_sensitive_data(self):
+        body = '{"routes":{"args":{"password":{"type":"string","required":false}}}}'
+        self.assertEqual(JSRecon._sensitive_json_values(body), [])
+
+    def test_json_secret_scalar_is_detected_without_returning_value(self):
+        body = '{"user":{"access_token":"sl_live_example_123"}}'
+        self.assertEqual(JSRecon._sensitive_json_values(body), ["access_token"])
+
 
 if __name__ == "__main__":
     unittest.main()

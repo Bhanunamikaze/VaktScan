@@ -12,6 +12,8 @@ Usage:
 
 import asyncio
 from datetime import datetime
+import ipaddress
+import json
 import os
 import re
 import signal
@@ -88,9 +90,9 @@ class JSRecon:
         "JWT Token":           re.compile(r'eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-\.]+'),
         "Private Key Block":   re.compile(r'-----BEGIN (?:RSA |EC )?PRIVATE KEY-----'),
         "Bearer Token":        re.compile(r'(?i)authorization[\s"\'=:]+["\']?Bearer\s+([A-Za-z0-9_\-\.=]{20,})["\']?'),
-        "Generic API Key":     re.compile(r'(?i)api[_\-]?key[\s"\'=:]+["\']([A-Za-z0-9_\-]{20,})["\']'),
-        "Hardcoded Password":  re.compile(r'(?i)(?:password|passwd|pwd)[\s"\'=:]+["\']([^\s"\']{6,})["\']'),
-        "Generic Secret":      re.compile(r'(?i)(?:secret|token)[\s"\'=:]+["\']([A-Za-z0-9_\-\.]{16,})["\']'),
+        "Generic API Key":     re.compile(r'(?i)\bapi[_\-]?key\b[\s"\'=:]+["\']([A-Za-z0-9_\-]{20,})["\']'),
+        "Hardcoded Password":  re.compile(r'(?i)\b(?:password|passwd|pwd)\b[\s"\'=:]+["\']([^\s"\']{6,})["\']'),
+        "Generic Secret":      re.compile(r'(?i)\b(?:secret|token)\b[\s"\'=:]+["\']([A-Za-z0-9_\-\.]{16,})["\']'),
         "Firebase URL":        re.compile(r'https://[a-z0-9\-]+\.firebaseio\.com'),
     }
 
@@ -468,8 +470,8 @@ class JSRecon:
                 self.findings.append(_make_finding(
                     map_url,
                     "Exposed JS Source Map",
-                    "POTENTIAL" if includes_source else "INFO",
-                    "MEDIUM" if includes_source else "LOW",
+                    "INFO",
+                    "INFO",
                     (
                         f"Source map at {map_url}. Evidence: valid mappings field"
                         + (" and embedded sourcesContent expose original source." if includes_source
@@ -511,6 +513,12 @@ class JSRecon:
         # credentials. Require mixed character classes and reject pure hex.
         if re.fullmatch(r"[a-f0-9]{16,}", value, re.I):
             return False
+        # Webpack/CSS-module identifiers (for example
+        # ``ConnectModal_requestToken__bm0S9``) are commonly adjacent to a
+        # property whose name ends in ``token``.  They are selectors, not
+        # credentials.
+        if "__" in value and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]+", value):
+            return False
         classes = sum(bool(re.search(pattern, value)) for pattern in (
             r"[a-z]", r"[A-Z]", r"[0-9]", r"[^A-Za-z0-9]",
         ))
@@ -542,13 +550,62 @@ class JSRecon:
     def _check_internal_ips(self, js_url: str, content: str) -> None:
         """Flag RFC-1918 addresses embedded in JS."""
         for ip in set(self.INTERNAL_IP_RE.findall(content)):
+            try:
+                parsed = ipaddress.ip_address(ip)
+            except ValueError:
+                # The regex deliberately stays cheap, so validate octets
+                # before claiming an RFC-1918 disclosure (10.934.661.508 was
+                # one observed false positive).
+                continue
+            if not parsed.is_private:
+                continue
             self.findings.append(_make_finding(
                 js_url,
                 "Internal IP Disclosure",
-                "POTENTIAL", "MEDIUM",
+                "INFO", "LOW",
                 f"RFC-1918 address '{ip}' found in {js_url}",
                 http_status=200,
             ))
+
+    @staticmethod
+    def _sensitive_json_values(body: str) -> list[str]:
+        """Return sensitive keys that carry concrete scalar secret values.
+
+        Matching a key name in an API schema is not data exposure.  WordPress
+        ``/wp-json/``, for example, documents a ``password`` request property
+        whose value is another schema object.  Only non-empty scalar strings
+        count here; values are never returned or written to reports.
+        """
+        try:
+            value = json.loads(body)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+
+        sensitive = {
+            "password", "passwd", "secret", "access_token", "refresh_token",
+            "api_key", "private_key", "ssn", "credit_card",
+        }
+        placeholders = {
+            "", "null", "none", "redacted", "masked", "example", "sample",
+            "placeholder", "changeme", "your_password", "your_secret",
+        }
+        found = set()
+
+        def walk(node):
+            if isinstance(node, dict):
+                for key, child in node.items():
+                    normalized = str(key).strip().lower()
+                    if normalized in sensitive and isinstance(child, str):
+                        candidate = child.strip()
+                        if candidate.lower() not in placeholders and len(candidate) >= 4:
+                            found.add(normalized)
+                    walk(child)
+            elif isinstance(node, list):
+                for child in node:
+                    walk(child)
+
+        walk(value)
+        return sorted(found)
 
     def parse_js_file(self, js_url: str) -> None:
         if self._stop.is_set():
@@ -705,16 +762,14 @@ class JSRecon:
 
             # --- Unauthenticated sensitive JSON data ---
             if status == 200 and 'application/json' in content_type:
-                sensitive_keys = sorted(set(re.findall(
-                    r'(?i)"(password|passwd|secret|access_token|refresh_token|api_key|private_key|ssn|credit_card)"\s*:',
-                    r.text[:200000],
-                )))
+                sensitive_keys = self._sensitive_json_values(r.text[:200000])
                 if sensitive_keys:
                     self.findings.append(_make_finding(
                         url,
                         "Unauthenticated Sensitive JSON Data Exposure",
                         "VULNERABLE", "HIGH",
-                        f"Open JSON response at '{path}'. Evidence: sensitive keys present: "
+                        f"Open JSON response at '{path}'. Evidence: non-empty scalar values "
+                        f"were present for sensitive keys: "
                         f"{', '.join(sensitive_keys)}.",
                         http_status=status,
                     ))
