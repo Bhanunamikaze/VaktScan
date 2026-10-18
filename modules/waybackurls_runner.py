@@ -13,9 +13,15 @@ class WaybackURLsRunner:
     Wrapper for tomnomnom/waybackurls to fetch archived endpoints.
     """
 
-    def __init__(self, output_dir="reports", concurrency=20):
+    def __init__(self, output_dir="reports", concurrency=20, timeout=None):
         self.output_dir = output_dir
         self.concurrency = max(1, concurrency)
+        if timeout is None:
+            try:
+                timeout = int(os.environ.get("VAKT_ARCHIVE_TOOL_TIMEOUT", "300"))
+            except ValueError:
+                timeout = 300
+        self.timeout = max(1, int(timeout))
         os.makedirs(self.output_dir, exist_ok=True)
         self.results_dir = os.path.join(self.output_dir, "waybackurls")
         os.makedirs(self.results_dir, exist_ok=True)
@@ -87,8 +93,15 @@ class WaybackURLsRunner:
         cmd = [self.binary, domain]
         print(f"\033[96m[*] waybackurls → {domain}\033[0m")
         async with semaphore:
-            result = await proc_runner.run_tool(cmd)
-            stdout, stderr = result.stdout, result.stderr
+            try:
+                result = await proc_runner.run_tool(cmd, timeout=self.timeout)
+                stdout, stderr = result.stdout, result.stderr
+            except asyncio.TimeoutError:
+                print(
+                    f"\033[93m[!] waybackurls ({domain}) timed out after "
+                    f"{self.timeout}s; continuing.\033[0m"
+                )
+                return domain, []
 
         if stderr:
             err_text = stderr.decode().strip()
