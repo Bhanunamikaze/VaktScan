@@ -126,7 +126,10 @@ class ScanStateManager:
             # host just because it had zero open ports.
             "scanned_ips": [],
             "open_ports": {},  # {ip: [ports]}
-            "validated_services": {},  # {ip: {port: service}}
+            # A port can validate as more than one scanner family (for example
+            # a web service can match both a framework and an admin surface).
+            # Store every match; readers also accept legacy scalar strings.
+            "validated_services": {},  # {ip: {port: [service, ...]}}
             # Per-service scans that already ran to completion (Phase 6), keyed
             # "{ip}:{port}:{service}", so an interrupted vulnerability-scanning
             # phase resumes without redoing scanners that already finished.
@@ -471,7 +474,17 @@ class ScanStateManager:
         """
         if ip not in self.state["validated_services"]:
             self.state["validated_services"][ip] = {}
-        self.state["validated_services"][ip][str(port)] = service
+        port_key = str(port)
+        current = self.state["validated_services"][ip].get(port_key)
+        if isinstance(current, list):
+            services = current
+        elif current:
+            services = [current]
+        else:
+            services = []
+        if service not in services:
+            services.append(service)
+        self.state["validated_services"][ip][port_key] = services
         self.save_state()
     
     def add_vulnerability(self, vulnerability: Dict[str, Any]):
@@ -768,7 +781,7 @@ class ScanStateManager:
         """
         return self.state["open_ports"]
     
-    def get_validated_services(self) -> Dict[str, Dict[str, str]]:
+    def get_validated_services(self) -> Dict[str, Dict[str, Any]]:
         """
         Get all validated services.
         """

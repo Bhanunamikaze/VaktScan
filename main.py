@@ -1138,6 +1138,16 @@ def _archive_query_roots(hosts):
 # byte-for-byte the pre-checkpoint behavior - while large URL sets get periodic
 # checkpoints a resume can continue from.
 WEB_PROBE_CHECKPOINT_BATCH = 50
+# Heavy service modules (notably cPanel) fan out to roughly 20-30 HTTP
+# requests per target.  Limit concurrently active module instances so the
+# operator's global -c budget remains meaningful instead of multiplying by
+# every validated host/port pair.
+SERVICE_SCAN_FANOUT_ESTIMATE = 25
+
+
+def _service_scan_parallelism(concurrency):
+    """Translate global request concurrency into heavy scanner instances."""
+    return max(1, int(concurrency) // SERVICE_SCAN_FANOUT_ESTIMATE)
 
 
 async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
@@ -3000,8 +3010,10 @@ async def main(
                 return
             # A prior validation is durable and can feed an unfinished scanner
             # directly.  Do not repeat its network handshake on resume.
-            saved_service = (_saved_validated_services.get(ip) or {}).get(str(port))
-            if saved_service == service:
+            saved_services = (_saved_validated_services.get(ip) or {}).get(str(port))
+            if isinstance(saved_services, str):
+                saved_services = [saved_services]
+            if service in (saved_services or []):
                 prevalidated_mapping.append(mapping)
                 return
             validation_tasks.append(validate_service(service, target_obj, port))
@@ -3051,13 +3063,18 @@ async def main(
             
             validated_services = len(skipped_service_mapping)
             scan_tasks = []
+            service_scan_parallelism = _service_scan_parallelism(concurrency)
+            service_scan_semaphore = asyncio.Semaphore(service_scan_parallelism)
 
             async def scan_with_state_saving(scan_func, target_obj, port, service, adjacent_open_ports=None):
                 try:
-                    if adjacent_open_ports is not None:
-                        results = await scan_func(target_obj, port, adjacent_open_ports=adjacent_open_ports)
-                    else:
-                        results = await scan_func(target_obj, port)
+                    async with service_scan_semaphore:
+                        if adjacent_open_ports is not None:
+                            results = await scan_func(
+                                target_obj, port, adjacent_open_ports=adjacent_open_ports
+                            )
+                        else:
+                            results = await scan_func(target_obj, port)
                     for result in results:
                         state_manager.add_vulnerability(result)
                     # Checkpoint this service scan as done (Phase 6) so a resume
@@ -3106,6 +3123,12 @@ async def main(
 
             if validated_services > 0:
                 print(f"{Colors.CYAN}\n[*] Validated {validated_services} service(s). Starting VaktScan vulnerability assessment...{Colors.RESET}")
+                if scan_tasks:
+                    print(
+                        f"{Colors.CYAN}[*] Service scanner parallelism: "
+                        f"{service_scan_parallelism} instance(s) from global -c {concurrency} "
+                        f"(estimated {SERVICE_SCAN_FANOUT_ESTIMATE} requests/instance).{Colors.RESET}"
+                    )
                 state_manager.update_phase("vulnerability_scanning")
                 
                 if scan_tasks:

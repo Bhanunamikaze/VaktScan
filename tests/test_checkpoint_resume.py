@@ -151,6 +151,26 @@ class ReconStagePayloadTest(_StateDirMixin, unittest.TestCase):
         self.assertEqual(completed, {"203.0.113.20": {80, 443}})
         self.assertEqual(opened, {"203.0.113.20": {80, 443}})
 
+    def test_validated_service_checkpoint_preserves_multiple_matches(self):
+        manager = _quiet_manager("example-services", ["example.com"], "scope")
+        manager.add_validated_service("203.0.113.30", 443, "aem")
+        manager.add_validated_service("203.0.113.30", 443, "nextjs")
+        manager.add_validated_service("203.0.113.30", 443, "aem")
+        manager.save_state(force=True)
+
+        resumed = _quiet_manager("example-services", ["example.com"], "scope")
+        self.assertTrue(resumed.load_existing_state())
+        self.assertEqual(
+            resumed.get_validated_services()["203.0.113.30"]["443"],
+            ["aem", "nextjs"],
+        )
+
+    def test_service_parallelism_scales_with_global_concurrency(self):
+        self.assertEqual(main._service_scan_parallelism(20), 1)
+        self.assertEqual(main._service_scan_parallelism(100), 4)
+        self.assertEqual(main._service_scan_parallelism(200), 8)
+        self.assertEqual(main._service_scan_parallelism(300), 12)
+
 
 # ---------------------------------------------------------------------------
 # T4 - state written on interrupt mid-phase.
