@@ -101,6 +101,85 @@ class CSPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(progress, [("web_checks", 4, "checks")])
 
 
+class WordPressDefaultCredentialTests(unittest.IsolatedAsyncioTestCase):
+    class Client:
+        def __init__(self, login_response, post_responses=None):
+            self.login_response = login_response
+            self.post_responses = list(post_responses or [])
+            self.posts = []
+
+        async def get(self, *_args, **_kwargs):
+            return self.login_response
+
+        async def post(self, *_args, **kwargs):
+            self.posts.append(kwargs)
+            return self.post_responses.pop(0)
+
+    async def test_rejects_redirected_catch_all_before_submitting_credentials(self):
+        client = self.Client(_Response(302, headers={"location": "https://example.com/"}))
+
+        findings = await web_checks._try_wp_default_creds("https://example.com", client)
+
+        self.assertEqual(findings, [])
+        self.assertEqual(client.posts, [])
+
+    async def test_dashboard_text_without_wordpress_cookie_is_not_success(self):
+        login = _Response(
+            200,
+            '<form><input name="log"><input name="pwd"></form>',
+        )
+        responses = [
+            _Response(200, "<html>Marketing Dashboard</html>")
+            for _ in web_checks._WP_CREDS
+        ]
+        client = self.Client(login, responses)
+
+        findings = await web_checks._try_wp_default_creds("https://example.com", client)
+
+        self.assertEqual(findings, [])
+        self.assertEqual(len(client.posts), len(web_checks._WP_CREDS))
+
+    async def test_requires_same_origin_admin_redirect_and_auth_cookie(self):
+        login = _Response(
+            200,
+            '<form><input name="log"><input name="pwd"></form>',
+        )
+        success = _Response(
+            302,
+            headers={
+                "location": "/wp-admin/",
+                "set-cookie": "wordpress_logged_in_abcd=value; Path=/; Secure; HttpOnly",
+            },
+        )
+        client = self.Client(login, [success])
+
+        findings = await web_checks._try_wp_default_creds("https://example.com", client)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["vulnerability"], "WordPress Default Credentials")
+
+    async def test_rejects_cross_origin_admin_redirect(self):
+        login = _Response(
+            200,
+            '<form><input name="log"><input name="pwd"></form>',
+        )
+        responses = [
+            _Response(
+                302,
+                headers={
+                    "location": "https://attacker.example/wp-admin/",
+                    "set-cookie": "wordpress_logged_in_abcd=value; Path=/",
+                },
+            )
+            for _ in web_checks._WP_CREDS
+        ]
+        client = self.Client(login, responses)
+
+        findings = await web_checks._try_wp_default_creds("https://example.com", client)
+
+        self.assertEqual(findings, [])
+
+
 class HorizontalPipelineTests(unittest.TestCase):
     def test_reverse_and_related_hosts_feed_pipeline_deduplicated(self):
         expansion = {

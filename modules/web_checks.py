@@ -839,11 +839,18 @@ async def _try_wp_default_creds(origin: str, client: httpx.AsyncClient) -> list[
     login_url = origin + "/wp-login.php"
     try:
         # Fetch nonce/login page first
-        get_resp = await client.get(login_url)
+        get_resp = await client.get(login_url, follow_redirects=False)
     except Exception:
         return findings
 
-    if get_resp.status_code not in (200, 302):
+    # Do not submit credentials to redirects or catch-all pages.  A genuine
+    # WordPress login form contains both of these named fields.
+    login_body = get_resp.text.lower()
+    if (
+        get_resp.status_code != 200
+        or not re.search(r'<input[^>]+name=["\']log["\']', login_body)
+        or not re.search(r'<input[^>]+name=["\']pwd["\']', login_body)
+    ):
         return findings
 
     for username, password in _WP_CREDS:
@@ -858,17 +865,34 @@ async def _try_wp_default_creds(origin: str, client: httpx.AsyncClient) -> list[
                     "testcookie": "1",
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
+                follow_redirects=False,
             )
         except Exception:
             continue
 
-        # Success indicators: redirect to /wp-admin/ OR Dashboard in body without error message
+        # A successful WordPress login redirects to wp-admin and issues a new
+        # wordpress_logged_in_* cookie.  Requiring both avoids treating a
+        # generic redirect or a marketing page containing "Dashboard" as an
+        # authenticated admin session.
         location = post_resp.headers.get("location", "")
-        body = post_resp.text
-        body_lower = body.lower()
-        redirected_to_admin = "wp-admin" in location or "dashboard" in location
-        has_dashboard = "Dashboard" in body and "incorrect password" not in body_lower
-        if redirected_to_admin or has_dashboard:
+        resolved_location = urlparse(str(httpx.URL(login_url).join(location))) if location else None
+        origin_parts = urlparse(origin)
+        redirected_to_admin = bool(
+            resolved_location
+            and resolved_location.scheme == origin_parts.scheme
+            and resolved_location.hostname == origin_parts.hostname
+            and (resolved_location.port or (443 if resolved_location.scheme == "https" else 80))
+            == (origin_parts.port or (443 if origin_parts.scheme == "https" else 80))
+            and resolved_location.path.startswith("/wp-admin")
+        )
+        if hasattr(post_resp.headers, "get_list"):
+            set_cookie_values = post_resp.headers.get_list("set-cookie")
+        else:
+            set_cookie_values = [post_resp.headers.get("set-cookie", "")]
+        issued_auth_cookie = any(
+            "wordpress_logged_in_" in value.lower() for value in set_cookie_values
+        )
+        if redirected_to_admin and issued_auth_cookie:
             findings.append(_make_finding(
                 url=origin,
                 payload_url=login_url,
