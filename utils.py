@@ -7,6 +7,59 @@ import re
 import urllib.parse
 
 
+def select_unique_host_urls(urls):
+    """Return one canonical HTTP origin for each unique hostname or IP.
+
+    Bulk tools such as Nuclei and dirsearch multiply their work by every input
+    URL.  httpx can legitimately return many live schemes/ports/redirect paths
+    for the same host, but feeding all of those to the bulk tools causes the
+    same hostname to be scanned repeatedly.  Prefer the conventional HTTPS
+    origin, then HTTP, then a non-standard HTTPS/HTTP port.
+
+    The result deliberately keeps distinct DNS names even when they resolve to
+    the same address: virtual hosts can expose different applications.  Literal
+    IP inputs are deduplicated in exactly the same way as DNS names.
+    """
+    selected = {}
+
+    for raw_url in urls or []:
+        value = str(raw_url or "").strip()
+        if not value:
+            continue
+        try:
+            parsed = urllib.parse.urlparse(value)
+            scheme = parsed.scheme.lower()
+            host = (parsed.hostname or "").lower().rstrip(".")
+            if scheme not in ("http", "https") or not host:
+                continue
+            port = parsed.port
+        except (TypeError, ValueError):
+            continue
+
+        default_port = 443 if scheme == "https" else 80
+        effective_port = port or default_port
+        is_standard = effective_port == default_port
+        # Prefer TLS, then conventional ports within the same scheme.
+        rank = (
+            0 if scheme == "https" and is_standard else
+            1 if scheme == "https" else
+            2 if scheme == "http" and is_standard else 3,
+            effective_port,
+            value,
+        )
+
+        display_host = f"[{host}]" if ":" in host else host
+        origin = f"{scheme}://{display_host}"
+        if not is_standard:
+            origin += f":{effective_port}"
+
+        current = selected.get(host)
+        if current is None or rank < current[0]:
+            selected[host] = (rank, origin)
+
+    return sorted(item[1] for item in selected.values())
+
+
 def _normalize_target_token(raw: str) -> str:
     """
     Normalize a single target token to a clean hostname/IP/CIDR string.

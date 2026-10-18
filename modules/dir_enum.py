@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from modules import proc
 from modules.progress import DashboardProgress
+from utils import select_unique_host_urls
 
 
 class Colors:
@@ -237,7 +238,7 @@ class DirEnumerator:
 
         env = os.environ.copy()
 
-        unique_urls = sorted(set(urls))
+        unique_urls = select_unique_host_urls(urls)
         max_parallel = max(1, parallel_targets)
         semaphore = asyncio.Semaphore(max_parallel)
 

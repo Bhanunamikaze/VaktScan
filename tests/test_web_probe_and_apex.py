@@ -40,6 +40,64 @@ class WebPortSetTest(unittest.TestCase):
 
 
 class ProbeWebUrlsTest(unittest.TestCase):
+    def test_nuclei_and_dirsearch_receive_one_origin_per_unique_host(self):
+        captured = {}
+
+        class FakeHttpx:
+            def __init__(self, output_dir=None):
+                pass
+
+            async def run_httpx(self, urls, concurrency):
+                return [
+                    {"url": "http://a.example.com:80/path"},
+                    {"url": "https://a.example.com:443/login"},
+                    {"url": "http://a.example.com:8080/"},
+                    {"url": "http://192.0.2.10/"},
+                    {"url": "https://192.0.2.10:8443/admin"},
+                ]
+
+            def save_csv(self, data, label):
+                pass
+
+        class FakeNuclei:
+            def __init__(self, output_dir=None):
+                pass
+
+            async def run_nuclei(self, urls):
+                captured["nuclei"] = urls
+                return []
+
+        class FakeDir:
+            def __init__(self, label, output_dir=None):
+                pass
+
+            async def run_dirsearch(self, urls):
+                captured["dirsearch"] = urls
+
+        class FakeJS:
+            def __init__(self, urls, output_dir=None):
+                pass
+
+            async def run(self):
+                return []
+
+        async def fake_wc(urls, concurrency):
+            return []
+
+        with ExitStack() as es:
+            es.enter_context(mock.patch.object(main.httpx_runner, "HTTPXRunner", FakeHttpx))
+            es.enter_context(mock.patch.object(main.nuclei_runner, "NucleiRunner", FakeNuclei))
+            es.enter_context(mock.patch.object(main.web_checks, "run_checks", fake_wc))
+            es.enter_context(mock.patch.object(main.dir_enum, "DirEnumerator", FakeDir))
+            es.enter_context(mock.patch.object(main.js_paths, "JSPathsScanner", FakeJS))
+            asyncio.run(main._probe_web_urls(
+                ["http://seed"], "reports", "lbl", 10, enable_js_cve=False
+            ))
+
+        expected = ["https://192.0.2.10:8443", "https://a.example.com"]
+        self.assertEqual(captured["nuclei"], expected)
+        self.assertEqual(captured["dirsearch"], expected)
+
     def test_collects_nuclei_webchecks_js_findings(self):
         nuc = {"vulnerability": "nuclei-hit"}
         wc = {"vulnerability": "webcheck-hit"}

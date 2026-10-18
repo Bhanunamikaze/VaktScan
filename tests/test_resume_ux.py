@@ -226,6 +226,20 @@ class StateIndexTest(_StateDirMixin, unittest.TestCase):
         self.assertNotIn(self.SCAN_ID, self._index())
 
 
+class ConcurrentStateLockTest(_StateDirMixin, unittest.TestCase):
+    def test_second_manager_cannot_share_running_checkpoint(self):
+        first = _quiet_manager("same-scan", ["example.com"], "scope-A")
+        second = _quiet_manager("same-scan", ["example.com"], "scope-A")
+        try:
+            self.assertTrue(first.acquire_run_lock())
+            self.assertFalse(second.acquire_run_lock())
+            first.release_run_lock()
+            self.assertTrue(second.acquire_run_lock())
+        finally:
+            first.release_run_lock()
+            second.release_run_lock()
+
+
 # ---------------------------------------------------------------------------
 # list_resumable / format_resumable_table filtering.
 # ---------------------------------------------------------------------------

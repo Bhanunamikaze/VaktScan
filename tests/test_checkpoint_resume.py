@@ -520,6 +520,62 @@ class ReconResumeSkipTest(_MainTempCwd):
         self.assertEqual(managers[0].get_vulnerabilities(), [{"vulnerability": "recon-F1"}],
                          "resuming a completed recon domain must not re-add its findings")
 
+    def test_resume_skips_completed_enumeration_while_finishing_recon(self):
+        scan_id, canon, scope = "example.com-enum00000000", ["example.com"], "scope-sig-A"
+        subs = ["a.example.com", "b.example.com"]
+        enum_file = os.path.join("reports", "example.com", "all_subdomains_saved.txt")
+        with open(self._state_path(scan_id), "w") as f:
+            json.dump({
+                "scan_id": scan_id, "canonical_targets": canon, "scope": scope,
+                "phase": "recon", "start_time": 1,
+                "total_ips": 0, "total_combinations": 0,
+                "port_scan_progress": {"completed_combinations": 0, "scanned_ips": []},
+                "scanned_ips": [], "open_ports": {}, "validated_services": {},
+                "vulnerabilities": [{"vulnerability": "saved-passive"}],
+                "completed_service_scans": [], "completed_recon_domains": [],
+                "recon_results": {},
+                "recon_enumeration_results": {
+                    "example.com": {"results_file": enum_file, "subdomains": subs},
+                },
+                "completed_recon_stages": {"example.com": ["passive"]},
+                "completed_web_urls": [], "completed": False,
+            }, f)
+
+        ran = {"scanner": 0, "passive": 0}
+
+        class _SpyScanner:
+            def __init__(self, *a, **k):
+                ran["scanner"] += 1
+
+            async def run_all(self):
+                raise AssertionError("completed enumeration was restarted")
+
+        async def spy_passive(*a, **k):
+            ran["passive"] += 1
+            return [], [], []
+
+        async def empty_targets(raw):
+            return []
+
+        fake_dashboard = mock.MagicMock()
+        fake_dashboard.active = False
+
+        with ExitStack() as es:
+            es.enter_context(mock.patch.object(main.nuclei_runner, "sync_nuclei_templates", return_value=None))
+            es.enter_context(mock.patch.object(main, "inventory", mock.MagicMock()))
+            es.enter_context(mock.patch("modules.dashboard.LiveDashboard", return_value=fake_dashboard))
+            es.enter_context(mock.patch.object(main.recon, "ReconScanner", _SpyScanner))
+            es.enter_context(mock.patch.object(main, "_run_parallel_passive", spy_passive))
+            es.enter_context(mock.patch.object(main, "process_targets", empty_targets))
+            asyncio.run(main.main(
+                None, 1, recon_domains=["example.com"], no_dork=True, resume=True,
+                dns_hygiene=False, dns_takeover=False, archived_scan=False,
+                scan_id=scan_id, canonical_targets=canon, scope=scope,
+            ))
+
+        self.assertEqual(ran["scanner"], 0)
+        self.assertEqual(ran["passive"], 0)
+
 
 class ScanIdStabilityPerTargetTypeTest(unittest.TestCase):
     def _id(self, target_type, raw, label):

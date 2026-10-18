@@ -43,7 +43,7 @@ for tool in "${PIPtools_list[@]}"
 do
     if ! [ $(command -v "$tool") ]  &> /dev/null; then
         echo -e "\n${cyan} [**] $tool is not installed. Installing now... ${reset}"
-        sudo pip install "$tool"
+        sudo pip install "$tool" --break-system-packages
         if [ $? -ne 0 ]; then
             # catch and handle errors while installing
             echo -e "\n ${red}[-] Error: Failed to install $tool ${reset}\n"

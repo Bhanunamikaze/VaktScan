@@ -1,6 +1,7 @@
 import asyncio
 import argparse
 import csv
+import glob
 import ipaddress
 import sys
 import os
@@ -44,6 +45,7 @@ from utils import (
     process_targets,
     process_targets_streaming,
     resolve_hostnames,
+    select_unique_host_urls,
     is_valid_domain,
 )
 from port_scanner import scan_ports, DEFAULT_CONNECT_TIMEOUT, DEFAULT_PORT_RETRIES
@@ -233,6 +235,7 @@ async def run_recon_followups(
     enable_screenshots=False,
     extra_scans=frozenset(),
     enable_js_cve=True,
+    state_manager=None,
 ):
     """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
     all_findings = []
@@ -251,82 +254,96 @@ async def run_recon_followups(
         print(f"{Colors.YELLOW}[!] No normalized subdomains remained after filtering.{Colors.RESET}")
         return all_findings
 
-    host_to_ip, ip_to_hosts, unresolved_hosts = await resolve_hostnames(unique_targets)
-    recon_targets = build_scan_targets_from_mappings(unique_targets, host_to_ip)
-
     # Note: DomainClassification happens right before we probe and saves to the output_dir
     scanner = domain_scan.DomainScanner(output_dir=output_dir)
     classified = scanner.classify_domains(unique_targets)
     scanner.save_classification_csv(unique_targets)
     print(f"{Colors.GRAY}[*] Domain mix: {len(classified['INTERNAL'])} INTERNAL, {len(classified['EXTERNAL'])} EXTERNAL{Colors.RESET}")
 
-    print(
-        f"{Colors.CYAN}[*] Running preliminary web-port scan on {len(unique_targets)} hosts "
-        f"mapped to {len(ip_to_hosts)} unique IPv4 addresses...{Colors.RESET}"
-    )
-    if unresolved_hosts:
-        print(
-            f"{Colors.YELLOW}[!] Could not resolve {len(unresolved_hosts)} hostnames during pre-processing. "
-            f"Default httpx hostname probes will still be attempted for them.{Colors.RESET}"
-        )
-
-    service_ports = get_service_ports()
-    common_web_ports = sorted(set(service_ports.get("web", [])))
-    port_scan_results = []
     nmap_followup_task = None
 
     async def _await_nmap_task():
         if nmap_followup_task:
             await nmap_followup_task
 
-    if recon_targets:
-        port_scan_results = await scan_ports(
-            recon_targets,
-            common_web_ports,
-            concurrency,
-            state_manager=None,
-            connect_timeout=connect_timeout,
-            retries=port_retries,
+    http_checkpoint = (
+        _recover_recon_http_results(recon_domain, output_dir, state_manager)
+        if state_manager is not None else None
+    )
+    http_discovery_resumed = http_checkpoint is not None
+
+    if http_discovery_resumed:
+        alive_urls, httpx_data = http_checkpoint
+        print(
+            f"{Colors.CYAN}[*] Resume: preliminary web-port scan and HTTPX discovery "
+            f"for {recon_domain} already complete; reusing {len(alive_urls)} alive URL(s)."
+            f"{Colors.RESET}"
         )
     else:
+        host_to_ip, ip_to_hosts, unresolved_hosts = await resolve_hostnames(unique_targets)
+        recon_targets = build_scan_targets_from_mappings(unique_targets, host_to_ip)
+
         print(
-            f"{Colors.YELLOW}[!] No resolved scan targets remained after hostname/IP deduplication. "
-            f"Skipping the TCP web-port sweep and relying on hostname-first httpx probing.{Colors.RESET}"
+            f"{Colors.CYAN}[*] Running preliminary web-port scan on {len(unique_targets)} hosts "
+            f"mapped to {len(ip_to_hosts)} unique IPv4 addresses...{Colors.RESET}"
         )
+        if unresolved_hosts:
+            print(
+                f"{Colors.YELLOW}[!] Could not resolve {len(unresolved_hosts)} hostnames during pre-processing. "
+                f"Default httpx hostname probes will still be attempted for them.{Colors.RESET}"
+            )
 
-    # Nmap CVE scanning is NOT done here with a separate full 1-65535 sweep.
-    # It runs once in the main scan phase, executing `nmap --script vuln,vulners`
-    # ONLY on the open ports the port scanner already discovered (all service
-    # ports + any --ports). Kept the scaffolding above as a no-op for callers.
-    default_probe_urls = build_default_http_probe_urls(unique_targets)
-    probe_urls = build_recon_probe_urls(unique_targets, port_scan_results, ip_to_hosts)
-    if not probe_urls:
-        print(f"{Colors.YELLOW}[!] No hostname or port-scan HTTP targets were generated; skipping httpx probe.{Colors.RESET}")
-        await _await_nmap_task()
-        return all_findings
+        service_ports = get_service_ports()
+        common_web_ports = sorted(set(service_ports.get("web", [])))
+        port_scan_results = []
+        if recon_targets:
+            port_scan_results = await scan_ports(
+                recon_targets,
+                common_web_ports,
+                concurrency,
+                state_manager=None,
+                connect_timeout=connect_timeout,
+                retries=port_retries,
+            )
+        else:
+            print(
+                f"{Colors.YELLOW}[!] No resolved scan targets remained after hostname/IP deduplication. "
+                f"Skipping the TCP web-port sweep and relying on hostname-first httpx probing.{Colors.RESET}"
+            )
 
-    print(
-        f"{Colors.CYAN}[*] Probing {len(probe_urls)} URLs with httpx "
-        f"({len(default_probe_urls)} default hostname probes + shared-IP expanded port discoveries)...{Colors.RESET}"
-    )
-    httpx_data = await http_runner.run_httpx(probe_urls, concurrency)
-    if not httpx_data:
-        print(f"{Colors.YELLOW}[!] No alive HTTP services detected by httpx.{Colors.RESET}")
-        await _await_nmap_task()
-        return all_findings
+        # Nmap CVE scanning is NOT done here with a separate full 1-65535 sweep.
+        # It runs once in the main scan phase, executing `nmap --script vuln,vulners`
+        # ONLY on the open ports the port scanner already discovered (all service
+        # ports + any --ports). Kept the scaffolding above as a no-op for callers.
+        default_probe_urls = build_default_http_probe_urls(unique_targets)
+        probe_urls = build_recon_probe_urls(unique_targets, port_scan_results, ip_to_hosts)
+        if not probe_urls:
+            print(f"{Colors.YELLOW}[!] No hostname or port-scan HTTP targets were generated; skipping httpx probe.{Colors.RESET}")
+            await _await_nmap_task()
+            return all_findings
 
-    http_runner.save_csv(httpx_data, recon_domain.replace('.', '_'))
+        print(
+            f"{Colors.CYAN}[*] Probing {len(probe_urls)} URLs with httpx "
+            f"({len(default_probe_urls)} default hostname probes + shared-IP expanded port discoveries)...{Colors.RESET}"
+        )
+        httpx_data = await http_runner.run_httpx(probe_urls, concurrency)
+        if not httpx_data:
+            print(f"{Colors.YELLOW}[!] No alive HTTP services detected by httpx.{Colors.RESET}")
+            await _await_nmap_task()
+            return all_findings
 
-    alive_urls = []
-    for entry in httpx_data:
-        url = entry.get('url')
-        if url:
-            alive_urls.append(url)
+        http_runner.save_csv(httpx_data, recon_domain.replace('.', '_'))
 
-    alive_urls = sorted(set(alive_urls))
+        alive_urls = []
+        for entry in httpx_data:
+            url = entry.get('url')
+            if url:
+                alive_urls.append(url)
+
+        alive_urls = sorted(set(alive_urls))
     dir_enumerator = dir_enum.DirEnumerator(recon_domain, wordlist=wordlist, output_dir=output_dir)
 
-    if wordlist:
+    if wordlist and not http_discovery_resumed:
         print(f"{Colors.CYAN}[*] Running ffuf (post-httpx) for additional vhosts...{Colors.RESET}")
         ffuf_subdomains = await dir_enumerator.fuzz_subdomains()
         new_targets = []
@@ -351,6 +368,15 @@ async def run_recon_followups(
                 print(f"{Colors.YELLOW}[!] No additional alive hosts found from ffuf results.{Colors.RESET}")
 
     alive_urls = sorted(set(alive_urls))
+    if state_manager is not None and not http_discovery_resumed:
+        state_manager.mark_recon_http_done(recon_domain, alive_urls, httpx_data)
+    bulk_scan_urls = select_unique_host_urls(alive_urls)
+    if len(bulk_scan_urls) < len(alive_urls):
+        print(
+            f"{Colors.CYAN}[*] Collapsed {len(alive_urls)} alive URLs to "
+            f"{len(bulk_scan_urls)} unique host/IP origins for Dirsearch and Nuclei."
+            f"{Colors.RESET}"
+        )
     
     # Run domain scanner, dirsearch, nuclei, web checks, and JS paths concurrently -
     # all are read-only against alive_urls and write to their own files in output_dir.
@@ -382,8 +408,8 @@ async def run_recon_followups(
                     alive_urls=alive_urls,
                     concurrency=concurrency,
                 ),
-                dir_enumerator.run_dirsearch(alive_urls),
-                nuclei_inst.run_nuclei(alive_urls),
+                dir_enumerator.run_dirsearch(bulk_scan_urls),
+                nuclei_inst.run_nuclei(bulk_scan_urls),
                 web_checks.run_checks(alive_urls, concurrency),
                 js_scanner.run(),
                 return_exceptions=True,
@@ -612,6 +638,120 @@ def expand_recon_inputs(recon_args):
 
     return expanded
 
+
+def _recover_recon_enumeration(domain, state_manager, is_resume):
+    """Restore an enum checkpoint, including pre-fix scans with result files.
+
+    Older checkpoints only recorded the coarse ``recon`` phase.  A completed
+    ``all_subdomains_*.txt`` created during the same scan is durable proof that
+    enumeration finished, so adopt it once and persist the new fine-grained
+    checkpoint.  ``--fresh`` never calls this recovery path.
+    """
+    checkpoint = state_manager.get_recon_enumeration(domain)
+    if (isinstance(checkpoint, (tuple, list)) and len(checkpoint) == 2
+            and isinstance(checkpoint[1], list)):
+        return checkpoint
+    if not is_resume or state_manager.state.get("phase") != "recon":
+        return None
+
+    safe_domain = "".join(ch if ch.isalnum() or ch in "._-" else "_"
+                          for ch in domain.lower())
+    pattern = os.path.join("reports", safe_domain or "domain", "all_subdomains_*.txt")
+    started = float(state_manager.state.get("start_time") or 0)
+    candidates = []
+    for path in glob.glob(pattern):
+        try:
+            if os.path.getmtime(path) >= started - 1:
+                candidates.append(path)
+        except OSError:
+            continue
+    if not candidates:
+        return None
+
+    results_file = max(candidates, key=os.path.getmtime)
+    subdomains = sorted(set(load_subdomains_file(results_file)))
+    if not subdomains:
+        return None
+    state_manager.mark_recon_enumeration_done(domain, results_file, subdomains)
+
+    # Before fine-grained stage checkpoints existed, passive findings were
+    # saved immediately after enum/passive/dork joined.  Preserve that completed
+    # work when its persisted module evidence is present.
+    passive_modules = {"dns", "cloud_enum", "ct_monitor"}
+    if any(str(item.get("module", "")).lower() in passive_modules
+           for item in state_manager.get_vulnerabilities() if isinstance(item, dict)):
+        state_manager.mark_recon_stage_done(domain, "passive")
+
+    # DNS hygiene precedes all HTTP follow-ups and writes a stable resolved list.
+    dns_resolved = os.path.join("reports", safe_domain or "domain", "dns_resolve", "resolved.txt")
+    try:
+        if os.path.getmtime(dns_resolved) >= started - 1:
+            resolved = sorted(set(load_subdomains_file(dns_resolved)))
+            if resolved:
+                state_manager.mark_recon_stage_result(domain, "dns_hygiene", resolved)
+    except OSError:
+        pass
+
+    print(
+        f"{Colors.CYAN}[*] Resume: recovered completed subdomain enumeration for "
+        f"{domain} from {results_file} ({len(subdomains)} unique host(s)).{Colors.RESET}"
+    )
+    return results_file, subdomains
+
+
+def _recover_recon_http_results(domain, output_dir, state_manager):
+    """Adopt a same-scan HTTPX CSV from checkpoints made before this feature."""
+    checkpoint = state_manager.get_recon_http_results(domain)
+    if checkpoint is not None:
+        return checkpoint
+    if state_manager.state.get("phase") != "recon":
+        return None
+
+    label = domain.replace(".", "_")
+    pattern = os.path.join(output_dir, f"httpx_alive_{label}_*.csv")
+    started = float(state_manager.state.get("start_time") or 0)
+    candidates = []
+    for path in glob.glob(pattern):
+        try:
+            if os.path.getmtime(path) >= started - 1:
+                candidates.append(path)
+        except OSError:
+            continue
+    if not candidates:
+        return None
+
+    source = max(candidates, key=os.path.getmtime)
+    rows = []
+    try:
+        with open(source, newline="", encoding="utf-8", errors="replace") as handle:
+            for row in csv.DictReader(handle):
+                url = (row.get("URL") or "").strip()
+                if not url:
+                    continue
+                rows.append({
+                    "input": (row.get("Domain") or "").strip(),
+                    "url": url,
+                    "host": (row.get("IP Address") or "").strip(),
+                    "port": (row.get("Port") or "").strip(),
+                    "status_code": (row.get("Status Code") or "").strip(),
+                    "title": row.get("Title") or "",
+                    "tech": [item for item in (row.get("Technologies") or "").split(",") if item],
+                })
+    except OSError:
+        return None
+    alive_urls = sorted({row["url"] for row in rows})
+    if not alive_urls:
+        return None
+    state_manager.mark_recon_http_done(domain, alive_urls, rows)
+    # Reaching HTTPX proves all non-transforming pre-HTTP stages completed.
+    state_manager.mark_recon_stage_done(domain, "dns_takeover")
+    state_manager.mark_recon_stage_done(domain, "horizontal")
+    print(
+        f"{Colors.CYAN}[*] Resume: recovered completed HTTPX discovery for {domain} "
+        f"from {source} ({len(alive_urls)} alive URL(s)).{Colors.RESET}"
+    )
+    return alive_urls, rows
+
 async def _run_parallel_passive(domain: str, concurrency: int = 20, detailed_dashboard: bool = True) -> tuple:
     """Run DNS recon, cloud enum, and CT monitoring in parallel for a domain.
 
@@ -829,8 +969,16 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
     if not alive_urls:
         return findings
 
+    bulk_scan_urls = select_unique_host_urls(alive_urls)
+    if len(bulk_scan_urls) < len(alive_urls):
+        print(
+            f"{Colors.CYAN}[*] Collapsed {len(alive_urls)} alive URLs to "
+            f"{len(bulk_scan_urls)} unique host/IP origins for Dirsearch and Nuclei."
+            f"{Colors.RESET}"
+        )
+
     nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
-    nuclei_results = await nuclei_inst.run_nuclei(alive_urls)
+    nuclei_results = await nuclei_inst.run_nuclei(bulk_scan_urls)
     if nuclei_results:
         print(f"{Colors.GREEN}[+] Nuclei: {len(nuclei_results)} finding(s).{Colors.RESET}")
         findings.extend(nuclei_results)
@@ -841,7 +989,7 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
         findings.extend(wc_results)
 
     dir_enumerator = dir_enum.DirEnumerator(domain_label, output_dir=output_dir)
-    await dir_enumerator.run_dirsearch(alive_urls)
+    await dir_enumerator.run_dirsearch(bulk_scan_urls)
 
     js_scanner = js_paths.JSPathsScanner(alive_urls, output_dir=output_dir)
     js_result = await js_scanner.run()
@@ -1663,6 +1811,11 @@ async def main(
     # by a later load - and a genuinely fresh run does not mistake its own
     # in-progress recon writes for a resumable scan.
     is_resume = _decide_resume(state_manager, resume_mode)
+    if not state_manager.acquire_run_lock():
+        print(f"{Colors.RED}[!] Scan '{scan_id}' is already running in another process; "
+              f"refusing to share and corrupt its checkpoint.{Colors.RESET}")
+        raise SystemExit(2)
+    cloud_enumerated_domains.update(state_manager.get_completed_cloud_domains())
     if is_resume:
         print(f"{Colors.CYAN}[*] Resuming VaktScan...{Colors.RESET}")
     else:
@@ -1757,6 +1910,7 @@ async def main(
                     enable_screenshots=enable_screenshots,
                     extra_scans=extra_scans,
                     enable_js_cve=js_cve_scan,
+                    state_manager=state_manager,
                 )
                 if recon_findings:
                     print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {recon_domain}{Colors.RESET}")
@@ -1801,10 +1955,28 @@ async def main(
                     if not _subs:
                         return None
                     return {"domain": domain, "file": _f, "count": len(_subs), "subdomains": _subs}
-                if not dashboard.active:
-                    print(f"{Colors.CYAN}[*] Enumerating subdomains for {domain}...{Colors.RESET}")
                 is_detailed = (len(normalized_domains) == 1)
-                scanner = recon.ReconScanner(domain, wordlist=wordlist, detailed_dashboard=is_detailed)
+                enum_checkpoint = _recover_recon_enumeration(domain, state_manager, is_resume)
+
+                async def _enumerate():
+                    if enum_checkpoint is not None:
+                        _file, _subs = enum_checkpoint
+                        print(
+                            f"{Colors.CYAN}[*] Resume: subdomain enumeration for {domain} "
+                            f"already complete; skipping all enum tools "
+                            f"({len(_subs)} unique host(s)).{Colors.RESET}"
+                        )
+                        return _file, _subs
+                    if not dashboard.active:
+                        print(f"{Colors.CYAN}[*] Enumerating subdomains for {domain}...{Colors.RESET}")
+                    scanner = recon.ReconScanner(
+                        domain, wordlist=wordlist, detailed_dashboard=is_detailed
+                    )
+                    result = await scanner.run_all()
+                    _file, _subs = result
+                    # Save immediately, before slower HTTP/port follow-ups.
+                    state_manager.mark_recon_enumeration_done(domain, _file, _subs)
+                    return result
 
                 # Run subdomain enum and Google Dork in parallel
                 _gapi_key = os.environ.get('GOOGLE_API_KEY', '')
@@ -1813,17 +1985,38 @@ async def main(
                 async def _maybe_dork():
                     if no_dork:
                         return []
+                    if state_manager.is_recon_stage_done(domain, "dork") is True:
+                        print(f"{Colors.CYAN}[*] Resume: Google Dork recon for {domain} "
+                              f"already complete; skipping.{Colors.RESET}")
+                        return []
                     if not dashboard.active:
                         print(f"{Colors.CYAN}[*] Google Dork recon running in parallel for {domain}...{Colors.RESET}")
-                    return await google_dork.run(
+                    findings = await google_dork.run(
                         domain, api_key=_gapi_key, cx=_gcx,
                         method=dork_method
                     )
+                    for finding in findings if isinstance(findings, list) else []:
+                        state_manager.add_vulnerability(finding)
+                    state_manager.mark_recon_stage_done(domain, "dork")
+                    return findings
+
+                async def _passive_recon():
+                    if state_manager.is_recon_stage_done(domain, "passive") is True:
+                        print(f"{Colors.CYAN}[*] Resume: DNS/cloud/CT recon for {domain} "
+                              f"already complete; skipping.{Colors.RESET}")
+                        return [], [], []
+                    result = await _run_parallel_passive(
+                        domain, concurrency, detailed_dashboard=is_detailed
+                    )
+                    for finding in result[0] + result[1] + result[2]:
+                        state_manager.add_vulnerability(finding)
+                    state_manager.mark_recon_stage_done(domain, "passive")
+                    return result
 
                 (enum_result, dork_findings, passive_tuple) = await asyncio.gather(
-                    scanner.run_all(),
+                    _enumerate(),
                     _maybe_dork(),
-                    _run_parallel_passive(domain, concurrency, detailed_dashboard=is_detailed),
+                    _passive_recon(),
                     return_exceptions=False,
                 )
                 results_file, subdomains = enum_result
@@ -1831,13 +2024,9 @@ async def main(
 
                 if isinstance(dork_findings, list) and dork_findings:
                     print(f"{Colors.GREEN}[+] Google Dork: {len(dork_findings)} finding(s) for {domain}{Colors.RESET}")
-                    for _df in dork_findings:
-                        state_manager.add_vulnerability(_df)
                 elif isinstance(dork_findings, Exception):
                     print(f"{Colors.YELLOW}[!] Google Dork error for {domain}: {dork_findings}{Colors.RESET}")
 
-                for _f in dns_findings + cloud_findings + ct_findings:
-                    state_manager.add_vulnerability(_f)
                 if dns_findings:
                     print(f"{Colors.GREEN}[+] DNS recon: {len(dns_findings)} finding(s) for {domain}{Colors.RESET}")
                 if cloud_findings:
@@ -1888,54 +2077,78 @@ async def main(
                 # (distinct IPs + functional-named hosts). Runs AFTER exclude/include so
                 # we only resolve the reduced set (saves DNS work).
                 if company_only and subdomains:
-                    _cls = await asset_classifier.classify_by_shared_ip(
-                        subdomains, domain, domain_output_dir,
-                        shared_ip_threshold=shared_ip_threshold, concurrency=concurrency,
-                        extra_markers=customer_dns_markers,
-                    )
-                    for _cf in _cls.get("findings", []):
-                        state_manager.add_vulnerability(_cf)
-                    if _cls.get("customer"):
-                        subdomains = _cls["company"]
-                        if not subdomains:
-                            print(f"{Colors.YELLOW}[!] All hosts classified as customer/shared-hosting for {domain} - nothing to scan.{Colors.RESET}")
-                            return None
+                    _company_checkpoint = state_manager.get_recon_stage_result(domain, "company_only")
+                    if isinstance(_company_checkpoint, list):
+                        subdomains = _company_checkpoint
+                        print(f"{Colors.CYAN}[*] Resume: company/shared-host filtering for {domain} "
+                              f"already complete; reusing {len(subdomains)} host(s).{Colors.RESET}")
+                    else:
+                        _cls = await asset_classifier.classify_by_shared_ip(
+                            subdomains, domain, domain_output_dir,
+                            shared_ip_threshold=shared_ip_threshold, concurrency=concurrency,
+                            extra_markers=customer_dns_markers,
+                        )
+                        for _cf in _cls.get("findings", []):
+                            state_manager.add_vulnerability(_cf)
+                        if _cls.get("customer"):
+                            subdomains = _cls["company"]
+                        state_manager.mark_recon_stage_result(domain, "company_only", subdomains)
+                    if not subdomains:
+                        print(f"{Colors.YELLOW}[!] All hosts classified as customer/shared-hosting for {domain} - nothing to scan.{Colors.RESET}")
+                        return None
 
                 # Horizontal / infrastructure expansion (opt-in via --horizontal):
                 # asnmap → CIDRs, reverse-DNS sweep, amass intel → related domains.
                 # Gracefully skips when the tools aren't installed.
                 if enable_horizontal:
-                    _expansion = await horizontal_expand.expand_horizontal([domain], domain_output_dir)
-                    for _hf in _expansion.get("findings", []):
-                        state_manager.add_vulnerability(_hf)
-                    _rh, _rd = len(_expansion.get("reverse_hosts", [])), len(_expansion.get("related_domains", []))
-                    if _rh or _rd:
-                        print(f"{Colors.GREEN}[+] Horizontal expansion: {_rd} related domain(s), "
-                              f"{_rh} reverse-DNS host(s) discovered for {domain}.{Colors.RESET}")
+                    if state_manager.is_recon_stage_done(domain, "horizontal") is True:
+                        print(f"{Colors.CYAN}[*] Resume: horizontal expansion for {domain} "
+                              f"already complete; skipping.{Colors.RESET}")
+                    else:
+                        _expansion = await horizontal_expand.expand_horizontal([domain], domain_output_dir)
+                        for _hf in _expansion.get("findings", []):
+                            state_manager.add_vulnerability(_hf)
+                        _rh, _rd = len(_expansion.get("reverse_hosts", [])), len(_expansion.get("related_domains", []))
+                        if _rh or _rd:
+                            print(f"{Colors.GREEN}[+] Horizontal expansion: {_rd} related domain(s), "
+                                  f"{_rh} reverse-DNS host(s) discovered for {domain}.{Colors.RESET}")
+                        state_manager.mark_recon_stage_done(domain, "horizontal")
 
                 # DNS hygiene (ON by default; --no-dns-hygiene to disable): wildcard-
                 # filter the enumerated subdomains before probing to drop catch-all
                 # false-positive names. Permutation expansion (--dns-permute) is
                 # opt-in. Passthrough when puredns/massdns aren't installed.
                 if dns_hygiene:
-                    _dns = await dns_resolve.resolve_and_permute(
-                        subdomains, [domain], domain_output_dir, concurrency, permute=dns_permute
-                    )
-                    for _f in _dns.get("findings", []):
-                        state_manager.add_vulnerability(_f)
-                    if _dns.get("resolved"):
-                        _before = len(subdomains)
-                        subdomains = _dns["resolved"]
-                        _how = "wildcard-filtered + permutation-expanded" if dns_permute else "wildcard-filtered"
-                        print(f"{Colors.GREEN}[+] DNS hygiene: {_before} → {len(subdomains)} host(s) ({_how}).{Colors.RESET}")
+                    _dns_checkpoint = state_manager.get_recon_stage_result(domain, "dns_hygiene")
+                    if isinstance(_dns_checkpoint, list):
+                        subdomains = _dns_checkpoint
+                        print(f"{Colors.CYAN}[*] Resume: DNS hygiene for {domain} already complete; "
+                              f"reusing {len(subdomains)} resolved host(s).{Colors.RESET}")
+                    else:
+                        _dns = await dns_resolve.resolve_and_permute(
+                            subdomains, [domain], domain_output_dir, concurrency, permute=dns_permute
+                        )
+                        for _f in _dns.get("findings", []):
+                            state_manager.add_vulnerability(_f)
+                        if _dns.get("resolved"):
+                            _before = len(subdomains)
+                            subdomains = _dns["resolved"]
+                            _how = "wildcard-filtered + permutation-expanded" if dns_permute else "wildcard-filtered"
+                            print(f"{Colors.GREEN}[+] DNS hygiene: {_before} → {len(subdomains)} host(s) ({_how}).{Colors.RESET}")
+                        state_manager.mark_recon_stage_result(domain, "dns_hygiene", subdomains)
 
                 # Per-subdomain DNS-level takeover: flag dangling CNAMEs (CNAME ->
                 # NXDOMAIN) across ALL discovered subdomains. Complements the
                 # HTTP-based takeover check by catching targets that serve no HTTP.
                 if dns_takeover and subdomains:
-                    _dangling = await dns_recon.check_dangling_cnames(subdomains, concurrency=concurrency)
-                    for _df in _dangling:
-                        state_manager.add_vulnerability(_df)
+                    if state_manager.is_recon_stage_done(domain, "dns_takeover") is True:
+                        print(f"{Colors.CYAN}[*] Resume: DNS takeover checks for {domain} "
+                              f"already complete; skipping.{Colors.RESET}")
+                    else:
+                        _dangling = await dns_recon.check_dangling_cnames(subdomains, concurrency=concurrency)
+                        for _df in _dangling:
+                            state_manager.add_vulnerability(_df)
+                        state_manager.mark_recon_stage_done(domain, "dns_takeover")
 
                 if scan_found:
                     recon_findings = await run_recon_followups(
@@ -1951,6 +2164,7 @@ async def main(
                         enable_screenshots=enable_screenshots,
                         extra_scans=extra_scans,
                         enable_js_cve=js_cve_scan,
+                        state_manager=state_manager,
                     )
                     if recon_findings:
                         print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {domain}{Colors.RESET}")
@@ -2231,23 +2445,6 @@ async def main(
                 if _ip:
                     inventory.upsert_asset(_ip, _hostname, _open_ports)
 
-            # If Nmap is enabled, run `nmap --script vuln,vulners` ONLY on the open
-            # ports the port scanner already found (no separate full-range sweep).
-            if nmap_enabled:
-                nmap_targets_data = []
-                for target_obj, data in open_ports_results:
-                    open_ports = data.get('open_ports', [])
-                    if open_ports:
-                        ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
-                        host = target_obj.get('display_target') or ip
-                        nmap_targets_data.append((ip, sorted(open_ports), host))
-                if nmap_targets_data:
-                    nmap_inst = nmap_runner.NmapRunner(output_base_dir=web_output_dir or "reports")
-                    nmap_cve_findings = await nmap_inst.run_cve_scan_batch(nmap_targets_data, concurrency=concurrency)
-                    if nmap_cve_findings:
-                        print(f"{Colors.GREEN}[+] Nmap CVE Scan: {len(nmap_cve_findings)} finding(s).{Colors.RESET}")
-                        for v in nmap_cve_findings:
-                            state_manager.add_vulnerability(v)
         else:
             print(f"[*] Using previously scanned port results...")
             # Rebuild as (target_obj, data) tuples from `targets` (which retains the
@@ -2264,6 +2461,31 @@ async def main(
                 open_ports_results.append(
                     (target, {'open_ports': state_manager.state["open_ports"].get(resolved_ip, [])})
                 )
+
+        # Optional Nmap follow-up is its own durable unit. Previously it only
+        # lived in the fresh port-scan branch, so an interrupt during Nmap made
+        # resume skip the unfinished work entirely.
+        if nmap_enabled:
+            if state_manager.is_scan_stage_done("nmap_cve") is True:
+                print(f"{Colors.CYAN}[*] Resume: Nmap CVE follow-up already complete; skipping.{Colors.RESET}")
+            else:
+                nmap_targets_data = []
+                for target_obj, data in open_ports_results:
+                    open_ports = data.get('open_ports', [])
+                    if open_ports:
+                        ip = target_obj.get('resolved_ip') or target_obj.get('scan_address')
+                        host = target_obj.get('display_target') or ip
+                        nmap_targets_data.append((ip, sorted(open_ports), host))
+                if nmap_targets_data:
+                    nmap_inst = nmap_runner.NmapRunner(output_base_dir=web_output_dir or "reports")
+                    nmap_cve_findings = await nmap_inst.run_cve_scan_batch(
+                        nmap_targets_data, concurrency=concurrency
+                    )
+                    if nmap_cve_findings:
+                        print(f"{Colors.GREEN}[+] Nmap CVE Scan: {len(nmap_cve_findings)} finding(s).{Colors.RESET}")
+                        for v in nmap_cve_findings:
+                            state_manager.add_vulnerability(v)
+                state_manager.mark_scan_stage_done("nmap_cve")
 
         # --- WEB-PROBE PHASE (resumable) ---
         # httpx→nuclei→web_checks→dirsearch→JS on any open web ports. This is a
@@ -2485,6 +2707,7 @@ async def main(
                 for _cf in _cloud_findings:
                     state_manager.add_vulnerability(_cf)
                 cloud_enumerated_domains.add(_cloud_domain)
+                state_manager.mark_cloud_domain_done(_cloud_domain)
             print(f"{Colors.GREEN}[+] Cloud asset enumeration complete.{Colors.RESET}")
         elif cloud_enumerated_domains:
             print(f"{Colors.GRAY}[*] Cloud enumeration already covered during recon - skipping re-enumeration.{Colors.RESET}")

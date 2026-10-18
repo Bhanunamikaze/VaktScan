@@ -6,6 +6,7 @@ import subprocess
 from datetime import datetime
 
 from modules import proc
+from utils import select_unique_host_urls
 
 
 class NucleiRunner:
@@ -90,6 +91,10 @@ class NucleiRunner:
             print("\033[93m[!] nuclei binary not found in PATH. Skipping vulnerability scanning.\033[0m")
             return []
 
+        if not targets:
+            return []
+
+        targets = select_unique_host_urls(targets)
         if not targets:
             return []
 

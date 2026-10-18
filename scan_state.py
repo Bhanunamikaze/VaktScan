@@ -6,6 +6,11 @@ import threading
 import atexit
 from typing import Dict, List, Any
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
+
 # Color codes for terminal output
 class Colors:
     # Basic colors
@@ -69,6 +74,7 @@ class ScanStateManager:
         # lands on a state whose targets/scope differ - so the caller can refuse.
         self.identity_mismatch = False
         self.state_file = os.path.join(base_dir, f"{scan_id}.json")
+        self._run_lock_handle = None
 
         # Threading controls for batched saves
         self._lock = threading.Lock()
@@ -132,11 +138,34 @@ class ScanStateManager:
             # resume can skip re-running the (finding-adding) recon pipeline yet
             # still rebuild the downstream target set. {domain: [subdomains]}
             "recon_results": {},
+            # Enumeration is checkpointed separately from the rest of recon.
+            # HTTP probing, nuclei, and dirsearch can take much longer than the
+            # enumerators; an interrupt there must not restart subdomain enum.
+            # {domain: {"results_file": str, "subdomains": [str]}}
+            "recon_enumeration_results": {},
+            # Independently completed recon work that does not need its own
+            # result payload because its findings are already stored above.
+            # {domain: ["passive", "dork", ...]}
+            "completed_recon_stages": {},
+            # Optional output lists for recon stages that transform the target
+            # set (DNS hygiene, company-only filtering, and similar stages).
+            # {domain: {stage: [subdomains]}}
+            "recon_stage_results": {},
+            # Completed preliminary web-port/httpx discovery for recon domains.
+            # This lets an interrupted Dirsearch/Nuclei stage reuse its alive
+            # hosts instead of repeating the port sweep and HTTP probing.
+            # {domain: {"alive_urls": [str], "httpx_data": [dict]}}
+            "recon_http_results": {},
             "vulnerabilities": [],
             # URLs whose full web-probe pipeline (httpx→nuclei→web_checks→
             # dirsearch→JS) already finished, so an interrupted web-probe can
             # resume from the URLs it had not reached yet.
             "completed_web_urls": [],
+            # Scan-wide units that are not naturally represented by the coarse
+            # phase string (for example the optional Nmap follow-up).
+            "completed_scan_stages": [],
+            # Apex domains whose post-scan cloud enumeration completed.
+            "completed_cloud_domains": [],
             "completed": False
         }
 
@@ -270,6 +299,45 @@ class ScanStateManager:
             self._save_timer.cancel()
         if self._save_pending:
             self.save_state(force=True)
+        self.release_run_lock()
+
+    def acquire_run_lock(self) -> bool:
+        """Prevent two processes from mutating the same scan checkpoint."""
+        if fcntl is None or self._run_lock_handle is not None:
+            return True
+        lock_path = f"{self.state_file}.lock"
+        handle = None
+        try:
+            handle = open(lock_path, "a+", encoding="utf-8")
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            handle.seek(0)
+            handle.truncate()
+            handle.write(str(os.getpid()))
+            handle.flush()
+            self._run_lock_handle = handle
+            return True
+        except (OSError, IOError):
+            try:
+                if handle is not None:
+                    handle.close()
+            except Exception:
+                pass
+            return False
+
+    def release_run_lock(self):
+        handle = self._run_lock_handle
+        if handle is None:
+            return
+        self._run_lock_handle = None
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            handle.close()
+        except OSError:
+            pass
     
     def save_state(self, force=False):
         """
@@ -490,6 +558,114 @@ class ScanStateManager:
                 results[domain] = list(subdomains)
         self.save_state(force=True)
 
+    def mark_recon_enumeration_done(self, domain: str, results_file: str, subdomains):
+        """Persist completed subdomain enumeration independently of follow-ups."""
+        if not domain:
+            return
+        normalized = sorted({str(item).strip().lower() for item in (subdomains or [])
+                             if str(item).strip()})
+        with self._lock:
+            results = self.state.setdefault("recon_enumeration_results", {})
+            results[domain] = {
+                "results_file": str(results_file or ""),
+                "subdomains": normalized,
+            }
+        self.save_state(force=True)
+
+    def get_recon_enumeration(self, domain: str):
+        """Return ``(results_file, subdomains)`` for a completed enum, or None."""
+        entry = (self.state.get("recon_enumeration_results") or {}).get(domain)
+        if not isinstance(entry, dict):
+            return None
+        subdomains = entry.get("subdomains")
+        if not isinstance(subdomains, list):
+            return None
+        return str(entry.get("results_file") or ""), list(subdomains)
+
+    def mark_recon_stage_done(self, domain: str, stage: str):
+        """Persist completion of an independently resumable recon stage."""
+        if not domain or not stage:
+            return
+        with self._lock:
+            by_domain = self.state.setdefault("completed_recon_stages", {})
+            stages = by_domain.setdefault(domain, [])
+            if stage in stages:
+                return
+            stages.append(stage)
+        self.save_state(force=True)
+
+    def is_recon_stage_done(self, domain: str, stage: str) -> bool:
+        stages = (self.state.get("completed_recon_stages") or {}).get(domain, [])
+        return stage in stages
+
+    def mark_recon_stage_result(self, domain: str, stage: str, values):
+        if not domain or not stage:
+            return
+        normalized = sorted({str(value).strip().lower() for value in (values or [])
+                             if str(value).strip()})
+        with self._lock:
+            results = self.state.setdefault("recon_stage_results", {})
+            results.setdefault(domain, {})[stage] = normalized
+            by_domain = self.state.setdefault("completed_recon_stages", {})
+            stages = by_domain.setdefault(domain, [])
+            if stage not in stages:
+                stages.append(stage)
+        self.save_state(force=True)
+
+    def get_recon_stage_result(self, domain: str, stage: str):
+        result = ((self.state.get("recon_stage_results") or {}).get(domain) or {}).get(stage)
+        return list(result) if isinstance(result, list) else None
+
+    def mark_scan_stage_done(self, stage: str):
+        if not stage:
+            return
+        with self._lock:
+            stages = self.state.setdefault("completed_scan_stages", [])
+            if stage in stages:
+                return
+            stages.append(stage)
+        self.save_state(force=True)
+
+    def is_scan_stage_done(self, stage: str) -> bool:
+        return stage in (self.state.get("completed_scan_stages") or [])
+
+    def mark_cloud_domain_done(self, domain: str):
+        if not domain:
+            return
+        with self._lock:
+            domains = self.state.setdefault("completed_cloud_domains", [])
+            if domain in domains:
+                return
+            domains.append(domain)
+        self.save_state(force=True)
+
+    def get_completed_cloud_domains(self) -> set:
+        return set(self.state.get("completed_cloud_domains") or [])
+
+    def mark_recon_http_done(self, domain: str, alive_urls, httpx_data=None):
+        """Persist preliminary port/httpx discovery for a recon domain."""
+        if not domain:
+            return
+        urls = sorted({str(url).strip() for url in (alive_urls or []) if str(url).strip()})
+        with self._lock:
+            results = self.state.setdefault("recon_http_results", {})
+            results[domain] = {
+                "alive_urls": urls,
+                "httpx_data": list(httpx_data or []),
+            }
+        self.save_state(force=True)
+
+    def get_recon_http_results(self, domain: str):
+        """Return completed preliminary HTTP discovery data, or None."""
+        entry = (self.state.get("recon_http_results") or {}).get(domain)
+        if not isinstance(entry, dict):
+            return None
+        urls = entry.get("alive_urls")
+        if not isinstance(urls, list) or not urls:
+            return None
+        data = entry.get("httpx_data")
+        return list(urls), list(data) if isinstance(data, list) else []
+
     def get_completed_recon_domains(self) -> set:
         """Set of recon domains whose pipeline already completed (Phase 6)."""
         return set(self.state.get("completed_recon_domains") or [])
@@ -552,6 +728,7 @@ class ScanStateManager:
         # Drop it from the resumable-scan index too (a finished scan is not
         # resumable).
         self._remove_from_index()
+        self.release_run_lock()
 
     # ------------------------------------------------------------------
     # Resumable-scan index (``.vaktscan/state/index.json``): a small map of

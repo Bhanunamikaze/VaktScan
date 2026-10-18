@@ -5,6 +5,25 @@ import utils
 
 
 class ReconUtilsTests(unittest.IsolatedAsyncioTestCase):
+    def test_select_unique_host_urls_keeps_one_preferred_origin_per_host(self):
+        urls = [
+            "http://A.example.com:80/redirected/path",
+            "https://a.example.com:443/login",
+            "http://a.example.com:8080/",
+            "http://192.0.2.10/",
+            "https://192.0.2.10:8443/admin",
+            "https://b.example.com:9443/",
+        ]
+
+        self.assertEqual(
+            utils.select_unique_host_urls(urls),
+            [
+                "https://192.0.2.10:8443",
+                "https://a.example.com",
+                "https://b.example.com:9443",
+            ],
+        )
+
     async def test_resolve_hostnames_returns_bidirectional_mappings(self):
         async def fake_resolve(hostname):
             mapping = {
