@@ -2,9 +2,10 @@ import asyncio
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import main
-from modules import artifact_findings, cloud_enum, web_checks
+from modules import artifact_findings, cloud_enum, domain_scan, web_checks
 from modules.schema import validate_finding
 
 
@@ -54,6 +55,34 @@ class HorizontalPipelineTests(unittest.TestCase):
             main._horizontal_targets(expansion),
             ["example.org", "vpn.example.com"],
         )
+
+
+class DomainConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_broken_component_fetches_honor_requested_concurrency(self):
+        tracker = {"active": 0, "maximum": 0}
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, _url):
+                tracker["active"] += 1
+                tracker["maximum"] = max(tracker["maximum"], tracker["active"])
+                await asyncio.sleep(0.01)
+                tracker["active"] -= 1
+                return _Response(200, "<html></html>")
+
+            async def head(self, _url):
+                return _Response(200, "")
+
+        entries = [{"url": f"https://host{i}.example.com"} for i in range(20)]
+        scanner = domain_scan.DomainScanner(output_dir=tempfile.gettempdir())
+        with patch("modules.domain_scan.httpx.AsyncClient", return_value=Client()):
+            await scanner.check_broken_components(entries, concurrency=20)
+        self.assertEqual(tracker["maximum"], 20)
 
 
 class ArtifactFindingTests(unittest.TestCase):

@@ -246,14 +246,14 @@ class DomainScanner:
     async def check_broken_components(self, httpx_data: list, concurrency: int = 50) -> list[dict]:
         """Scan alive URLs for broken sub-resources (JS, CSS, Img, API)."""
         findings = []
-        # Two separate semaphores to avoid deadlock:
-        # page_sem gates the parent GET fetches; probe_sem gates the child HEAD probes.
-        page_sem  = asyncio.Semaphore(max(1, min(concurrency // 2, 10)))
-        probe_sem = asyncio.Semaphore(max(1, concurrency))
+        # One shared request budget makes ``-c`` the actual aggregate ceiling.
+        # Parent GETs release it before awaiting child HEAD probes, so a shared
+        # semaphore cannot deadlock and page fetching is no longer capped at 10.
+        request_sem = asyncio.Semaphore(max(1, concurrency))
 
         async with httpx.AsyncClient(verify=False, timeout=5.0, follow_redirects=True) as client:
             async def probe_resource(parent_entry, resource_url, parent_url):
-                async with probe_sem:
+                async with request_sem:
                     try:
                         resp = await client.head(resource_url)
                         if resp.status_code >= 400 and resp.status_code not in (401, 403):
@@ -271,23 +271,24 @@ class DomainScanner:
                 url = entry.get('url')
                 if not url:
                     return []
-                async with page_sem:
+                resource_tasks = []
+                async with request_sem:
                     try:
                         resp = await client.get(url)
                         parser = SubResourceParser()
                         parser.feed(resp.text)
-                        tasks = []
                         for res in parser.resources:
                             abs_url = urljoin(url, res)
                             if abs_url.startswith('http'):
-                                tasks.append(probe_resource(entry, abs_url, url))
-                        if tasks:
-                            await asyncio.gather(*tasks, return_exceptions=True)
+                                resource_tasks.append(probe_resource(entry, abs_url, url))
                     except Exception:
                         pass
+                if resource_tasks:
+                    await asyncio.gather(*resource_tasks, return_exceptions=True)
 
             print(f"{Colors.CYAN}[*] Checking for broken components on {len(httpx_data)} alive URLs...{Colors.RESET}")
-            page_tasks = [fetch_and_collect(entry) for entry in httpx_data]
+            progress = DashboardProgress("domain_scan", total=len(httpx_data), noun="URLs")
+            page_tasks = [progress.wrap(fetch_and_collect(entry)) for entry in httpx_data]
             if page_tasks:
                 await asyncio.gather(*page_tasks, return_exceptions=True)
 
