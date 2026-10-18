@@ -1,10 +1,59 @@
 import unittest
+import threading
+import time
 from unittest.mock import Mock
 
 from modules.js_paths import JSRecon
 
 
 class JSPathsTests(unittest.TestCase):
+    def test_embedded_third_party_hosts_are_inventory_only_not_probe_targets(self):
+        recon = JSRecon(["https://app.onit.com/login"])
+        content = '''
+        const localApi = "https://app.onit.com/api/v1/users";
+        const webhook = "https://hooks.slack.com/services/T000/B000/secret";
+        '''
+
+        recon._extract_hosts_and_paths_from_urls(content)
+
+        self.assertIn("https://app.onit.com", recon.hosts)
+        self.assertNotIn("https://hooks.slack.com", recon.hosts)
+        self.assertIn(
+            "https://hooks.slack.com/services/T000/B000/secret",
+            recon.absolute_urls,
+        )
+
+    def test_bounded_runner_does_not_submit_the_entire_input(self):
+        recon = JSRecon([], threads=2)
+        gate = threading.Event()
+        worker_started = threading.Event()
+        yielded = []
+        processed = []
+
+        def items():
+            for item in range(100):
+                yielded.append(item)
+                yield item
+
+        def worker(item):
+            worker_started.set()
+            gate.wait(timeout=2)
+            processed.append(item)
+
+        runner = threading.Thread(target=recon._run_bounded, args=(items(), worker))
+        runner.start()
+        self.assertTrue(worker_started.wait(timeout=1))
+        time.sleep(0.05)
+
+        # Two workers with a 2x pending window must consume only four items
+        # while both worker threads are blocked, not all 100.
+        self.assertLessEqual(len(yielded), 4)
+
+        gate.set()
+        runner.join(timeout=3)
+        self.assertFalse(runner.is_alive())
+        self.assertEqual(len(processed), 100)
+
     def test_extract_hosts_paths_and_absolute_urls_from_full_urls(self):
         recon = JSRecon([])
         content = """

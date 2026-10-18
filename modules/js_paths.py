@@ -17,7 +17,8 @@ import re
 import signal
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from itertools import product
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -143,6 +144,17 @@ class JSRecon:
         self.findings      = []   # VaktScan vuln dicts
         self.probe_results = []   # every interesting probe hit
 
+        # Absolute URLs embedded in JavaScript are useful inventory, but they
+        # are not automatically authorized scan targets.  Only origins that
+        # came from the caller-provided target set may enter the active probe
+        # Cartesian product.
+        self._scope_origins = {
+            f"{parsed.scheme}://{parsed.netloc}"
+            for target in target_urls
+            if (parsed := urlparse(target)).scheme in ("http", "https")
+            and parsed.netloc
+        }
+
         # ── Full URL pattern (captures scheme://host:port/path) ──
         self.url_pattern = re.compile(
             r'''(https?://[^\s"'`<>\\]+)'''
@@ -252,7 +264,12 @@ class JSRecon:
             parsed    = urlparse(url)
             base_host = f"{parsed.scheme}://{parsed.netloc}"
             has_template_host = '${' in parsed.netloc or '{' in parsed.netloc or '}' in parsed.netloc
-            if parsed.netloc and not has_template_host and self._is_allowed(base_host):
+            if (
+                parsed.netloc
+                and not has_template_host
+                and self._is_allowed(base_host)
+                and (not self._scope_origins or base_host in self._scope_origins)
+            ):
                 self.hosts.add(base_host)
             if parsed.path and parsed.path != '/':
                 normalized_path = re.sub(r'\$\{[^}]*\}', '*', parsed.path)
@@ -309,6 +326,47 @@ class JSRecon:
     # ------------------------------------------------------------------
     # Phase 2 - parse each JS file
     # ------------------------------------------------------------------
+
+    def _run_bounded(self, items, worker) -> None:
+        """Run *worker* with a small, fixed number of submitted futures.
+
+        Submitting the complete host×path product can allocate millions of
+        Future objects before the first request finishes.  Keep only a small
+        multiple of the configured worker count in memory while preserving
+        the same request concurrency.
+        """
+        iterator = iter(items)
+        max_pending = max(self.threads, self.threads * 2)
+        executor = ThreadPoolExecutor(max_workers=self.threads)
+        pending = set()
+        try:
+            for _ in range(max_pending):
+                if self._stop.is_set():
+                    break
+                try:
+                    item = next(iterator)
+                except StopIteration:
+                    break
+                pending.add(executor.submit(worker, item))
+
+            while pending and not self._stop.is_set():
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    future.result()
+                    if self._stop.is_set():
+                        break
+                    try:
+                        item = next(iterator)
+                    except StopIteration:
+                        continue
+                    pending.add(executor.submit(worker, item))
+        except KeyboardInterrupt:
+            self._stop.set()
+            for future in pending:
+                future.cancel()
+            raise
+        finally:
+            executor.shutdown(wait=not self._stop.is_set(), cancel_futures=True)
 
     def _check_source_map(self, js_url: str) -> None:
         """Flag exposed .js.map source-map files."""
@@ -377,19 +435,8 @@ class JSRecon:
     def is_allowed_host(self, h): return self._is_allowed(h)
 
     def run_js_analysis(self) -> None:
-        import concurrent.futures
         print(f"{Colors.CYAN}[*] Parsing {len(self.js_urls)} JS file(s)...{Colors.RESET}")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as ex:
-            futs = [ex.submit(self.parse_js_file, u) for u in self.js_urls]
-            try:
-                for f in as_completed(futs):
-                    if self._stop.is_set():
-                        break
-                    f.result()  # propagate exceptions if needed
-            except KeyboardInterrupt:
-                self._stop.set()
-                ex.shutdown(wait=False, cancel_futures=True)
-                raise
+        self._run_bounded(self.js_urls, self.parse_js_file)
 
         for url in self.target_urls:
             parsed = urlparse(url)
@@ -480,20 +527,9 @@ class JSRecon:
             pass
 
     def execute_probing(self) -> None:
-        import concurrent.futures
-        combos = [(h, p) for h in self.hosts for p in self.paths]
-        print(f"{Colors.CYAN}[*] Probing {len(combos):,} permutation(s)...{Colors.RESET}")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as ex:
-            futs = [ex.submit(self.probe_endpoint, c) for c in combos]
-            try:
-                for f in as_completed(futs):
-                    if self._stop.is_set():
-                        break
-                    f.result()
-            except KeyboardInterrupt:
-                self._stop.set()
-                ex.shutdown(wait=False, cancel_futures=True)
-                raise
+        total = len(self.hosts) * len(self.paths)
+        print(f"{Colors.CYAN}[*] Probing {total:,} permutation(s)...{Colors.RESET}")
+        self._run_bounded(product(self.hosts, self.paths), self.probe_endpoint)
 
     # ------------------------------------------------------------------
     # Orchestrator - returns VaktScan vuln dicts
