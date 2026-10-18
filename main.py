@@ -3251,6 +3251,11 @@ async def main(
         final_vulnerabilities, run_id, report_output_dir, sarif_output,
         output_format=output_format,
     )
+    # Keep the durable state incomplete until every report write succeeds, but
+    # render the final artifact with the terminal phase it represents.
+    report_state = dict(state_manager.state)
+    report_state["phase"] = "completed"
+    report_state["completed"] = True
     save_unified_html_report(
         final_vulnerabilities,
         os.path.join(
@@ -3258,7 +3263,7 @@ async def main(
             f"vaktscan_unified_{time.strftime('%Y%m%d_%H%M%S')}.html",
         ),
         scan_label=state_manager.primary_target,
-        state=state_manager.state,
+        state=report_state,
         artifact_root=report_output_dir,
     )
 
