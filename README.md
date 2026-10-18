@@ -209,11 +209,12 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | Flag | Default | Description |
 |---|---|---|
 | `target` | - | Domain, IP, CIDR, or a targets file (positional) |
-| `-c`, `--concurrency` | `300` | Concurrent connections |
+| `-c`, `--concurrency` | `100` | Concurrent connections |
 | `--web-concurrency` | value of `-c` | HTTP-stage concurrency (heavy tools remain serialized) |
-| `--nuclei-concurrency` | value of `-c` | Nuclei template concurrency |
-| `--nuclei-rate-limit` | 10× value of `-c` | Nuclei requests per second |
-| `--nuclei-bulk-size` | value of `-c` | Nuclei hosts processed in parallel |
+| `--nuclei-concurrency` | value of `-c`, capped at `100` | Nuclei template concurrency |
+| `--nuclei-rate-limit` | 5× value of `-c`, capped at `500` | Nuclei requests per second |
+| `--nuclei-bulk-size` | value of `-c`, capped at `100` | Nuclei hosts processed in parallel |
+| `--nuclei-full` | off | Disable technology-aware automatic selection and run the full matching-severity template set |
 | `--dirsearch-threads` | `30` | Threads per Dirsearch target |
 | `--dirsearch-parallel` | `20` | Dirsearch target processes in parallel |
 | `--js-threads` | value of `-c` | JavaScript/path-analysis workers (serialized stage) |

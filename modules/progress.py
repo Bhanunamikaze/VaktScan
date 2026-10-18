@@ -57,6 +57,7 @@ class DashboardProgress:
         self.noun = noun
         self.dashboard = dashboard if dashboard is not None else _get_dashboard()
         self.done = 0
+        self.started = time.monotonic()
         self._lock = asyncio.Lock()
         # Seed the task with a real total so the renderer draws a bar/percentage
         # instead of the bare spinner + "Starting".
@@ -73,9 +74,22 @@ class DashboardProgress:
             async with self._lock:
                 self.done += 1
                 if _active(self.dashboard):
+                    elapsed = max(0.001, time.monotonic() - self.started)
+                    rate = self.done / elapsed
+                    remaining = max(0, self.total - self.done)
+                    eta_seconds = int(remaining / rate) if rate > 0 else 0
+                    eta_mins, eta_secs = divmod(eta_seconds, 60)
+                    eta_hours, eta_mins = divmod(eta_mins, 60)
+                    eta = (
+                        f"{eta_hours}h{eta_mins:02d}m"
+                        if eta_hours else f"{eta_mins}m{eta_secs:02d}s"
+                    )
                     self.dashboard.update_task(
                         self.task_id, completed=self.done,
-                        status=f"{self.done}/{self.total} {self.noun}",
+                        status=(
+                            f"{self.done}/{self.total} {self.noun} | "
+                            f"{rate:.1f}/s | ETA {eta}"
+                        ),
                     )
 
 

@@ -121,7 +121,7 @@ class JSRecon:
         r'|192\.168\.\d{1,3}\.\d{1,3})\b'
     )
 
-    def __init__(self, target_urls: list, threads: int = 300, timeout: int = 10):
+    def __init__(self, target_urls: list, threads: int = 100, timeout: int = 10):
         self.target_urls = target_urls
         self.threads     = threads
         self.timeout     = timeout
@@ -140,6 +140,7 @@ class JSRecon:
         self.progress_phase = "Starting"
         self.progress_done = 0
         self.progress_total = 0
+        self.progress_started = time.monotonic()
 
         self.js_urls       = set()
         self.paths         = set()
@@ -209,7 +210,20 @@ class JSRecon:
         total = self.progress_total
         if total:
             pct = min(100, int(self.progress_done * 100 / total))
-            return f"{self.progress_phase}: {self.progress_done:,}/{total:,} ({pct}%)"
+            elapsed = max(0.001, time.monotonic() - self.progress_started)
+            rate = self.progress_done / elapsed
+            remaining = max(0, total - self.progress_done)
+            eta_seconds = int(remaining / rate) if rate > 0 else 0
+            eta_mins, eta_secs = divmod(eta_seconds, 60)
+            eta_hours, eta_mins = divmod(eta_mins, 60)
+            eta = (
+                f"{eta_hours}h{eta_mins:02d}m"
+                if eta_hours else f"{eta_mins}m{eta_secs:02d}s"
+            )
+            return (
+                f"{self.progress_phase} {self.progress_done:,}/{total:,} "
+                f"({pct}%) | {rate:.1f}/s | ETA {eta}"
+            )
         return self.progress_phase
 
     def _associate_paths(self, origins, paths):
@@ -408,6 +422,7 @@ class JSRecon:
             self.progress_phase = phase
             self.progress_done = 0
             self.progress_total = max(0, int(total or 0))
+            self.progress_started = time.monotonic()
         max_pending = max(self.threads, self.threads * 2)
         executor = ThreadPoolExecutor(max_workers=self.threads)
         pending = set()
@@ -689,9 +704,9 @@ class JSPathsScanner:
         self.target_urls = target_urls
         if threads is None:
             try:
-                threads = int(os.environ.get("VAKT_JS_THREADS", "300"))
+                threads = int(os.environ.get("VAKT_JS_THREADS", "100"))
             except (TypeError, ValueError):
-                threads = 300
+                threads = 100
         self.threads     = max(1, min(threads, 500))
         self.timeout     = timeout
         self.output_dir  = output_dir

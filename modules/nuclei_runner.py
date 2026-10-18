@@ -127,9 +127,12 @@ class NucleiRunner:
         # Preserve the scanner's established high-throughput defaults.  Network
         # safety comes from running heavy tools one at a time, rather than
         # throttling each tool to workstation-scale throughput.
-        nuclei_concurrency = _bounded_env("VAKT_NUCLEI_CONCURRENCY", 300, 500)
-        nuclei_rate = _bounded_env("VAKT_NUCLEI_RATE_LIMIT", 3000, 5000)
-        nuclei_bulk = _bounded_env("VAKT_NUCLEI_BULK_SIZE", 300, 500)
+        nuclei_concurrency = _bounded_env("VAKT_NUCLEI_CONCURRENCY", 100, 500)
+        nuclei_rate = _bounded_env("VAKT_NUCLEI_RATE_LIMIT", 500, 5000)
+        nuclei_bulk = _bounded_env("VAKT_NUCLEI_BULK_SIZE", 100, 500)
+        automatic_scan = os.environ.get(
+            "VAKT_NUCLEI_AUTOMATIC", "1"
+        ).strip().lower() not in {"0", "false", "no", "off"}
 
         cmd = [
             self.binary,
@@ -142,13 +145,16 @@ class NucleiRunner:
             "-nc",
             "-stats", "-stats-interval", "5",
         ]
+        if automatic_scan:
+            cmd.append("-as")
         if self.output_flag:
             cmd.append(self.output_flag)
         cmd.extend(["-silent", "-o", json_output_tmp])
 
         print(
             f"\033[96m[*] Running nuclei on {len(targets)} alive services "
-            f"(concurrency {nuclei_concurrency}, rate {nuclei_rate}/s)...\033[0m"
+            f"(mode {'automatic/technology-aware' if automatic_scan else 'full'}, "
+            f"concurrency {nuclei_concurrency}, rate {nuclei_rate}/s)...\033[0m"
         )
         print(f"\033[90m[*] Nuclei targets file: {input_file}\033[0m")
 
@@ -180,7 +186,24 @@ class NucleiRunner:
                                     rps = stats.get("rps", 0)
                                     matched = stats.get("matched", 0)
                                     duration = stats.get("duration", "")
-                                    clean_status = f"Progress: {percent}% | Reqs: {reqs}/{total_reqs} | RPS: {rps} | Matches: {matched} | Duration: {duration}"
+                                    try:
+                                        remaining = max(0, float(total_reqs) - float(reqs))
+                                        eta_seconds = remaining / float(rps) if float(rps) > 0 else None
+                                    except (TypeError, ValueError, ZeroDivisionError):
+                                        eta_seconds = None
+                                    if eta_seconds is None:
+                                        eta = "calculating"
+                                    else:
+                                        eta_mins, eta_secs = divmod(int(eta_seconds), 60)
+                                        eta_hours, eta_mins = divmod(eta_mins, 60)
+                                        eta = (
+                                            f"{eta_hours}h{eta_mins:02d}m"
+                                            if eta_hours else f"{eta_mins}m{eta_secs:02d}s"
+                                        )
+                                    clean_status = (
+                                        f"Reqs {reqs}/{total_reqs} | {rps} RPS | "
+                                        f"ETA {eta} | Matches {matched} | Elapsed {duration}"
+                                    )
                                     dashboard.update_task("nuclei", status=clean_status, progress=progress_val)
                                 except (json.JSONDecodeError, ValueError, TypeError):
                                     clean_line = clean_line.replace('[INF]', '').replace('[stats]', '').strip()

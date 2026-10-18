@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -168,7 +169,13 @@ class HTTPXRunner:
 
         def _status():
             elapsed = int(time.monotonic() - start)
-            return f"{len(results)} alive · {elapsed}s elapsed · {total:,} hosts"
+            timeout_bound = max(1, math.ceil(total / max(1, concurrency)) * 10)
+            remaining = max(0, timeout_bound - elapsed)
+            mins, secs = divmod(remaining, 60)
+            return (
+                f"{len(results)} alive · {elapsed}s elapsed · {total:,} hosts · "
+                f"timeout-bound ETA ≤{mins}m{secs:02d}s"
+            )
 
         # httpx streams one JSON object per alive host to stdout, and large target
         # sets take a long time. Emit a live heartbeat (elapsed + alive count) so
@@ -298,6 +305,18 @@ class HTTPXRunner:
         total = len(expanded_targets)
         completed = 0
         progress_step = max(1, total // 10)
+        started = time.monotonic()
+
+        def _library_status():
+            elapsed = max(0.001, time.monotonic() - started)
+            rate = completed / elapsed
+            remaining = max(0, total - completed)
+            eta_seconds = int(remaining / rate) if rate > 0 else 0
+            mins, secs = divmod(eta_seconds, 60)
+            return (
+                f"Probed {completed}/{total} (alive: {len(results)}) | "
+                f"{rate:.1f}/s | ETA {mins}m{secs:02d}s"
+            )
 
         if dashboard.active:
             dashboard.update_task("httpx", total=total)
@@ -315,7 +334,7 @@ class HTTPXRunner:
                     except python_httpx.HTTPError:
                         completed += 1
                         if dashboard.active:
-                            dashboard.update_task("httpx", completed=completed, status=f"Probed {completed}/{total} (alive: {len(results)})")
+                            dashboard.update_task("httpx", completed=completed, status=_library_status())
                         else:
                             _print_httpx_progress(completed, total, len(results), progress_step)
                         return
@@ -323,7 +342,7 @@ class HTTPXRunner:
                     final_url = str(response.url)
                     completed += 1
                     if dashboard.active:
-                        dashboard.update_task("httpx", completed=completed, status=f"Probed {completed}/{total} (alive: {len(results)})")
+                        dashboard.update_task("httpx", completed=completed, status=_library_status())
                     else:
                         _print_httpx_progress(completed, total, len(results), progress_step)
                     if final_url in seen_urls:

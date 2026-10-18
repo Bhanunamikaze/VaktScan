@@ -35,6 +35,8 @@ class DashboardProgressTest(unittest.IsolatedAsyncioTestCase):
         completions = [c.kwargs.get("completed") for c in dash.update_task.call_args_list
                        if c.kwargs.get("completed") is not None]
         self.assertEqual(max(completions), 3)
+        statuses = [c.kwargs.get("status", "") for c in dash.update_task.call_args_list]
+        self.assertTrue(any("ETA" in status and "/s" in status for status in statuses))
 
     async def test_counts_even_when_item_raises(self):
         dash = _fake_dashboard(active=True)

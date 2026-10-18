@@ -193,7 +193,7 @@ def _web_concurrency(requested):
     try:
         requested = max(1, min(int(requested), 500))
     except (TypeError, ValueError):
-        requested = 300
+        requested = 100
     raw_override = os.environ.get("VAKT_WEB_CONCURRENCY")
     if raw_override is None:
         return requested
@@ -232,13 +232,13 @@ def _apply_network_tuning_args(args):
         derived = {
             "js_threads": ("VAKT_JS_THREADS", global_concurrency),
             "nuclei_concurrency": (
-                "VAKT_NUCLEI_CONCURRENCY", global_concurrency
+                "VAKT_NUCLEI_CONCURRENCY", min(global_concurrency, 100)
             ),
             "nuclei_rate_limit": (
-                "VAKT_NUCLEI_RATE_LIMIT", global_concurrency * 10
+                "VAKT_NUCLEI_RATE_LIMIT", min(global_concurrency * 5, 500)
             ),
             "nuclei_bulk_size": (
-                "VAKT_NUCLEI_BULK_SIZE", global_concurrency
+                "VAKT_NUCLEI_BULK_SIZE", min(global_concurrency, 100)
             ),
         }
         for attr, (env_name, value) in derived.items():
@@ -252,6 +252,9 @@ def _apply_network_tuning_args(args):
         if value is not None:
             os.environ[env_name] = str(value)
             applied.append(f"{attr.replace('_', '-')}={value}")
+    if getattr(args, "nuclei_full", False):
+        os.environ["VAKT_NUCLEI_AUTOMATIC"] = "0"
+        applied.append("nuclei-mode=full")
     if applied:
         print(f"[*] Network tuning: {', '.join(applied)}")
 
@@ -523,6 +526,11 @@ async def run_recon_followups(
             result = await _capture_stage(awaitable)
             if state_manager is not None and not isinstance(result, Exception):
                 state_manager.mark_recon_stage_payload(recon_domain, name, result)
+            if dashboard.active:
+                dashboard.complete_task(
+                    name,
+                    "Completed" if not isinstance(result, Exception) else "Failed",
+                )
             return result
 
         try:
@@ -3661,15 +3669,17 @@ if __name__ == "__main__":
     sp_scan = subparsers.add_parser("scan", help="Full attack surface scan")
     sp_scan.add_argument("target", nargs="?", default=None,
                          help="Domain, IP, CIDR, or targets file (optional with --list-resumable)")
-    sp_scan.add_argument("-c", "--concurrency", type=int, default=300)
+    sp_scan.add_argument("-c", "--concurrency", type=int, default=100)
     sp_scan.add_argument("--web-concurrency", type=_positive_int, default=None, metavar="N",
                          help="Concurrency for HTTP-heavy stages (default: use -c; hard cap: 500)")
     sp_scan.add_argument("--nuclei-concurrency", type=_positive_int, default=None, metavar="N",
                          help="Nuclei template concurrency (default: use -c; hard cap: 500)")
     sp_scan.add_argument("--nuclei-rate-limit", type=_positive_int, default=None, metavar="RPS",
-                         help="Nuclei request rate limit (default: 10x -c; hard cap: 5000 RPS)")
+                         help="Nuclei request rate limit (default: 5x -c, capped at 500 RPS; hard cap: 5000)")
     sp_scan.add_argument("--nuclei-bulk-size", type=_positive_int, default=None, metavar="N",
                          help="Nuclei hosts processed in parallel (default: use -c; hard cap: 500)")
+    sp_scan.add_argument("--nuclei-full", action="store_true",
+                         help="Run every matching-severity Nuclei template instead of technology-aware automatic mode")
     sp_scan.add_argument("--dirsearch-threads", type=_positive_int, default=None, metavar="N",
                          help="Threads per Dirsearch target (default: 30, hard cap: 50)")
     sp_scan.add_argument("--dirsearch-parallel", type=_positive_int, default=None, metavar="N",
