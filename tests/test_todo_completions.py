@@ -2,7 +2,7 @@ import asyncio
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import main
 from modules import artifact_findings, cloud_enum, domain_scan, web_checks
@@ -43,6 +43,27 @@ class CSPTests(unittest.IsolatedAsyncioTestCase):
         titles = {finding["vulnerability"] for finding in findings}
         self.assertNotIn("Missing Clickjacking Protection (X-Frame-Options / CSP)", titles)
         self.assertNotIn("Weak Content-Security-Policy Directives", titles)
+
+    async def test_web_check_client_pool_follows_concurrency(self):
+        captured = {}
+
+        class Client:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+        with patch("modules.web_checks.httpx.AsyncClient", Client), \
+             patch("modules.web_checks._run_checks_for_url", AsyncMock(return_value=[])):
+            await web_checks.run_checks(["https://example.com"], concurrency=37)
+
+        limits = captured["limits"]
+        self.assertEqual(limits.max_connections, 37)
+        self.assertEqual(limits.max_keepalive_connections, 37)
 
 
 class HorizontalPipelineTests(unittest.TestCase):

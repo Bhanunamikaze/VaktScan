@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from modules.progress import DashboardProgress
+from modules.progress import DashboardProgress, heartbeat
 
 MODULE_NAME = "WebChecks"
 _DEFAULT_TIMEOUT = 8.0
@@ -1560,13 +1560,20 @@ async def run_checks(alive_urls: list[str], concurrency: int = 20) -> list[dict]
         verify=False,
         timeout=_DEFAULT_TIMEOUT,
         follow_redirects=True,
+        limits=httpx.Limits(
+            max_connections=max(1, concurrency),
+            max_keepalive_connections=max(1, concurrency),
+        ),
     ) as client:
         prog = DashboardProgress("web_checks", total=len(alive_urls), noun="URLs")
         tasks = [
             prog.wrap(_run_checks_for_url(url, client, semaphore))
             for url in alive_urls
         ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # A URL runs several checks and endpoint probes before its URL-level
+        # counter advances.  Keep liveness visible during that first batch.
+        async with heartbeat("web_checks", "Running web checks"):
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
     for res in results:
         if isinstance(res, list):
