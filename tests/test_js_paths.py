@@ -3,10 +3,13 @@ import threading
 import time
 from unittest.mock import Mock
 
-from modules.js_paths import JSRecon
+from modules.js_paths import JSPathsScanner, JSRecon
 
 
 class JSPathsTests(unittest.TestCase):
+    def test_scanner_allows_global_default_concurrency(self):
+        self.assertEqual(JSPathsScanner([], threads=100).threads, 100)
+
     def test_embedded_third_party_hosts_are_inventory_only_not_probe_targets(self):
         recon = JSRecon(["https://app.onit.com/login"])
         content = '''

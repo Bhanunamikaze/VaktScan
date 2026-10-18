@@ -43,6 +43,38 @@ class NetworkTuningTests(unittest.TestCase):
                 ["14", "11", "31", "17", "6", "3", "9"],
             )
 
+    def test_js_threads_inherit_global_concurrency_by_default(self):
+        args = SimpleNamespace(
+            concurrency=100,
+            web_concurrency=None,
+            nuclei_concurrency=None,
+            nuclei_rate_limit=None,
+            nuclei_bulk_size=None,
+            dirsearch_threads=None,
+            dirsearch_parallel=None,
+            js_threads=None,
+        )
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VAKT_JS_THREADS", None)
+            main._apply_network_tuning_args(args)
+            self.assertEqual(os.environ["VAKT_JS_THREADS"], "100")
+
+    def test_explicit_js_threads_override_global_concurrency(self):
+        args = SimpleNamespace(
+            concurrency=100,
+            web_concurrency=None,
+            nuclei_concurrency=None,
+            nuclei_rate_limit=None,
+            nuclei_bulk_size=None,
+            dirsearch_threads=None,
+            dirsearch_parallel=None,
+            js_threads=175,
+        )
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("VAKT_JS_THREADS", None)
+            main._apply_network_tuning_args(args)
+            self.assertEqual(os.environ["VAKT_JS_THREADS"], "175")
+
     def test_positive_int_rejects_zero(self):
         with self.assertRaises(Exception):
             main._positive_int("0")

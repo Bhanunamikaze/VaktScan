@@ -122,20 +122,24 @@ class JSRecon:
         r'|192\.168\.\d{1,3}\.\d{1,3})\b'
     )
 
-    def __init__(self, target_urls: list, threads: int = 20, timeout: int = 10):
+    def __init__(self, target_urls: list, threads: int = 100, timeout: int = 10):
         self.target_urls = target_urls
         self.threads     = threads
         self.timeout     = timeout
         self._stop       = threading.Event()
 
-        self.session = requests.Session()
-        self.session.headers.update({
+        self._session_local = threading.local()
+        self._session_headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/114.0.0.0 Safari/537.36"
             )
-        })
+        }
+
+        self.progress_phase = "Starting"
+        self.progress_done = 0
+        self.progress_total = 0
 
         self.js_urls       = set()
         self.paths         = set()
@@ -173,6 +177,38 @@ class JSRecon:
             '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico',
             '.woff', '.woff2', '.ttf', '.eot', '.mp4', '.webm', '.mp3',
         }
+
+    @property
+    def session(self):
+        """Return one requests session per worker thread.
+
+        A single shared Session is not guaranteed to be thread-safe and its
+        default adapter pool is much smaller than this scanner's worker count.
+        Thread-local sessions preserve connection reuse without serializing or
+        corrupting concurrent requests.
+        """
+        session = getattr(self._session_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            session.headers.update(self._session_headers)
+            self._session_local.session = session
+        return session
+
+    @session.setter
+    def session(self, value):
+        # Kept for compatibility with callers/tests that inject a Session.
+        self._session_local.session = value
+
+    def stop(self):
+        """Ask the bounded schedulers to stop submitting new requests."""
+        self._stop.set()
+
+    def progress_status(self):
+        total = self.progress_total
+        if total:
+            pct = min(100, int(self.progress_done * 100 / total))
+            return f"{self.progress_phase}: {self.progress_done:,}/{total:,} ({pct}%)"
+        return self.progress_phase
 
     @staticmethod
     def _build_path_extractors():
@@ -327,7 +363,7 @@ class JSRecon:
     # Phase 2 - parse each JS file
     # ------------------------------------------------------------------
 
-    def _run_bounded(self, items, worker) -> None:
+    def _run_bounded(self, items, worker, *, phase=None, total=None) -> None:
         """Run *worker* with a small, fixed number of submitted futures.
 
         Submitting the complete host×path product can allocate millions of
@@ -336,6 +372,10 @@ class JSRecon:
         the same request concurrency.
         """
         iterator = iter(items)
+        if phase is not None:
+            self.progress_phase = phase
+            self.progress_done = 0
+            self.progress_total = max(0, int(total or 0))
         max_pending = max(self.threads, self.threads * 2)
         executor = ThreadPoolExecutor(max_workers=self.threads)
         pending = set()
@@ -353,6 +393,7 @@ class JSRecon:
                 done, pending = wait(pending, return_when=FIRST_COMPLETED)
                 for future in done:
                     future.result()
+                    self.progress_done += 1
                     if self._stop.is_set():
                         break
                     try:
@@ -436,7 +477,12 @@ class JSRecon:
 
     def run_js_analysis(self) -> None:
         print(f"{Colors.CYAN}[*] Parsing {len(self.js_urls)} JS file(s)...{Colors.RESET}")
-        self._run_bounded(self.js_urls, self.parse_js_file)
+        self._run_bounded(
+            self.js_urls,
+            self.parse_js_file,
+            phase="Parsing JS files",
+            total=len(self.js_urls),
+        )
 
         for url in self.target_urls:
             parsed = urlparse(url)
@@ -528,8 +574,16 @@ class JSRecon:
 
     def execute_probing(self) -> None:
         total = len(self.hosts) * len(self.paths)
-        print(f"{Colors.CYAN}[*] Probing {total:,} permutation(s)...{Colors.RESET}")
-        self._run_bounded(product(self.hosts, self.paths), self.probe_endpoint)
+        print(
+            f"{Colors.CYAN}[*] Probing {total:,} permutation(s) with "
+            f"{self.threads} worker(s)...{Colors.RESET}"
+        )
+        self._run_bounded(
+            product(self.hosts, self.paths),
+            self.probe_endpoint,
+            phase="Probing JS paths",
+            total=total,
+        )
 
     # ------------------------------------------------------------------
     # Orchestrator - returns VaktScan vuln dicts
@@ -538,10 +592,14 @@ class JSRecon:
     def run(self) -> dict:
         """Run full workflow. Returns dict with findings + raw data."""
         try:
+            self.progress_phase = "Collecting JS files"
+            self.progress_done = 0
+            self.progress_total = len(self.target_urls)
             for url in self.target_urls:
                 if self._stop.is_set():
                     break
                 self.collect_js_files(url)
+                self.progress_done += 1
 
             if not self.js_urls:
                 print(f"{Colors.YELLOW}[-] No JS files found. Exiting.{Colors.RESET}")
@@ -580,10 +638,10 @@ class JSPathsScanner:
         self.target_urls = target_urls
         if threads is None:
             try:
-                threads = int(os.environ.get("VAKT_JS_THREADS", "20"))
+                threads = int(os.environ.get("VAKT_JS_THREADS", "100"))
             except (TypeError, ValueError):
-                threads = 20
-        self.threads     = max(1, min(threads, 50))
+                threads = 100
+        self.threads     = max(1, min(threads, 500))
         self.timeout     = timeout
         self.output_dir  = output_dir
 
@@ -594,10 +652,23 @@ class JSPathsScanner:
         probe_results.
         """
         loop = asyncio.get_running_loop()
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            async with heartbeat("js_paths", "Probing JS paths"):
-                result = await loop.run_in_executor(pool, self._run_sync)
-        return result
+        recon = JSRecon(
+            target_urls=self.target_urls,
+            threads=self.threads,
+            timeout=self.timeout,
+        )
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = loop.run_in_executor(pool, recon.run)
+        try:
+            async with heartbeat("js_paths", recon.progress_status):
+                result = await asyncio.shield(future)
+        except asyncio.CancelledError:
+            recon.stop()
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            pool.shutdown(wait=True)
+            return result
 
     def _run_sync(self) -> dict:
         return JSRecon(

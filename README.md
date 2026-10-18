@@ -216,7 +216,7 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `--nuclei-bulk-size` | `100` | Nuclei hosts processed in parallel |
 | `--dirsearch-threads` | `30` | Threads per Dirsearch target |
 | `--dirsearch-parallel` | `20` | Dirsearch target processes in parallel |
-| `--js-threads` | `20` | JavaScript/path-analysis workers |
+| `--js-threads` | value of `-c` | JavaScript/path-analysis workers (serialized stage) |
 | `--connect-timeout` | tool default | TCP connect timeout (seconds) |
 | `--port-retries` | tool default | Port-scan connect retries |
 | `-r`, `--resume` | off | Require + resume an existing checkpointed scan (errors if none). Scans **auto-resume by target** by default |

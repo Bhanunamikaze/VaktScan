@@ -227,6 +227,15 @@ def _apply_network_tuning_args(args):
         "js_threads": "VAKT_JS_THREADS",
     }
     applied = []
+    if (
+        getattr(args, "js_threads", None) is None
+        and getattr(args, "concurrency", None) is not None
+        and "VAKT_JS_THREADS" not in os.environ
+    ):
+        # JS path probing is a serialized heavy stage, so it can safely inherit
+        # the normal scan concurrency without multiplying another tool's pool.
+        os.environ["VAKT_JS_THREADS"] = str(args.concurrency)
+        applied.append(f"js-threads={args.concurrency} (from -c)")
     for attr, env_name in mapping.items():
         value = getattr(args, attr, None)
         if value is not None:
@@ -3649,7 +3658,7 @@ if __name__ == "__main__":
     sp_scan.add_argument("--dirsearch-parallel", type=_positive_int, default=None, metavar="N",
                          help="Dirsearch target processes in parallel (default: 20, hard cap: 20)")
     sp_scan.add_argument("--js-threads", type=_positive_int, default=None, metavar="N",
-                         help="JavaScript/path-analysis worker threads (default: 20, hard cap: 50)")
+                         help="JavaScript/path-analysis workers (default: use -c; hard cap: 500)")
     sp_scan.add_argument("--connect-timeout", type=float, default=DEFAULT_CONNECT_TIMEOUT)
     sp_scan.add_argument("--port-retries", type=int, default=DEFAULT_PORT_RETRIES)
     # Resume UX (Phase 5). Default is AUTO-RESUME: the scan id is recomputed from

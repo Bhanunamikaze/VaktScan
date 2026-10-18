@@ -17,7 +17,7 @@
   - [x] Run request-amplifying recon stages sequentially.
   - [x] Keep Dirsearch at its original 20 targets × 30 threads (up to 600 workers).
   - [x] Keep Nuclei at concurrency 50, 150 requests/second, and bulk size 100.
-  - [x] Keep JS analysis at 20 workers by default.
+  - [x] Run JS analysis at the normal `-c 100` throughput by default, with bounded scheduling.
   - [x] Apply the same safeguards to direct-target and streaming web-probe paths.
 - [x] Keep tuning user-controllable with flags:
   - [x] `-c/--concurrency`

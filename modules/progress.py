@@ -98,7 +98,11 @@ async def heartbeat(task_id, label, interval=2.0, dashboard=None):
                 await asyncio.sleep(interval)
                 if _active(dash):
                     elapsed = int(time.monotonic() - start)
-                    dash.update_task(task_id, status=f"{label} · {elapsed}s elapsed")
+                    current_label = label() if callable(label) else label
+                    dash.update_task(
+                        task_id,
+                        status=f"{current_label} · {elapsed}s elapsed",
+                    )
         except asyncio.CancelledError:
             pass
 
