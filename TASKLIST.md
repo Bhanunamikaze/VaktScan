@@ -41,7 +41,11 @@
 - [x] Escape target/tool-controlled content in HTML output.
 - [x] Generate a current report snapshot from the saved `onit.com` state.
 - [x] Include the user's `requirements.sh` update in the earlier fixes commit.
-- [x] Run the complete offline regression suite (544 tests passing, plus 13 subtests).
+- [x] Preserve the exact evidence/request URL in CSV, JSON, SARIF, terminal, and HTML output.
+- [x] Filter unsupported legacy scanner noise and require module-specific response evidence before reporting findings.
+- [x] Regenerate the Onit evidence-validated CSV/HTML report (3,482 raw rows reduced to 61 supported records, with no missing URLs).
+- [x] Bound every external recon enumerator and tear down its complete process group on timeout so one stalled provider cannot block the scan.
+- [x] Run the complete offline regression suite (566 tests passing, plus 13 subtests).
 
 ## Final live verification
 
@@ -52,6 +56,7 @@
 - [x] Monitor process/request concurrency and workstation connectivity during the live run.
 - [x] Confirm no scanner child processes remain after interruption or completion.
 - [x] Confirm the final unified HTML report is generated under `reports/onit.com/` (`vaktscan_unified_20261018_130336.html`).
+- [x] Start `python main.py scan counselgo.com` and confirm recon progresses through port discovery, HTTPX, web checks, JS analysis, and Nuclei without replaying enumeration.
 
 ## Existing `TODO.md` backlog audit
 
