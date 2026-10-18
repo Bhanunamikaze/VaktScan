@@ -227,15 +227,26 @@ def _apply_network_tuning_args(args):
         "js_threads": "VAKT_JS_THREADS",
     }
     applied = []
-    if (
-        getattr(args, "js_threads", None) is None
-        and getattr(args, "concurrency", None) is not None
-        and "VAKT_JS_THREADS" not in os.environ
-    ):
-        # JS path probing is a serialized heavy stage, so it can safely inherit
-        # the normal scan concurrency without multiplying another tool's pool.
-        os.environ["VAKT_JS_THREADS"] = str(args.concurrency)
-        applied.append(f"js-threads={args.concurrency} (from -c)")
+    global_concurrency = getattr(args, "concurrency", None)
+    if global_concurrency is not None:
+        derived = {
+            "js_threads": ("VAKT_JS_THREADS", global_concurrency),
+            "nuclei_concurrency": (
+                "VAKT_NUCLEI_CONCURRENCY", global_concurrency
+            ),
+            "nuclei_rate_limit": (
+                "VAKT_NUCLEI_RATE_LIMIT", global_concurrency * 10
+            ),
+            "nuclei_bulk_size": (
+                "VAKT_NUCLEI_BULK_SIZE", global_concurrency
+            ),
+        }
+        for attr, (env_name, value) in derived.items():
+            if getattr(args, attr, None) is None and env_name not in os.environ:
+                os.environ[env_name] = str(value)
+                applied.append(
+                    f"{attr.replace('_', '-')}={value} (from -c)"
+                )
     for attr, env_name in mapping.items():
         value = getattr(args, attr, None)
         if value is not None:
@@ -3654,11 +3665,11 @@ if __name__ == "__main__":
     sp_scan.add_argument("--web-concurrency", type=_positive_int, default=None, metavar="N",
                          help="Concurrency for HTTP-heavy stages (default: use -c; hard cap: 500)")
     sp_scan.add_argument("--nuclei-concurrency", type=_positive_int, default=None, metavar="N",
-                         help="Nuclei template concurrency (default: 50, hard cap: 100)")
+                         help="Nuclei template concurrency (default: use -c; hard cap: 500)")
     sp_scan.add_argument("--nuclei-rate-limit", type=_positive_int, default=None, metavar="RPS",
-                         help="Nuclei request rate limit per second (default: 150, hard cap: 500)")
+                         help="Nuclei request rate limit (default: 10x -c; hard cap: 5000 RPS)")
     sp_scan.add_argument("--nuclei-bulk-size", type=_positive_int, default=None, metavar="N",
-                         help="Nuclei hosts processed in parallel (default: 100, hard cap: 100)")
+                         help="Nuclei hosts processed in parallel (default: use -c; hard cap: 500)")
     sp_scan.add_argument("--dirsearch-threads", type=_positive_int, default=None, metavar="N",
                          help="Threads per Dirsearch target (default: 30, hard cap: 50)")
     sp_scan.add_argument("--dirsearch-parallel", type=_positive_int, default=None, metavar="N",

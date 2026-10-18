@@ -55,9 +55,18 @@ class NetworkTuningTests(unittest.TestCase):
             js_threads=None,
         )
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("VAKT_JS_THREADS", None)
+            for key in (
+                "VAKT_JS_THREADS",
+                "VAKT_NUCLEI_CONCURRENCY",
+                "VAKT_NUCLEI_RATE_LIMIT",
+                "VAKT_NUCLEI_BULK_SIZE",
+            ):
+                os.environ.pop(key, None)
             main._apply_network_tuning_args(args)
             self.assertEqual(os.environ["VAKT_JS_THREADS"], "300")
+            self.assertEqual(os.environ["VAKT_NUCLEI_CONCURRENCY"], "300")
+            self.assertEqual(os.environ["VAKT_NUCLEI_RATE_LIMIT"], "3000")
+            self.assertEqual(os.environ["VAKT_NUCLEI_BULK_SIZE"], "300")
 
     def test_explicit_js_threads_override_global_concurrency(self):
         args = SimpleNamespace(

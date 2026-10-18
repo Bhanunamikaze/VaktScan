@@ -18,7 +18,7 @@
   - [x] Run GAU and Wayback sequentially at global scan concurrency.
   - [x] Bound archived-URL validation/fetches to global scan concurrency.
   - [x] Keep Dirsearch at its original 20 targets × 30 threads (up to 600 workers).
-  - [x] Keep Nuclei at concurrency 50, 150 requests/second, and bulk size 100.
+  - [x] Make Nuclei inherit `-c` for template/bulk concurrency and 10× `-c` for request rate.
   - [x] Run JS analysis at the normal `-c 300` throughput by default, with bounded scheduling.
   - [x] Apply the same safeguards to direct-target and streaming web-probe paths.
 - [x] Keep tuning user-controllable with flags:

@@ -127,9 +127,9 @@ class NucleiRunner:
         # Preserve the scanner's established high-throughput defaults.  Network
         # safety comes from running heavy tools one at a time, rather than
         # throttling each tool to workstation-scale throughput.
-        nuclei_concurrency = _bounded_env("VAKT_NUCLEI_CONCURRENCY", 50, 100)
-        nuclei_rate = _bounded_env("VAKT_NUCLEI_RATE_LIMIT", 150, 500)
-        nuclei_bulk = _bounded_env("VAKT_NUCLEI_BULK_SIZE", 100, 100)
+        nuclei_concurrency = _bounded_env("VAKT_NUCLEI_CONCURRENCY", 300, 500)
+        nuclei_rate = _bounded_env("VAKT_NUCLEI_RATE_LIMIT", 3000, 5000)
+        nuclei_bulk = _bounded_env("VAKT_NUCLEI_BULK_SIZE", 300, 500)
 
         cmd = [
             self.binary,
