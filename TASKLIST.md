@@ -46,7 +46,8 @@
 - [x] Regenerate the Onit evidence-validated CSV/HTML report (3,482 raw rows reduced to 61 supported records, with no missing URLs).
 - [x] Bound every external recon enumerator and tear down its complete process group on timeout so one stalled provider cannot block the scan.
 - [x] Bound GAU and Wayback collection with configurable `VAKT_ARCHIVE_TOOL_TIMEOUT` process-group timeouts.
-- [x] Run the complete offline regression suite (569 tests passing, plus 13 subtests).
+- [x] Keep fresh domain-scan port, finding, and unified reports under `reports/<primary-target>/` instead of an intermediate generated subdomain filename.
+- [x] Run the complete offline regression suite (572 tests passing, plus 13 subtests).
 
 ## Final live verification
 

@@ -1162,6 +1162,23 @@ def _archive_query_roots(hosts):
     })
 
 
+def _primary_report_dir(primary_target, reports_root="reports"):
+    """Return the stable artifact directory owned by the requested target.
+
+    Recon can replace the original input with a generated subdomain filename.
+    That intermediate basename must not become the owner of final reports.
+    """
+    if not primary_target:
+        return None
+    safe_label = "".join(
+        ch if ch.isalnum() or ch in "._-" else "_"
+        for ch in str(primary_target).strip().lower()
+    ).strip("._")
+    if not safe_label:
+        return None
+    return os.path.join(reports_root, safe_label)
+
+
 # Number of URLs to fully probe before persisting a web-probe checkpoint. Sized
 # so ordinary scans (a handful of web URLs) still run as a SINGLE batch -
 # byte-for-byte the pre-checkpoint behavior - while large URL sets get periodic
@@ -2889,7 +2906,9 @@ async def main(
 
             # Create a single output directory for all artifacts from this scan
             timestamp = time.strftime("%Y%m%d_%H%M%S")
-            web_output_dir = os.path.join("reports", f"web_probe_{domain_label}_{timestamp}")
+            web_output_dir = _primary_report_dir(state_manager.primary_target) or os.path.join(
+                "reports", f"web_probe_{domain_label}_{timestamp}"
+            )
             os.makedirs(web_output_dir, exist_ok=True)
 
             save_port_scan_csv(open_ports_results, domain_label, output_dir=web_output_dir)
@@ -2958,7 +2977,9 @@ async def main(
             # A resume that skipped the fresh branch has no output dir yet.
             if not web_output_dir:
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
-                web_output_dir = os.path.join("reports", f"web_probe_{domain_label}_{timestamp}")
+                web_output_dir = _primary_report_dir(state_manager.primary_target) or os.path.join(
+                    "reports", f"web_probe_{domain_label}_{timestamp}"
+                )
                 os.makedirs(web_output_dir, exist_ok=True)
             # Probe the standard web ports plus any custom HTTP ports the user supplied.
             from utils import format_url
@@ -3277,15 +3298,7 @@ async def main(
     # later port/web phase may legitimately have no new output directory, so
     # finalize into that durable recon directory instead of dropping reports in
     # the repository root.
-    report_output_dir = web_output_dir
-    if not report_output_dir and state_manager.primary_target:
-        safe_report_label = "".join(
-            ch if ch.isalnum() or ch in "._-" else "_"
-            for ch in str(state_manager.primary_target).lower()
-        )
-        candidate = os.path.join("reports", safe_report_label)
-        if os.path.isdir(candidate):
-            report_output_dir = candidate
+    report_output_dir = _primary_report_dir(state_manager.primary_target) or web_output_dir
     if not report_output_dir:
         report_output_dir = "reports"
     os.makedirs(report_output_dir, exist_ok=True)
