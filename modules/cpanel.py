@@ -1094,7 +1094,11 @@ async def check_crlf_injection(client, ctx):
     # Non-redirect responses (400, 404) cannot carry the injected header.
     if r.status_code not in (301, 302, 303, 307, 308):
         return out
-    if marker in str(r.headers).lower():
+    # An encoded marker echoed inside Location is not response splitting.  A
+    # successful CRLF injection must be parsed by the HTTP client as a distinct
+    # response-header field with the attacker-controlled name and value.
+    injected_value = r.headers.get(marker, "")
+    if injected_value.strip() == "1":
         out.append(_finding(
             status='VULNERABLE',
             severity='HIGH',

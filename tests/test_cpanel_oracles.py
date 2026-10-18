@@ -8,6 +8,8 @@ that every test_cve_payload-equivalent emission goes through it.
 import os
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -77,6 +79,40 @@ class StatusVocabularyTests(unittest.TestCase):
     def test_valid_statuses_match_main_py(self):
         # main.py:1119-1128 colour-codes exactly these four values.
         self.assertEqual(cpanel.VALID_STATUSES, {'CRITICAL', 'VULNERABLE', 'POTENTIAL', 'INFO'})
+
+
+class CrlfOracleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_percent_encoded_marker_in_location_is_not_injection(self):
+        response = SimpleNamespace(
+            status_code=301,
+            headers={
+                'location': 'https://example.com/login/?goto_uri=%0d%0ax-vakt-deadbeef:1'
+            },
+        )
+        context = {'origin_url': 'https://example.com', 'surface': 'cPanel'}
+
+        with patch.object(cpanel.secrets, 'token_hex', return_value='deadbeef'), \
+             patch.object(cpanel, '_safe_get', AsyncMock(return_value=response)):
+            findings = await cpanel.check_crlf_injection(None, context)
+
+        self.assertEqual(findings, [])
+
+    async def test_distinct_injected_response_header_is_reported(self):
+        response = SimpleNamespace(
+            status_code=302,
+            headers={
+                'location': 'https://example.com/login/',
+                'x-vakt-deadbeef': '1',
+            },
+        )
+        context = {'origin_url': 'https://example.com', 'surface': 'cPanel'}
+
+        with patch.object(cpanel.secrets, 'token_hex', return_value='deadbeef'), \
+             patch.object(cpanel, '_safe_get', AsyncMock(return_value=response)):
+            findings = await cpanel.check_crlf_injection(None, context)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]['vulnerability'], 'CRLF / response header injection')
 
 
 if __name__ == '__main__':
