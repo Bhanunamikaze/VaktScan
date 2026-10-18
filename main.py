@@ -557,6 +557,8 @@ async def run_recon_followups(
             except Exception as exc:
                 return exc
 
+        reused_stages = set()
+
         async def _checkpointed_stage(name, awaitable):
             if dashboard.active:
                 # Only display the stage that is actually executing.  Adding all
@@ -568,6 +570,7 @@ async def run_recon_followups(
                 close = getattr(awaitable, "close", None)
                 if close:
                     close()
+                reused_stages.add(name)
                 print(f"{Colors.GRAY}[*] Resume: {name.replace('_', ' ')} already complete; reusing checkpoint.{Colors.RESET}")
                 if dashboard.active:
                     dashboard.complete_task(name, "Reused checkpoint")
@@ -647,10 +650,12 @@ async def run_recon_followups(
             domain_scan_findings = []
         if domain_scan_findings:
             print(f"{Colors.GREEN}[+] Domain scanner identified {len(domain_scan_findings)} web issues.{Colors.RESET}")
-            for finding in domain_scan_findings:
-                print(f"    - {finding['status']} | {finding['vulnerability']} | {finding['url']}")
+            if "domain_scan" not in reused_stages:
+                for finding in domain_scan_findings:
+                    print(f"    - {finding['status']} | {finding['vulnerability']} | {finding['url']}")
             all_findings.extend(domain_scan_findings)
-            save_results_to_csv(domain_scan_findings, filename=os.path.join(output_dir, f"domain_scan_vulns_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
+            if "domain_scan" not in reused_stages:
+                save_results_to_csv(domain_scan_findings, filename=os.path.join(output_dir, f"domain_scan_vulns_{time.strftime('%Y%m%d_%H%M%S')}.csv"))
 
         if isinstance(nuclei_results, Exception):
             _reraise_if_bug(nuclei_results)
@@ -658,8 +663,9 @@ async def run_recon_followups(
             nuclei_results = []
         if nuclei_results:
             print(f"{Colors.GREEN}[+] Nuclei identified {len(nuclei_results)} findings.{Colors.RESET}")
-            for vuln in nuclei_results:
-                print(f"    - {vuln['status']} | {vuln['vulnerability']} | {vuln['url']}")
+            if "nuclei" not in reused_stages:
+                for vuln in nuclei_results:
+                    print(f"    - {vuln['status']} | {vuln['vulnerability']} | {vuln['url']}")
             all_findings.extend(nuclei_results)
         else:
             print(f"{Colors.GREEN}[+] Nuclei scan complete with no findings.{Colors.RESET}")
