@@ -56,7 +56,7 @@ python scripts/setup_recon_tools.py --install --tools amass httpx nuclei
 
 ```bash
 # Full scan of a single domain (subdomain enum + all modules)
-python main.py scan steinzsecurity.com
+python main.py scan hackingdream.net
 
 # Scan an IP or CIDR (skips subdomain enum / passive recon, goes straight to port scan)
 python main.py scan 192.168.1.0/24
@@ -65,7 +65,7 @@ python main.py scan 192.168.1.0/24
 python main.py scan targets.txt
 
 # Skip subdomain enumeration for a domain target
-python main.py scan steinzsecurity.com --no-subdomain-enum
+python main.py scan hackingdream.net --no-subdomain-enum
 
 # Resume: re-running the same command auto-resumes where it left off
 # (works for domain / IP / CIDR / file targets, not just files)
@@ -77,7 +77,7 @@ python main.py scan --list-resumable      # list resumable scans, then exit
 python main.py scan targets.txt -c 500 --nmap --format all
 
 # Subdomain enum only, then chain into probing
-python main.py enum steinzsecurity.com --probe
+python main.py enum hackingdream.net --probe
 ```
 
 ### Scope control & advanced examples
@@ -85,32 +85,32 @@ python main.py enum steinzsecurity.com --probe
 ```bash
 # Company assets only - drop customer sites on shared hosting (raise the shared-IP
 # cutoff to 15), run Nmap CVE scripts on open ports, and skip any *blog* hosts
-python main.py scan steinzsecurity.com --nmap --company-only --shared-ip-threshold 15 --exclude "*blog*.steinzsecurity.com"
+python main.py scan hackingdream.net --nmap --company-only --shared-ip-threshold 15 --exclude "*blog*.hackingdream.net"
 
 # Exclude multiple customer/partner patterns (repeatable), glob or regex
-python main.py scan steinzsecurity.com --exclude "customer*.steinzsecurity.com" --exclude "re:^partner-"
+python main.py scan hackingdream.net --exclude "customer*.hackingdream.net" --exclude "re:^partner-"
 
 # Exclude patterns from a file (one per line, # comments allowed)
-python main.py scan steinzsecurity.com --exclude-file skip_customers.txt
+python main.py scan hackingdream.net --exclude-file skip_customers.txt
 
 # Allowlist: scan ONLY the hosts you care about
-python main.py scan steinzsecurity.com --include-only "*.corp.steinzsecurity.com"
+python main.py scan hackingdream.net --include-only "*.corp.hackingdream.net"
 
 # Company-only triage + screenshots + tech/EOL fingerprint, with JSON + SARIF output
-python main.py scan steinzsecurity.com --company-only --screenshots --tech --format all
+python main.py scan hackingdream.net --company-only --screenshots --tech --format all
 
 # Everything on: horizontal expansion, params, favicon/JARM pivots, default-cred checks
-python main.py scan steinzsecurity.com --company-only --horizontal --params --favicon --default-creds
+python main.py scan hackingdream.net --company-only --horizontal --params --favicon --default-creds
 
 # Lightweight domain-posture triage only (takeover / CORS / headers - no heavy scanning)
-python main.py scan steinzsecurity.com --posture
+python main.py scan hackingdream.net --posture
 
 # Use an existing subdomain list, company-only, alert on new findings (env-configured)
-python main.py scan steinzsecurity.com --sub-domains subs.txt --company-only
+python main.py scan hackingdream.net --sub-domains subs.txt --company-only
 
 # Tune concurrency: 300 concurrent connections (-c) and 4 domains resolved in
 # parallel during recon (--recon-concurrency) for a faster large scan
-python main.py scan steinzsecurity.com -c 300 --recon-concurrency 4 --company-only
+python main.py scan hackingdream.net -c 300 --recon-concurrency 4 --company-only
 ```
 
 
@@ -252,7 +252,7 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `--no-dns-hygiene` | on | Disable default DNS wildcard-filtering of enumerated subdomains |
 | `--dns-permute` | off | Generate + resolve subdomain permutations (alterx/dnsgen) during DNS hygiene |
 | `--no-dns-takeover` | on | Disable the per-subdomain DNS-level takeover check (dangling CNAME → NXDOMAIN) |
-| `--exclude PATTERN` | - | Exclude hosts matching a glob (`customer1*.steinzsecurity.com`) or `re:` regex; repeatable. Excluded hosts are listed but never scanned |
+| `--exclude PATTERN` | - | Exclude hosts matching a glob (`customer1*.hackingdream.net`) or `re:` regex; repeatable. Excluded hosts are listed but never scanned |
 | `--exclude-file FILE` | - | File of `--exclude` patterns (one per line, `#` comments) |
 | `--include-only PATTERN` | - | Allowlist: scan **only** hosts matching the glob/regex; repeatable. Applied after `--exclude` |
 | `--include-only-file FILE` | - | File of `--include-only` patterns |
