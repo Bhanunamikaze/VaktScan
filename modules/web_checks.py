@@ -571,44 +571,209 @@ async def check_sensitive_files(url: str, client: httpx.AsyncClient) -> list[dic
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Check 3 - GraphQL Introspection
+# Check 3 - GraphQL Security
 # ──────────────────────────────────────────────────────────────────────────────
 
-_GRAPHQL_PATHS = ["/graphql", "/api/graphql", "/graphql/v1", "/v1/graphql"]
-_GRAPHQL_QUERY = '{"query": "{__schema{types{name}}}"}'
+_GRAPHQL_PATHS = [
+    "/graphql", "/graphiql", "/playground", "/console",
+    "/api/graphql", "/api/v1/graphql", "/api/v2/graphql", "/api/gql",
+    "/v1/graphql", "/v2/graphql", "/gql", "/query",
+    "/graphql/console", "/graphql/v1", "/graphql/v2", "/graphql/api",
+    "/altair", "/explorer", "/graphql-explorer",
+    "/admin/graphql", "/internal/graphql", "/private/graphql",
+]
+_GQL_HDR = {"Content-Type": "application/json"}
+_GQL_INTROSPECTION = '{"query":"{__schema{types{name}}}"}'
+_GQL_PARTIAL = '{"query":"{__type(name:\\"Query\\"){name fields{name type{name}}}}"}'
+_GQL_TYPENAME = '{"query":"{__typename}"}'
+_GQL_FIELD_PROBE = '{"query":"{__nonexistent}"}'
+_GQL_FEDERATION = '{"query":"{_service{sdl}}"}'
+_GQL_BATCH = '[{"query":"{__typename}"},{"query":"{__typename}"}]'
+
+
+async def _gql_find_endpoint(origin: str, client: httpx.AsyncClient) -> str | None:
+    """Probe paths to find a live GraphQL endpoint. Returns the first URL that responds to a simple query."""
+    for path in _GRAPHQL_PATHS:
+        probe_url = origin + path
+        try:
+            resp = await client.post(probe_url, content=_GQL_TYPENAME, headers=_GQL_HDR)
+        except Exception:
+            continue
+        if resp.status_code == 200 and "__typename" in resp.text:
+            return probe_url
+    return None
 
 
 async def check_graphql(url: str, client: httpx.AsyncClient) -> list[dict]:
     findings: list[dict] = []
     origin = _origin(url)
 
-    for path in _GRAPHQL_PATHS:
-        probe_url = origin + path
-        try:
-            resp = await client.post(
-                probe_url,
-                content=_GRAPHQL_QUERY,
-                headers={"Content-Type": "application/json"},
-            )
-        except Exception:
-            continue
+    endpoint = await _gql_find_endpoint(origin, client)
+    if endpoint is None:
+        return findings
 
+    # 1. Full introspection
+    try:
+        resp = await client.post(endpoint, content=_GQL_INTROSPECTION, headers=_GQL_HDR)
         if resp.status_code == 200 and "__schema" in resp.text and "types" in resp.text:
             findings.append(_make_finding(
-                url=url,
-                payload_url=probe_url,
+                url=url, payload_url=endpoint,
                 vulnerability="GraphQL Introspection Enabled",
-                status="CRITICAL",
-                severity="HIGH",
+                status="CRITICAL", severity="HIGH",
                 details=(
-                    f"GraphQL introspection is enabled at '{probe_url}'. An attacker can query "
+                    f"GraphQL introspection is enabled at '{endpoint}'. An attacker can query "
                     "__schema to enumerate the full API schema - all types, fields, queries, "
                     "and mutations - enabling highly targeted attacks against the API surface."
                 ),
                 http_status=str(resp.status_code),
                 content_length=str(len(resp.content)),
             ))
-            break  # one finding per base URL is sufficient
+    except Exception:
+        pass
+
+    # 2. Partial introspection bypass via __type
+    has_full = any(f["vulnerability"] == "GraphQL Introspection Enabled" for f in findings)
+    if not has_full:
+        try:
+            resp = await client.post(endpoint, content=_GQL_PARTIAL, headers=_GQL_HDR)
+            if resp.status_code == 200 and "fields" in resp.text and '"name"' in resp.text:
+                findings.append(_make_finding(
+                    url=url, payload_url=endpoint,
+                    vulnerability="GraphQL Partial Introspection Bypass (__type)",
+                    status="VULNERABLE", severity="MEDIUM",
+                    details=(
+                        f"Full introspection is blocked at '{endpoint}' but __type queries still "
+                        "return field-level schema data. An attacker can enumerate types one by "
+                        "one to reconstruct the schema."
+                    ),
+                    http_status=str(resp.status_code),
+                    content_length=str(len(resp.content)),
+                ))
+        except Exception:
+            pass
+
+    # 3. GET-based introspection bypass
+    if not has_full:
+        try:
+            get_url = endpoint + "?query={__schema{types{name}}}"
+            resp = await client.get(get_url)
+            if resp.status_code == 200 and "__schema" in resp.text and "types" in resp.text:
+                findings.append(_make_finding(
+                    url=url, payload_url=get_url,
+                    vulnerability="GraphQL GET-Based Introspection Bypass",
+                    status="CRITICAL", severity="HIGH",
+                    details=(
+                        f"POST introspection is blocked at '{endpoint}' but GET-based "
+                        "introspection succeeds. An attacker can bypass the restriction by "
+                        "sending the introspection query as a URL parameter."
+                    ),
+                    http_status=str(resp.status_code),
+                    content_length=str(len(resp.content)),
+                ))
+        except Exception:
+            pass
+
+    # 4. Field suggestion leak (Clairvoyance-style schema reconstruction)
+    try:
+        resp = await client.post(endpoint, content=_GQL_FIELD_PROBE, headers=_GQL_HDR)
+        if resp.status_code in (200, 400) and "Did you mean" in resp.text:
+            findings.append(_make_finding(
+                url=url, payload_url=endpoint,
+                vulnerability="GraphQL Field Suggestion Leak",
+                status="POTENTIAL", severity="MEDIUM",
+                details=(
+                    f"The GraphQL endpoint at '{endpoint}' returns field name suggestions "
+                    "in error messages. An attacker can brute-force field names and "
+                    "reconstruct the schema even when introspection is disabled."
+                ),
+                http_status=str(resp.status_code),
+                content_length=str(len(resp.content)),
+            ))
+    except Exception:
+        pass
+
+    # 5. Debug / tracing extensions exposed
+    try:
+        resp = await client.post(endpoint, content=_GQL_TYPENAME, headers=_GQL_HDR)
+        body = resp.text
+        if resp.status_code == 200 and '"extensions"' in body:
+            for marker in ('"tracing"', '"debug"', '"cacheControl"'):
+                if marker in body:
+                    findings.append(_make_finding(
+                        url=url, payload_url=endpoint,
+                        vulnerability="GraphQL Debug Extensions Exposed",
+                        status="VULNERABLE", severity="MEDIUM",
+                        details=(
+                            f"The GraphQL endpoint at '{endpoint}' returns debug or tracing "
+                            "information in the 'extensions' response field. This may leak "
+                            "internal timing data, SQL queries, or resolver-level details."
+                        ),
+                        http_status=str(resp.status_code),
+                        content_length=str(len(resp.content)),
+                    ))
+                    break
+    except Exception:
+        pass
+
+    # 6. Federation _service{sdl} exposure
+    try:
+        resp = await client.post(endpoint, content=_GQL_FEDERATION, headers=_GQL_HDR)
+        body = resp.text
+        if resp.status_code == 200 and ("type " in body or "extend type" in body) and "_service" in body:
+            findings.append(_make_finding(
+                url=url, payload_url=endpoint,
+                vulnerability="GraphQL Federation Schema Exposed (_service SDL)",
+                status="CRITICAL", severity="HIGH",
+                details=(
+                    f"The GraphQL subgraph at '{endpoint}' exposes its full SDL schema via "
+                    "the _service{{sdl}} federation query. An attacker can read the entire "
+                    "subgraph schema and discover internal types and relationships."
+                ),
+                http_status=str(resp.status_code),
+                content_length=str(len(resp.content)),
+            ))
+    except Exception:
+        pass
+
+    # 7. GET-mutation CSRF
+    try:
+        mut_url = endpoint + "?query=mutation{__typename}"
+        resp = await client.get(mut_url)
+        if resp.status_code == 200 and '"data"' in resp.text and '"errors"' not in resp.text:
+            findings.append(_make_finding(
+                url=url, payload_url=mut_url,
+                vulnerability="GraphQL GET-Mutation CSRF Risk",
+                status="VULNERABLE", severity="HIGH",
+                details=(
+                    f"The GraphQL endpoint at '{endpoint}' accepts mutations via GET requests. "
+                    "This enables cross-site request forgery (CSRF) attacks where a malicious "
+                    "page can trigger state-changing operations on behalf of an authenticated user."
+                ),
+                http_status=str(resp.status_code),
+                content_length=str(len(resp.content)),
+            ))
+    except Exception:
+        pass
+
+    # 8. Batch query support (rate-limit bypass risk)
+    try:
+        resp = await client.post(endpoint, content=_GQL_BATCH, headers=_GQL_HDR)
+        body = resp.text
+        if resp.status_code == 200 and body.strip().startswith("[") and body.count("__typename") >= 2:
+            findings.append(_make_finding(
+                url=url, payload_url=endpoint,
+                vulnerability="GraphQL Batch Queries Enabled (Rate-Limit Bypass Risk)",
+                status="POTENTIAL", severity="MEDIUM",
+                details=(
+                    f"The GraphQL endpoint at '{endpoint}' accepts batched query arrays. "
+                    "An attacker can send hundreds of operations in a single HTTP request "
+                    "to bypass rate limits, brute-force OTPs, or enumerate data."
+                ),
+                http_status=str(resp.status_code),
+                content_length=str(len(resp.content)),
+            ))
+    except Exception:
+        pass
 
     return findings
 

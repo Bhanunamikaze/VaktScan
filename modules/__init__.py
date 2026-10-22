@@ -18,6 +18,9 @@ from . import aem
 from . import cpanel
 from . import dns_recon
 from . import web_checks
+from . import credential_probe
+from . import graphql_checks
+from . import xss_checks
 from . import cisa_kev
 from . import testssl_runner
 from . import asset_classifier

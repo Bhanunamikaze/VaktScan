@@ -487,7 +487,8 @@ class ResumeWebProbePhaseTest(_MainTempCwd):
 
         async def fake_probe(urls, output_dir, label, concurrency,
                              completed_urls=None, record_completed=None, batch_size=None,
-                             enable_js_cve=True, record_findings=None):
+                             enable_js_cve=True, record_findings=None,
+                             skip_tools=frozenset(), module_filter=None):
             capture["urls"] = urls
             capture["completed_urls"] = completed_urls
             capture["record_completed"] = record_completed

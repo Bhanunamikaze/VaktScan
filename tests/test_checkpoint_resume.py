@@ -393,7 +393,8 @@ class WebProbeResumeSkipTest(_MainTempCwd):
 
         async def fake_probe(urls, output_dir, label, concurrency,
                              completed_urls=None, record_completed=None, batch_size=None,
-                             enable_js_cve=True, record_findings=None):
+                             enable_js_cve=True, record_findings=None,
+                             skip_tools=frozenset(), module_filter=None):
             capture["urls"] = urls
             capture["completed_urls"] = completed_urls
             capture["record_completed"] = record_completed
@@ -508,7 +509,8 @@ class WebProbeBatchFindingsAtomicTest(unittest.TestCase):
         completed_urls = []
         calls = {"n": 0}
 
-        async def fake_batch(batch, output_dir, label, concurrency, enable_js_cve=True):
+        async def fake_batch(batch, output_dir, label, concurrency, enable_js_cve=True,
+                             skip_tools=frozenset(), module_filter=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 return [{"vulnerability": "batch1-finding"}]

@@ -287,7 +287,8 @@ class StreamingWebProbeOptInTest(unittest.TestCase):
         async def fake_chunk_services(*args, **kwargs):
             return []
 
-        async def fake_probe(urls, output_dir, label, concurrency, enable_js_cve=True):
+        async def fake_probe(urls, output_dir, label, concurrency, enable_js_cve=True,
+                             skip_tools=frozenset(), module_filter=None):
             calls["n"] += 1
             calls["urls"] = urls
             calls["enable_js_cve"] = enable_js_cve

@@ -198,5 +198,240 @@ class JSPathsTests(unittest.TestCase):
         self.assertEqual(JSRecon._sensitive_json_values(body), ["access_token"])
 
 
+def _fake_secret(prefix, suffix):
+    """Build a test secret at runtime so the literal never appears in source."""
+    return prefix + suffix
+
+
+class NewSecretPatternTests(unittest.TestCase):
+    """Tests for cloud-provider secret patterns added to SECRET_PATTERNS."""
+
+    def _detect(self, content: str) -> list[dict]:
+        recon = JSRecon(["https://app.example.com/"])
+        recon._check_secrets("https://app.example.com/main.js", content)
+        return recon.findings
+
+    def _vuln_names(self, content: str) -> set[str]:
+        return {f["vulnerability"] for f in self._detect(content)}
+
+    # -- Stripe ----------------------------------------------------------------
+
+    def test_stripe_secret_key_detected(self):
+        key = _fake_secret("sk" + "_live_", "X" * 24)
+        names = self._vuln_names(f'const key = "{key}";')
+        self.assertIn("Hardcoded Secret: Stripe Secret Key", names)
+
+    def test_stripe_restricted_key_detected(self):
+        key = _fake_secret("rk" + "_live_", "X" * 24)
+        names = self._vuln_names(f'const key = "{key}";')
+        self.assertIn("Hardcoded Secret: Stripe Restricted Key", names)
+
+    def test_stripe_test_key_not_detected(self):
+        key = _fake_secret("sk" + "_test_", "X" * 24)
+        findings = self._detect(f'const key = "{key}";')
+        stripe_findings = [f for f in findings if "Stripe" in f["vulnerability"]]
+        self.assertEqual(stripe_findings, [])
+
+    # -- GitLab ----------------------------------------------------------------
+
+    def test_gitlab_pat_detected(self):
+        key = _fake_secret("glpat-", "X" * 20)
+        names = self._vuln_names(f'token = "{key}";')
+        self.assertIn("Hardcoded Secret: GitLab PAT", names)
+
+    # -- SendGrid --------------------------------------------------------------
+
+    def test_sendgrid_key_detected(self):
+        key = _fake_secret("SG.", "X" * 22 + "." + "Y" * 43)
+        names = self._vuln_names(f'apiKey = "{key}";')
+        self.assertIn("Hardcoded Secret: SendGrid Key", names)
+
+    # -- Azure -----------------------------------------------------------------
+
+    def test_azure_storage_key_detected(self):
+        key = "A" * 88
+        content = f'conn = "DefaultEndpointsProtocol=https;AccountName=myacct;AccountKey={key};";'
+        names = self._vuln_names(content)
+        self.assertIn("Hardcoded Secret: Azure Storage Key", names)
+
+    # -- Twilio ----------------------------------------------------------------
+
+    def test_twilio_api_key_detected(self):
+        key = _fake_secret("SK", "a1" * 16)
+        names = self._vuln_names(f'const sid = "{key}";')
+        self.assertIn("Hardcoded Secret: Twilio API Key", names)
+
+    def test_twilio_key_is_potential_not_critical(self):
+        key = _fake_secret("SK", "a1" * 16)
+        findings = self._detect(f'const sid = "{key}";')
+        twilio = [f for f in findings if "Twilio" in f["vulnerability"]]
+        self.assertEqual(len(twilio), 1)
+        self.assertEqual(twilio[0]["status"], "POTENTIAL")
+        self.assertEqual(twilio[0]["severity"], "HIGH")
+
+    # -- Mailgun ---------------------------------------------------------------
+
+    def test_mailgun_key_detected(self):
+        key = _fake_secret("key-", "a1" * 16)
+        names = self._vuln_names(f'mg_key = "{key}";')
+        self.assertIn("Hardcoded Secret: Mailgun Key", names)
+
+    # -- Shopify ---------------------------------------------------------------
+
+    def test_shopify_token_detected(self):
+        key = _fake_secret("shp" + "at_", "a1" * 16)
+        names = self._vuln_names(f'const token = "{key}";')
+        self.assertIn("Hardcoded Secret: Shopify Token", names)
+
+    def test_shopify_private_app_token_detected(self):
+        key = _fake_secret("shp" + "pa_", "a1" * 16)
+        names = self._vuln_names(f'const token = "{key}";')
+        self.assertIn("Hardcoded Secret: Shopify Token", names)
+
+    # -- Square ----------------------------------------------------------------
+
+    def test_square_token_detected(self):
+        key = _fake_secret("sq0" + "atp-", "X" * 22)
+        names = self._vuln_names(f'sq_token = "{key}";')
+        self.assertIn("Hardcoded Secret: Square Token", names)
+
+    # -- GCP Service Account ---------------------------------------------------
+
+    def test_gcp_service_account_detected(self):
+        findings = self._detect('{"type": "service_account", "project_id": "my-project"}')
+        gcp = [f for f in findings if "GCP" in f["vulnerability"]]
+        self.assertEqual(len(gcp), 1)
+        self.assertEqual(gcp[0]["status"], "POTENTIAL")
+        self.assertEqual(gcp[0]["severity"], "HIGH")
+
+    # -- Credential URL --------------------------------------------------------
+
+    def test_credential_url_detected(self):
+        findings = self._detect('redirect = "https://api.example.com/callback?access_token=abc12345longtoken";')
+        cred = [f for f in findings if "Credential URL" in f["vulnerability"]]
+        self.assertEqual(len(cred), 1)
+        self.assertEqual(cred[0]["status"], "POTENTIAL")
+
+    # -- False-positive skip list in _credible_generic_secret ------------------
+
+    def test_test_token_skip_value_not_flagged(self):
+        findings = self._detect('secret: "test_token_xx"')
+        generic = [f for f in findings if "Generic Secret" in f["vulnerability"]]
+        self.assertEqual(generic, [])
+
+    def test_fake_secret_skip_value_not_flagged(self):
+        findings = self._detect('secret: "fake_secret_xx"')
+        generic = [f for f in findings if "Generic Secret" in f["vulnerability"]]
+        self.assertEqual(generic, [])
+
+    # -- Schema validation for new findings ------------------------------------
+
+    def test_new_pattern_findings_pass_schema_validation(self):
+        from modules.schema import validate_finding
+        stripe = _fake_secret("sk" + "_live_", "X" * 24)
+        gitlab = _fake_secret("glpat-", "X" * 20)
+        mailgun = _fake_secret("key-", "a1" * 16)
+        content = f'{stripe} {gitlab} {mailgun} '
+        findings = self._detect(content)
+        self.assertGreaterEqual(len(findings), 3)
+        for f in findings:
+            violations = validate_finding(f)
+            errors = [v for v in violations if not v.startswith("WARN:")]
+            self.assertEqual(errors, [], f"Schema violations in {f['vulnerability']}: {errors}")
+
+
+class PostMessageAndDomXssTests(unittest.TestCase):
+    """Tests for postMessage listener and DOM XSS source-sink detection."""
+
+    def _pm_detect(self, content: str) -> list[dict]:
+        recon = JSRecon(["https://app.example.com/"])
+        recon._check_postmessage("https://app.example.com/main.js", content)
+        return recon.findings
+
+    def _dom_detect(self, content: str) -> list[dict]:
+        recon = JSRecon(["https://app.example.com/"])
+        recon._check_dom_xss_sinks("https://app.example.com/main.js", content)
+        return recon.findings
+
+    # -- postMessage tests -------------------------------------------------------
+
+    def test_postmessage_no_origin_check_detected(self):
+        js = 'window.addEventListener("message", function(e) { div.innerHTML = e.data; });'
+        findings = self._pm_detect(js)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["vulnerability"],
+                         "postMessage Listener Without Origin Validation")
+        self.assertEqual(findings[0]["severity"], "HIGH")
+
+    def test_postmessage_with_origin_check_no_high_finding(self):
+        js = '''
+        window.addEventListener("message", function(event) {
+            if (event.origin === "https://safe.example.com") {
+                console.log(event.data);
+            }
+        });
+        '''
+        findings = self._pm_detect(js)
+        high = [f for f in findings if f["severity"] == "HIGH"]
+        self.assertEqual(high, [])
+
+    def test_postmessage_with_origin_and_html_sink_detected(self):
+        js = '''
+        window.addEventListener("message", function(event) {
+            if (event.origin === "https://safe.example.com") {
+                document.getElementById("out").innerHTML = event.data;
+            }
+        });
+        '''
+        findings = self._pm_detect(js)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["vulnerability"],
+                         "postMessage Handler With HTML Sink")
+        self.assertEqual(findings[0]["severity"], "MEDIUM")
+
+    def test_postmessage_single_finding_per_file(self):
+        js = '''
+        window.addEventListener("message", function(e) { x.innerHTML = e.data; });
+        window.addEventListener("message", function(e) { y.innerHTML = e.data; });
+        '''
+        findings = self._pm_detect(js)
+        self.assertEqual(len(findings), 1)
+
+    # -- DOM XSS tests -----------------------------------------------------------
+
+    def test_dom_xss_source_sink_detected(self):
+        js = '''
+        var hash = location.hash.substring(1);
+        document.getElementById("content").innerHTML = hash;
+        '''
+        findings = self._dom_detect(js)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["vulnerability"],
+                         "Potential DOM XSS Source-Sink Chain")
+
+    def test_dom_xss_source_only_no_finding(self):
+        js = 'var q = new URLSearchParams(location.search).get("q"); console.log(q);'
+        findings = self._dom_detect(js)
+        self.assertEqual(findings, [])
+
+    def test_dom_xss_sink_only_no_finding(self):
+        js = 'document.getElementById("x").innerHTML = "<b>static</b>";'
+        findings = self._dom_detect(js)
+        self.assertEqual(findings, [])
+
+    def test_schema_validation_postmessage_and_dom_xss(self):
+        from modules.schema import validate_finding
+        pm_js = 'window.addEventListener("message", function(e) { x.innerHTML = e.data; });'
+        dom_js = 'var h = location.hash; document.getElementById("x").innerHTML = h;'
+        recon = JSRecon(["https://app.example.com/"])
+        recon._check_postmessage("https://app.example.com/a.js", pm_js)
+        recon._check_dom_xss_sinks("https://app.example.com/b.js", dom_js)
+        self.assertGreaterEqual(len(recon.findings), 2)
+        for f in recon.findings:
+            violations = validate_finding(f)
+            errors = [v for v in violations if not v.startswith("WARN:")]
+            self.assertEqual(errors, [], f"Schema violations in {f['vulnerability']}: {errors}")
+
+
 if __name__ == "__main__":
     unittest.main()

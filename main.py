@@ -75,6 +75,9 @@ from modules import (
     dns_recon,
     service_recon,
     web_checks,
+    credential_probe,
+    graphql_checks,
+    xss_checks,
     cisa_kev,
     epss,
     jenkins,
@@ -216,6 +219,9 @@ def _positive_int(value):
 _SKIP_TOOL_ALIASES = {
     "domain_scan": "domain-scan",
     "web_checks": "web-checks",
+    "credential_probe": "credential-probe",
+    "graphql_checks": "graphql-checks",
+    "xss_checks": "xss-checks",
     "js_paths": "js-paths",
     "js_cve": "js-cve",
     "dns_recon": "dns-recon",
@@ -228,6 +234,10 @@ _SKIP_TOOL_ALIASES = {
     "archived_urls": "archived-scan",
     "default_creds": "default-creds",
     "service_scans": "service-scans",
+}
+
+_WEB_PROBE_MODULES = {
+    "web_checks", "credential_probe", "graphql_checks", "xss_checks",
 }
 
 
@@ -383,10 +393,14 @@ async def run_recon_followups(
     enable_js_cve=True,
     state_manager=None,
     skip_tools=frozenset(),
+    module_filter=None,
 ):
     """Run HTTPX, dirsearch, nuclei, and optional Nmap on recon results."""
     all_findings = []
     web_concurrency = _web_concurrency(concurrency)
+    if module_filter and module_filter in _WEB_PROBE_MODULES:
+        skip_tools = set(skip_tools) | {m for m in _WEB_PROBE_MODULES if m != module_filter}
+        skip_tools = frozenset(skip_tools)
     # JS corpus for the client-side CVE scan (js_cve). We REUSE the JS VaktScan
     # already discovers - JS URLs from js_paths, JS-looking alive/absolute URLs,
     # and archived .js URLs - rather than adding a second crawl/download pass.
@@ -574,6 +588,9 @@ async def run_recon_followups(
         stage_labels = {
             "domain_scan": "Domain Scan",
             "web_checks": "Web Checks",
+            "credential_probe": "Credential Probe",
+            "graphql_checks": "GraphQL Checks",
+            "xss_checks": "XSS Checks",
             "js_paths": "JS Paths Scan",
             "nuclei": "Nuclei Scan",
             "dirsearch": "Dirsearch Scan",
@@ -636,6 +653,15 @@ async def run_recon_followups(
             wc_results = await _checkpointed_stage("web_checks",
                 web_checks.run_checks(alive_urls, web_concurrency)
             )
+            cred_results = await _checkpointed_stage("credential_probe",
+                credential_probe.run_checks(alive_urls, web_concurrency)
+            )
+            gql_results = await _checkpointed_stage("graphql_checks",
+                graphql_checks.run_checks(alive_urls, web_concurrency)
+            )
+            xss_results = await _checkpointed_stage("xss_checks",
+                xss_checks.run_checks(alive_urls, web_concurrency)
+            )
             js_result = await _checkpointed_stage("js_paths", js_scanner.run())
             nuclei_results = await _checkpointed_stage("nuclei",
                 nuclei_inst.run_nuclei(bulk_scan_urls)
@@ -666,7 +692,22 @@ async def run_recon_followups(
                 wc_val = loc.get("wc_results")
                 wc_count = len(wc_val) if isinstance(wc_val, list) else 0
                 dashboard.complete_task("web_checks", f"Found {wc_count} vulnerabilities")
-                
+
+                # credential_probe
+                cp_val = loc.get("cred_results")
+                cp_count = len(cp_val) if isinstance(cp_val, list) else 0
+                dashboard.complete_task("credential_probe", f"Found {cp_count} vulnerabilities")
+
+                # graphql_checks
+                gq_val = loc.get("gql_results")
+                gq_count = len(gq_val) if isinstance(gq_val, list) else 0
+                dashboard.complete_task("graphql_checks", f"Found {gq_count} vulnerabilities")
+
+                # xss_checks
+                xss_val = loc.get("xss_results")
+                xss_count = len(xss_val) if isinstance(xss_val, list) else 0
+                dashboard.complete_task("xss_checks", f"Found {xss_count} vulnerabilities")
+
                 # js_paths
                 js_val = loc.get("js_result")
                 js_count = len(js_val) if isinstance(js_val, list) else 0
@@ -707,6 +748,36 @@ async def run_recon_followups(
             all_findings.extend(wc_results)
         else:
             print(f"{Colors.GREEN}[+] Web checks complete. No findings.{Colors.RESET}")
+
+        if isinstance(cred_results, Exception):
+            _reraise_if_bug(cred_results)
+            print(f"{Colors.YELLOW}[!] Credential probe error: {cred_results}{Colors.RESET}")
+            cred_results = []
+        if cred_results:
+            print(f"{Colors.GREEN}[+] Credential probe: {len(cred_results)} finding(s).{Colors.RESET}")
+            all_findings.extend(cred_results)
+        else:
+            print(f"{Colors.GREEN}[+] Credential probe complete. No findings.{Colors.RESET}")
+
+        if isinstance(gql_results, Exception):
+            _reraise_if_bug(gql_results)
+            print(f"{Colors.YELLOW}[!] GraphQL checks error: {gql_results}{Colors.RESET}")
+            gql_results = []
+        if gql_results:
+            print(f"{Colors.GREEN}[+] GraphQL checks: {len(gql_results)} finding(s).{Colors.RESET}")
+            all_findings.extend(gql_results)
+        else:
+            print(f"{Colors.GREEN}[+] GraphQL checks complete. No findings.{Colors.RESET}")
+
+        if isinstance(xss_results, Exception):
+            _reraise_if_bug(xss_results)
+            print(f"{Colors.YELLOW}[!] XSS checks error: {xss_results}{Colors.RESET}")
+            xss_results = []
+        if xss_results:
+            print(f"{Colors.GREEN}[+] XSS checks: {len(xss_results)} finding(s).{Colors.RESET}")
+            all_findings.extend(xss_results)
+        else:
+            print(f"{Colors.GREEN}[+] XSS checks complete. No findings.{Colors.RESET}")
 
         if isinstance(js_result, Exception):
             _reraise_if_bug(js_result)
@@ -1199,7 +1270,7 @@ def _service_scan_parallelism(concurrency):
 async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
                           completed_urls=None, record_completed=None, batch_size=None,
                           enable_js_cve=True, record_findings=None,
-                          skip_tools=frozenset()):
+                          skip_tools=frozenset(), module_filter=None):
     """httpx-probe the given URLs, then run nuclei + web_checks + dirsearch + JS
     path extraction on the alive ones. Returns the collected findings (dirsearch
     writes its own reports). Shared by the normal scan and (opt-in) streaming mode.
@@ -1243,14 +1314,10 @@ async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
         batches = [web_probe_urls]
 
     for batch in batches:
-        if skip_tools:
-            batch_findings = await _run_web_probe_batch(
-                batch, output_dir, domain_label, concurrency,
-                enable_js_cve=enable_js_cve, skip_tools=skip_tools)
-        else:
-            batch_findings = await _run_web_probe_batch(
-                batch, output_dir, domain_label, concurrency,
-                enable_js_cve=enable_js_cve)
+        batch_findings = await _run_web_probe_batch(
+            batch, output_dir, domain_label, concurrency,
+            enable_js_cve=enable_js_cve, skip_tools=skip_tools,
+            module_filter=module_filter)
         # Persist this batch's findings BEFORE marking its URLs complete. No
         # await separates these two synchronous steps, so an interrupt (injected
         # only at await points) cannot land between them: the batch's findings
@@ -1324,11 +1391,15 @@ def _js_cve_corpus_from_web(js_result, alive_urls):
 
 
 async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurrency,
-                               enable_js_cve=True, skip_tools=frozenset()):
-    """Run the full web-probe pipeline (httpx→nuclei→web_checks→dirsearch→JS→js_cve)
-    on one batch of URLs and return the collected findings."""
+                               enable_js_cve=True, skip_tools=frozenset(),
+                               module_filter=None):
+    """Run the full web-probe pipeline (httpx→nuclei→web_checks→credential_probe→
+    graphql_checks→xss_checks→dirsearch→JS→js_cve) on one batch of URLs and return
+    the collected findings."""
     findings = []
     web_concurrency = _web_concurrency(concurrency)
+    if module_filter and module_filter in _WEB_PROBE_MODULES:
+        skip_tools = frozenset(skip_tools) | {m for m in _WEB_PROBE_MODULES if m != module_filter}
     if not web_probe_urls:
         return findings
     if _tool_skipped(skip_tools, "httpx"):
@@ -1367,6 +1438,24 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
         if wc_results:
             print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
             findings.extend(wc_results)
+
+    if not _tool_skipped(skip_tools, "credential-probe"):
+        cp_results = await credential_probe.run_checks(alive_urls, web_concurrency)
+        if cp_results:
+            print(f"{Colors.GREEN}[+] Credential probe: {len(cp_results)} finding(s).{Colors.RESET}")
+            findings.extend(cp_results)
+
+    if not _tool_skipped(skip_tools, "graphql-checks"):
+        gql_results = await graphql_checks.run_checks(alive_urls, web_concurrency)
+        if gql_results:
+            print(f"{Colors.GREEN}[+] GraphQL checks: {len(gql_results)} finding(s).{Colors.RESET}")
+            findings.extend(gql_results)
+
+    if not _tool_skipped(skip_tools, "xss-checks"):
+        xss_results = await xss_checks.run_checks(alive_urls, web_concurrency)
+        if xss_results:
+            print(f"{Colors.GREEN}[+] XSS checks: {len(xss_results)} finding(s).{Colors.RESET}")
+            findings.extend(xss_results)
 
     if not _tool_skipped(skip_tools, "dirsearch"):
         dir_enumerator = dir_enum.DirEnumerator(domain_label, output_dir=output_dir)
@@ -2124,6 +2213,7 @@ async def main(
             extra_scans=extra_scans,
             enable_js_cve=js_cve_scan,
             skip_tools=skip_tools,
+            module_filter=module_filter,
         )
         if recon_findings:
             print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {safe_label}{Colors.RESET}")
@@ -2320,6 +2410,7 @@ async def main(
                     enable_js_cve=js_cve_scan,
                     state_manager=state_manager,
                     skip_tools=skip_tools,
+                    module_filter=module_filter,
                 )
                 if recon_findings:
                     print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {recon_domain}{Colors.RESET}")
@@ -2616,6 +2707,7 @@ async def main(
                         enable_js_cve=js_cve_scan,
                         state_manager=state_manager,
                         skip_tools=skip_tools,
+                        module_filter=module_filter,
                     )
                     if recon_findings:
                         print(f"{Colors.GREEN}[+] Recon pipeline: {len(recon_findings)} total finding(s) from {domain}{Colors.RESET}")
@@ -2823,8 +2915,11 @@ async def main(
         }
         
         if module_filter:
-            print(f"{Colors.YELLOW}[*] Module filter: Scanning only {module_filter.capitalize()} services{Colors.RESET}")
-            service_ports = {module_filter: service_ports.get(module_filter, [])}
+            if module_filter in _WEB_PROBE_MODULES:
+                print(f"{Colors.YELLOW}[*] Module filter: Running only {module_filter} web-probe module{Colors.RESET}")
+            else:
+                print(f"{Colors.YELLOW}[*] Module filter: Scanning only {module_filter.capitalize()} services{Colors.RESET}")
+                service_ports = {module_filter: service_ports.get(module_filter, [])}
         
         # Scan all ports from every service definition (service modules + web + cpanel_adjacent + etc.)
         all_ports_to_scan = list(set(
@@ -3005,6 +3100,7 @@ async def main(
                 # findings of an already-checkpointed batch. With this hook the
                 # returned list is empty, so there is nothing to re-add below.
                 "record_findings": state_manager.add_vulnerability,
+                "module_filter": module_filter,
             }
             if skip_tools:
                 _probe_kwargs["skip_tools"] = skip_tools
@@ -3368,9 +3464,9 @@ async def process_streaming_scan(
         for service, ports in base_ports.items()
         if service in SERVICE_TO_MODULE
     }
-    if module_filter:
+    if module_filter and module_filter not in _WEB_PROBE_MODULES:
         service_ports = {module_filter: service_ports.get(module_filter, [])}
-    
+
     all_ports_to_scan = list(set(
         port for ports in base_ports.values() for port in ports
     ))
@@ -3416,7 +3512,7 @@ async def process_streaming_scan(
                                 chunk_web_urls.append(format_url(scheme, host, port))
                 chunk_web_urls = sorted(set(chunk_web_urls))
                 if chunk_web_urls:
-                    _stream_probe_kwargs = {"enable_js_cve": enable_js_cve}
+                    _stream_probe_kwargs = {"enable_js_cve": enable_js_cve, "module_filter": module_filter}
                     if skip_tools:
                         _stream_probe_kwargs["skip_tools"] = skip_tools
                     web_findings = await _probe_web_urls(
@@ -4072,8 +4168,12 @@ if __name__ == "__main__":
     sp_scan.add_argument("--sarif", metavar="FILE", default=None)
     sp_scan.add_argument("-m", "--module",
         choices=["elasticsearch", "kibana", "grafana", "prometheus", "nextjs",
-                 "aem", "cpanel", "jenkins", "service_recon"],
-        help="Run only this service module (all modules by default)")
+                 "aem", "cpanel", "jenkins", "service_recon",
+                 "web_checks", "credential_probe", "graphql_checks", "xss_checks"],
+        help="Run only this module (all modules by default). "
+             "Service modules: elasticsearch, kibana, grafana, prometheus, nextjs, "
+             "aem, cpanel, jenkins, service_recon. "
+             "Web-probe modules: web_checks, credential_probe, graphql_checks, xss_checks.")
     sp_scan.add_argument("--ports", type=str)
     sp_scan.add_argument("--chunk-size", type=int, default=30000)
     sp_scan.add_argument("--stream-web-probe", action="store_true", dest="stream_web_probe",

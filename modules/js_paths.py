@@ -94,6 +94,17 @@ class JSRecon:
         "Hardcoded Password":  re.compile(r'(?i)\b(?:password|passwd|pwd)\b[\s"\'=:]+["\']([^\s"\']{6,})["\']'),
         "Generic Secret":      re.compile(r'(?i)\b(?:secret|token)\b[\s"\'=:]+["\']([A-Za-z0-9_\-\.]{16,})["\']'),
         "Firebase URL":        re.compile(r'https://[a-z0-9\-]+\.firebaseio\.com'),
+        "Stripe Secret Key":   re.compile(r'sk_live_[0-9a-zA-Z]{24,}'),
+        "Stripe Restricted Key": re.compile(r'rk_live_[0-9a-zA-Z]{24,}'),
+        "GitLab PAT":          re.compile(r'glpat-[A-Za-z0-9_\-]{20,}'),
+        "SendGrid Key":        re.compile(r'SG\.[0-9A-Za-z_\-]{22}\.[0-9A-Za-z_\-]{43}'),
+        "Azure Storage Key":   re.compile(r'DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{86,90};'),
+        "Twilio API Key":      re.compile(r'SK[0-9a-fA-F]{32}'),
+        "Mailgun Key":         re.compile(r'key-[0-9a-zA-Z]{32}'),
+        "Shopify Token":       re.compile(r'shp(?:pa|at)_[a-fA-F0-9]{32}'),
+        "Square Token":        re.compile(r'sq0[a-z]{3}-[0-9A-Za-z_\-]{22,}'),
+        "GCP Service Account": re.compile(r'"type"\s*:\s*"service_account"'),
+        "Credential URL":      re.compile(r'https?://[^\s"\'<>]+[?&](?:auth_token|access_token|secret|password|api_key|private_token)=[^&\s"\'<>]{8,}'),
     }
 
     # Paths that are high-value when accessible
@@ -507,6 +518,7 @@ class JSRecon:
         if len(value) < 12 or lower in {
             "password", "secret", "changeme", "your_password", "your_secret",
             "api_key", "undefined", "null", "example", "placeholder",
+            "test_token", "fake_secret", "dummy_secret", "your_api_key",
         }:
             return False
         # Translation strings, identifier names, and cache/build hashes are not
@@ -536,6 +548,8 @@ class JSRecon:
                     if not self._credible_generic_secret(sample):
                         continue
                     status, severity = "POTENTIAL", "MEDIUM"
+                elif name in ("Twilio API Key", "GCP Service Account", "Credential URL"):
+                    status, severity = "POTENTIAL", "HIGH"
                 else:
                     status, severity = "VULNERABLE", "CRITICAL"
                 self.findings.append(_make_finding(
@@ -546,6 +560,86 @@ class JSRecon:
                     f"Redacted sample prefix: {sample[:8]}… Manual validity confirmation required.",
                     http_status=200,
                 ))
+
+    _POSTMESSAGE_LISTENER = re.compile(
+        r'addEventListener\s*\(\s*["\']message["\']', re.IGNORECASE,
+    )
+    _ORIGIN_CHECK = re.compile(
+        r'(?:event|e|evt|msg)\.origin\s*(?:===|!==|==|!=)', re.IGNORECASE,
+    )
+    _HTML_SINKS = re.compile(
+        r'\.innerHTML\s*=|\.outerHTML\s*=|document\.write\s*\('
+        r'|\.insertAdjacentHTML\s*\(|\.html\s*\('
+        r'|dangerouslySetInnerHTML',
+        re.IGNORECASE,
+    )
+
+    _DOM_SOURCES = re.compile(
+        r'location\.hash|location\.search|location\.href|location\.pathname'
+        r'|document\.URL|document\.referrer|document\.cookie|window\.name'
+        r'|URLSearchParams',
+        re.IGNORECASE,
+    )
+    _DOM_SINKS = re.compile(
+        r'\.innerHTML\s*=|\.outerHTML\s*=|document\.write\s*\('
+        r'|\.insertAdjacentHTML\s*\(|eval\s*\('
+        r'|setTimeout\s*\([^,]*[+`]|setInterval\s*\([^,]*[+`]'
+        r'|new\s+Function\s*\(',
+        re.IGNORECASE,
+    )
+
+    def _check_postmessage(self, js_url: str, content: str) -> None:
+        """Flag postMessage listeners with missing or weak origin validation."""
+        if not self._is_first_party_js(js_url):
+            return
+        for m in self._POSTMESSAGE_LISTENER.finditer(content):
+            start = max(0, m.start() - 500)
+            end = min(len(content), m.end() + 500)
+            context = content[start:end]
+            has_origin = bool(self._ORIGIN_CHECK.search(context))
+            has_sink = bool(self._HTML_SINKS.search(context))
+            if not has_origin:
+                self.findings.append(_make_finding(
+                    js_url,
+                    "postMessage Listener Without Origin Validation",
+                    "VULNERABLE", "HIGH",
+                    f"Evidence: addEventListener('message') at offset {m.start()} in "
+                    f"{js_url} with no event.origin check in surrounding context. "
+                    f"An attacker page can send arbitrary messages to this handler.",
+                    http_status=200,
+                ))
+                return
+            if has_origin and has_sink:
+                self.findings.append(_make_finding(
+                    js_url,
+                    "postMessage Handler With HTML Sink",
+                    "POTENTIAL", "MEDIUM",
+                    f"Evidence: addEventListener('message') at offset {m.start()} in "
+                    f"{js_url} has an origin check but also reaches an HTML sink "
+                    f"(innerHTML/outerHTML/document.write/insertAdjacentHTML). "
+                    f"Verify the origin allowlist is strict.",
+                    http_status=200,
+                ))
+                return
+
+    def _check_dom_xss_sinks(self, js_url: str, content: str) -> None:
+        """Flag JS files containing both a DOM XSS source and a dangerous sink."""
+        if not self._is_first_party_js(js_url):
+            return
+        sources_found = set(self._DOM_SOURCES.findall(content))
+        sinks_found = set(self._DOM_SINKS.findall(content))
+        if sources_found and sinks_found:
+            src_list = ", ".join(sorted(sources_found)[:5])
+            sink_list = ", ".join(sorted(sinks_found)[:5])
+            self.findings.append(_make_finding(
+                js_url,
+                "Potential DOM XSS Source-Sink Chain",
+                "POTENTIAL", "MEDIUM",
+                f"Evidence: DOM XSS sources [{src_list}] and sinks [{sink_list}] "
+                f"co-occur in {js_url}. Manual review needed to confirm data flows "
+                f"from source to sink without sanitization.",
+                http_status=200,
+            ))
 
     def _check_internal_ips(self, js_url: str, content: str) -> None:
         """Flag RFC-1918 addresses embedded in JS."""
@@ -627,6 +721,8 @@ class JSRecon:
 
             # Vuln checks
             self._check_secrets(js_url, content)
+            self._check_postmessage(js_url, content)
+            self._check_dom_xss_sinks(js_url, content)
             self._check_internal_ips(js_url, content)
             self._check_source_map(js_url)
 
