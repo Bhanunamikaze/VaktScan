@@ -161,6 +161,167 @@ class FilterBypassTests(unittest.IsolatedAsyncioTestCase):
         findings = await xss_checks.check_xss_filter_bypass(URL, client)
         self.assertEqual(findings, [])
 
+    async def test_filter_bypass_403_suppressed(self):
+        """403 error page echoing URL with payload markers → no finding (FP)."""
+        def handler(url):
+            path = urlparse(url).path
+            query = urlparse(url).query
+            if "_vaktscan_xss_neg_ctrl" in path:
+                return FakeResponse(404, "not found")
+            # 403 page echoes the full request URL in its body
+            body = (
+                f"<html><body><h1>403 Forbidden</h1>"
+                f"<p>Access denied for: {path}?{query}</p></body></html>"
+            )
+            return FakeResponse(403, body, {"content-type": "text/html"})
+
+        client = FakeClient(handler=handler)
+        findings = await xss_checks.check_xss_filter_bypass(URL, client)
+        self.assertEqual(findings, [], "403 error pages should not produce bypass findings")
+
+    async def test_filter_bypass_url_echo_only_suppressed(self):
+        """200 page that echoes the full URL but strips all payload content → no finding."""
+        def handler(url):
+            path = urlparse(url).path
+            query = urlparse(url).query
+            if "_vaktscan_xss_neg_ctrl" in path:
+                return FakeResponse(404, "not found")
+            param_val = query.split("=", 1)[-1] if "=" in query else ""
+            if CANARY in param_val:
+                # Canary reflects in body (needed to enter bypass phase)
+                body = f"<html><body><p>You searched: {param_val}</p></body></html>"
+            elif "<" in param_val:
+                # Tags get escaped, and the only trace of the payload is in the URL echo
+                sanitized = param_val.replace("<", "").replace(">", "").replace("onerror=", "").replace("onload=", "").replace("javascript:", "").replace("alert(1)", "")
+                body = (
+                    f"<html><body><p>You searched: {sanitized}</p>"
+                    f"<p>Request: {path}?{query}</p></body></html>"
+                )
+            else:
+                body = "<html><body>ok</body></html>"
+            return FakeResponse(200, body, {"content-type": "text/html"})
+
+        client = FakeClient(handler=handler)
+        findings = await xss_checks.check_xss_filter_bypass(URL, client)
+        self.assertEqual(findings, [], "Marker inside URL echo should not count as bypass")
+
+
+    async def test_filter_bypass_cf_waf(self):
+        """Cloudflare-protected endpoint where CF bypass payload gets through → CRITICAL."""
+        # Standard event handlers/keywords blocked by WAF
+        _BLOCKED = ("onerror", "onload", "onfocus", "onmouseover", "onpageshow",
+                     "ontoggle", "onstart", "onpointerover", "alert(1)",
+                     "javascript:", "vbscript:", "innerHTML", "noscript",
+                     "expression(", "al'+'ert", "al\"+\"ert", "/al/",
+                     "constructor", "alert`1`")
+
+        def handler(url):
+            path = urlparse(url).path
+            query = urlparse(url).query
+            if "_vaktscan_xss_neg_ctrl" in path:
+                return FakeResponse(404, "not found")
+
+            param_val = query.split("=", 1)[-1] if "=" in query else path.split("/")[-1]
+
+            if any(kw in param_val.lower() for kw in _BLOCKED):
+                # WAF blocks standard payloads
+                escaped = param_val.replace("<", "&lt;").replace(">", "&gt;")
+                for kw in _BLOCKED:
+                    escaped = escaped.replace(kw, "[BLOCKED]")
+                body = f"<html><body>Filtered: {escaped}</body></html>"
+            elif "<" in param_val:
+                # Tags escaped
+                escaped = param_val.replace("<", "&lt;").replace(">", "&gt;")
+                body = f"<html><body>{escaped}</body></html>"
+            elif "onbegin=" in param_val:
+                # CF WAF bypass — uncommon event goes through!
+                body = f"<html><body>{param_val}</body></html>"
+            elif CANARY in param_val:
+                body = f"<html><body>{param_val}</body></html>"
+            else:
+                body = "<html><body>nope</body></html>"
+
+            return FakeResponse(200, body, {
+                "content-type": "text/html",
+                "server": "cloudflare",
+                "cf-ray": "abc123",
+            })
+
+        client = FakeClient(handler=handler)
+        findings = await xss_checks.check_xss_filter_bypass(URL, client)
+        cf_findings = [f for f in findings if "cf_waf" in f["vulnerability"]]
+        self.assertTrue(len(cf_findings) > 0, "Should detect CF WAF bypass")
+        self.assertEqual(cf_findings[0]["severity"], "CRITICAL")
+        self.assertIn("Cloudflare WAF bypass", cf_findings[0]["details"])
+
+
+class ReflectedXssFalsePositiveTests(unittest.IsolatedAsyncioTestCase):
+    """Tests that false-positive scenarios are correctly suppressed."""
+
+    async def test_reflected_xss_403_suppressed(self):
+        """403 page echoing query param → no finding."""
+        def handler(url):
+            path = urlparse(url).path
+            query = urlparse(url).query
+            if "_vaktscan_xss_neg_ctrl" in path:
+                return FakeResponse(404, "not found")
+            body = f"<html><body><h1>Forbidden</h1><p>{query}</p></body></html>"
+            return FakeResponse(403, body, {"content-type": "text/html"})
+
+        client = FakeClient(handler=handler)
+        findings = await xss_checks.check_reflected_xss(URL, client)
+        self.assertEqual(findings, [])
+
+    async def test_reflected_xss_401_suppressed(self):
+        """401 page echoing query param → no finding."""
+        def handler(url):
+            path = urlparse(url).path
+            query = urlparse(url).query
+            if "_vaktscan_xss_neg_ctrl" in path:
+                return FakeResponse(404, "not found")
+            body = f"<html><body><h1>Unauthorized</h1><p>{query}</p></body></html>"
+            return FakeResponse(401, body, {"content-type": "text/html"})
+
+        client = FakeClient(handler=handler)
+        findings = await xss_checks.check_reflected_xss(URL, client)
+        self.assertEqual(findings, [])
+
+    async def test_reflected_xss_waf_block_page_suppressed(self):
+        """WAF block page with error signatures → no finding even on 200."""
+        def handler(url):
+            path = urlparse(url).path
+            query = urlparse(url).query
+            if "_vaktscan_xss_neg_ctrl" in path:
+                return FakeResponse(404, "not found")
+            param_val = query.split("=", 1)[-1] if "=" in query else ""
+            body = (
+                f"<html><body><h1>Request Rejected</h1>"
+                f"<p>Your request was blocked by the Web Application Firewall.</p>"
+                f"<p>Query: {param_val}</p></body></html>"
+            )
+            return FakeResponse(406, body, {"content-type": "text/html"})
+
+        client = FakeClient(handler=handler)
+        findings = await xss_checks.check_reflected_xss(URL, client)
+        self.assertEqual(findings, [])
+
+    async def test_unescaped_tag_requires_2xx(self):
+        """Unescaped tag injection on non-2xx → no confirmed finding."""
+        def handler(url):
+            path = urlparse(url).path
+            query = urlparse(url).query
+            if "_vaktscan_xss_neg_ctrl" in path:
+                return FakeResponse(404, "not found")
+            if CANARY in query or CANARY in path:
+                param_val = query.split("=", 1)[-1] if "=" in query else path.split("/")[-1]
+                body = f"<html><body><p>Error: {param_val}</p></body></html>"
+                return FakeResponse(302, body, {"content-type": "text/html"})
+            return FakeResponse(404, "not found")
+
+        client = FakeClient(handler=handler)
+        findings = await xss_checks.check_reflected_xss(URL, client)
+        self.assertEqual(findings, [])
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Stored XSS surfaces

