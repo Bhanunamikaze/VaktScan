@@ -1270,7 +1270,8 @@ def _service_scan_parallelism(concurrency):
 async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
                           completed_urls=None, record_completed=None, batch_size=None,
                           enable_js_cve=True, record_findings=None,
-                          skip_tools=frozenset(), module_filter=None):
+                          skip_tools=frozenset(), module_filter=None,
+                          state_manager=None):
     """httpx-probe the given URLs, then run nuclei + web_checks + dirsearch + JS
     path extraction on the alive ones. Returns the collected findings (dirsearch
     writes its own reports). Shared by the normal scan and (opt-in) streaming mode.
@@ -1317,7 +1318,7 @@ async def _probe_web_urls(web_probe_urls, output_dir, domain_label, concurrency,
         batch_findings = await _run_web_probe_batch(
             batch, output_dir, domain_label, concurrency,
             enable_js_cve=enable_js_cve, skip_tools=skip_tools,
-            module_filter=module_filter)
+            module_filter=module_filter, state_manager=state_manager)
         # Persist this batch's findings BEFORE marking its URLs complete. No
         # await separates these two synchronous steps, so an interrupt (injected
         # only at await points) cannot land between them: the batch's findings
@@ -1392,10 +1393,16 @@ def _js_cve_corpus_from_web(js_result, alive_urls):
 
 async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurrency,
                                enable_js_cve=True, skip_tools=frozenset(),
-                               module_filter=None):
+                               module_filter=None, state_manager=None):
     """Run the full web-probe pipeline (httpx→nuclei→web_checks→credential_probe→
     graphql_checks→xss_checks→dirsearch→JS→js_cve) on one batch of URLs and return
-    the collected findings."""
+    the collected findings.
+
+    When ``state_manager`` is supplied, each tool stage is checkpointed individually
+    via ``mark_scan_stage_done`` so an interrupt mid-pipeline (e.g. during the
+    long-running dirsearch) does not force already-completed stages to re-run on
+    resume.
+    """
     findings = []
     web_concurrency = _web_concurrency(concurrency)
     if module_filter and module_filter in _WEB_PROBE_MODULES:
@@ -1406,6 +1413,39 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
         print(f"{Colors.YELLOW}[*] Skipping httpx (--skip httpx); "
               f"dependent web follow-ups have no alive-URL input.{Colors.RESET}")
         return findings
+
+    from modules.dashboard import LiveDashboard
+    dashboard = LiveDashboard()
+    stage_labels = {
+        "nuclei": "Nuclei Scan",
+        "web_checks": "Web Checks",
+        "credential_probe": "Credential Probe",
+        "graphql_checks": "GraphQL Checks",
+        "xss_checks": "XSS Checks",
+        "dirsearch": "Dirsearch Scan",
+        "js_paths": "JS Paths Scan",
+    }
+
+    def _dash_add(name):
+        if dashboard.active and name not in dashboard.tasks:
+            dashboard.add_task(name, stage_labels.get(name, name))
+
+    def _dash_complete(name, result):
+        if dashboard.active and name in dashboard.tasks:
+            count = len(result) if isinstance(result, list) else 0
+            dashboard.complete_task(name, f"Found {count} findings" if count else "Completed")
+
+    def _stage_done(name):
+        return state_manager is not None and state_manager.is_scan_stage_done(f"wp_{name}")
+
+    def _mark_stage(name, stage_findings):
+        if state_manager is not None:
+            for _f in stage_findings:
+                state_manager.add_vulnerability(_f)
+            state_manager.mark_scan_stage_done(f"wp_{name}")
+        else:
+            findings.extend(stage_findings)
+
     print(f"{Colors.CYAN}[*] Probing {len(web_probe_urls)} open web port URL(s) with httpx...{Colors.RESET}")
     http_runner = httpx_runner.HTTPXRunner(output_dir=output_dir)
     httpx_data = await http_runner.run_httpx(web_probe_urls, web_concurrency)
@@ -1427,57 +1467,102 @@ async def _run_web_probe_batch(web_probe_urls, output_dir, domain_label, concurr
         )
 
     if not _tool_skipped(skip_tools, "nuclei"):
-        nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
-        nuclei_results = await nuclei_inst.run_nuclei(bulk_scan_urls)
-        if nuclei_results:
-            print(f"{Colors.GREEN}[+] Nuclei: {len(nuclei_results)} finding(s).{Colors.RESET}")
-            findings.extend(nuclei_results)
+        if _stage_done("nuclei"):
+            print(f"{Colors.GRAY}[*] Resume: nuclei already complete; skipping.{Colors.RESET}")
+        else:
+            _dash_add("nuclei")
+            nuclei_inst = nuclei_runner.NucleiRunner(output_dir=output_dir)
+            nuclei_results = await nuclei_inst.run_nuclei(bulk_scan_urls)
+            _dash_complete("nuclei", nuclei_results)
+            if nuclei_results:
+                print(f"{Colors.GREEN}[+] Nuclei: {len(nuclei_results)} finding(s).{Colors.RESET}")
+                _mark_stage("nuclei", nuclei_results)
+            else:
+                _mark_stage("nuclei", [])
 
     if not _tool_skipped(skip_tools, "web-checks"):
-        wc_results = await web_checks.run_checks(alive_urls, web_concurrency)
-        if wc_results:
-            print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
-            findings.extend(wc_results)
+        if _stage_done("web_checks"):
+            print(f"{Colors.GRAY}[*] Resume: web checks already complete; skipping.{Colors.RESET}")
+        else:
+            _dash_add("web_checks")
+            wc_results = await web_checks.run_checks(alive_urls, web_concurrency)
+            _dash_complete("web_checks", wc_results)
+            if wc_results:
+                print(f"{Colors.GREEN}[+] Web checks: {len(wc_results)} finding(s).{Colors.RESET}")
+                _mark_stage("web_checks", wc_results)
+            else:
+                _mark_stage("web_checks", [])
 
     if not _tool_skipped(skip_tools, "credential-probe"):
-        cp_results = await credential_probe.run_checks(alive_urls, web_concurrency)
-        if cp_results:
-            print(f"{Colors.GREEN}[+] Credential probe: {len(cp_results)} finding(s).{Colors.RESET}")
-            findings.extend(cp_results)
+        if _stage_done("credential_probe"):
+            print(f"{Colors.GRAY}[*] Resume: credential probe already complete; skipping.{Colors.RESET}")
+        else:
+            _dash_add("credential_probe")
+            cp_results = await credential_probe.run_checks(alive_urls, web_concurrency)
+            _dash_complete("credential_probe", cp_results)
+            if cp_results:
+                print(f"{Colors.GREEN}[+] Credential probe: {len(cp_results)} finding(s).{Colors.RESET}")
+                _mark_stage("credential_probe", cp_results)
+            else:
+                _mark_stage("credential_probe", [])
 
     if not _tool_skipped(skip_tools, "graphql-checks"):
-        gql_results = await graphql_checks.run_checks(alive_urls, web_concurrency)
-        if gql_results:
-            print(f"{Colors.GREEN}[+] GraphQL checks: {len(gql_results)} finding(s).{Colors.RESET}")
-            findings.extend(gql_results)
+        if _stage_done("graphql_checks"):
+            print(f"{Colors.GRAY}[*] Resume: graphql checks already complete; skipping.{Colors.RESET}")
+        else:
+            _dash_add("graphql_checks")
+            gql_results = await graphql_checks.run_checks(alive_urls, web_concurrency)
+            _dash_complete("graphql_checks", gql_results)
+            if gql_results:
+                print(f"{Colors.GREEN}[+] GraphQL checks: {len(gql_results)} finding(s).{Colors.RESET}")
+                _mark_stage("graphql_checks", gql_results)
+            else:
+                _mark_stage("graphql_checks", [])
 
     if not _tool_skipped(skip_tools, "xss-checks"):
-        xss_results = await xss_checks.run_checks(alive_urls, web_concurrency)
-        if xss_results:
-            print(f"{Colors.GREEN}[+] XSS checks: {len(xss_results)} finding(s).{Colors.RESET}")
-            findings.extend(xss_results)
+        if _stage_done("xss_checks"):
+            print(f"{Colors.GRAY}[*] Resume: xss checks already complete; skipping.{Colors.RESET}")
+        else:
+            _dash_add("xss_checks")
+            xss_results = await xss_checks.run_checks(alive_urls, web_concurrency)
+            _dash_complete("xss_checks", xss_results)
+            if xss_results:
+                print(f"{Colors.GREEN}[+] XSS checks: {len(xss_results)} finding(s).{Colors.RESET}")
+                _mark_stage("xss_checks", xss_results)
+            else:
+                _mark_stage("xss_checks", [])
 
     if not _tool_skipped(skip_tools, "dirsearch"):
-        dir_enumerator = dir_enum.DirEnumerator(domain_label, output_dir=output_dir)
-        dirsearch_result = await dir_enumerator.run_dirsearch(bulk_scan_urls)
-        findings.extend(artifact_findings.dirsearch_findings(dirsearch_result))
+        if _stage_done("dirsearch"):
+            print(f"{Colors.GRAY}[*] Resume: dirsearch already complete; skipping.{Colors.RESET}")
+        else:
+            _dash_add("dirsearch")
+            dir_enumerator = dir_enum.DirEnumerator(domain_label, output_dir=output_dir)
+            dirsearch_result = await dir_enumerator.run_dirsearch(bulk_scan_urls)
+            dir_findings = artifact_findings.dirsearch_findings(dirsearch_result)
+            _dash_complete("dirsearch", dir_findings)
+            _mark_stage("dirsearch", dir_findings)
 
     js_result = None
     if not _tool_skipped(skip_tools, "js-paths"):
-        js_scanner = js_paths.JSPathsScanner(bulk_scan_urls, output_dir=output_dir)
-        js_result = await js_scanner.run()
-        js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
-        findings.extend(js_findings)
+        if _stage_done("js_paths"):
+            print(f"{Colors.GRAY}[*] Resume: js paths already complete; skipping.{Colors.RESET}")
+        else:
+            _dash_add("js_paths")
+            js_scanner = js_paths.JSPathsScanner(bulk_scan_urls, output_dir=output_dir)
+            js_result = await js_scanner.run()
+            js_findings = js_result.get('findings', []) if isinstance(js_result, dict) else (js_result or [])
+            _dash_complete("js_paths", js_findings)
+            _mark_stage("js_paths", js_findings)
 
-    # Client-side JS CVE scan (js_cve) over the JS this probe just discovered.
-    # Previously only ran in recon-domain mode; wiring it here makes it fire in the
-    # direct-target (-f targets.txt) and streaming web-probe paths too. Reuses the
-    # discovered JS - no extra crawl pass. Default-ON; --no-js-cve opts out.
     if enable_js_cve and not _tool_skipped(skip_tools, "js-cve"):
-        corpus = _js_cve_corpus_from_web(js_result, alive_urls)
-        findings.extend(
-            await _run_js_cve_over_corpus(corpus, output_dir, web_concurrency)
-        )
+        if _stage_done("js_cve"):
+            print(f"{Colors.GRAY}[*] Resume: js cve already complete; skipping.{Colors.RESET}")
+        else:
+            corpus = _js_cve_corpus_from_web(js_result, alive_urls)
+            js_cve_findings = await _run_js_cve_over_corpus(corpus, output_dir, web_concurrency)
+            _mark_stage("js_cve", js_cve_findings)
+
     return findings
 
 
@@ -3101,6 +3186,7 @@ async def main(
                 # returned list is empty, so there is nothing to re-add below.
                 "record_findings": state_manager.add_vulnerability,
                 "module_filter": module_filter,
+                "state_manager": state_manager,
             }
             if skip_tools:
                 _probe_kwargs["skip_tools"] = skip_tools

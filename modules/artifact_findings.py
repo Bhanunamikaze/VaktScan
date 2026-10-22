@@ -18,8 +18,8 @@ def _summary(tool, target, urls, artifact=""):
     unique = sorted({str(url).strip() for url in (urls or []) if str(url).strip()})
     if not unique:
         return None
-    preview = "\n".join(unique[:25])
-    suffix = f"\nRaw artifact: {artifact}" if artifact else ""
+    preview = " | ".join(unique[:25])
+    suffix = f" | Raw artifact: {artifact}" if artifact else ""
     return normalize_finding({
         "status": "INFO",
         "severity": "INFO",
