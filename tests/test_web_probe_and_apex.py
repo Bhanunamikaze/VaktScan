@@ -97,6 +97,13 @@ class ProbeWebUrlsTest(unittest.TestCase):
             es.enter_context(mock.patch.object(main.httpx_runner, "HTTPXRunner", FakeHttpx))
             es.enter_context(mock.patch.object(main.nuclei_runner, "NucleiRunner", FakeNuclei))
             es.enter_context(mock.patch.object(main.web_checks, "run_checks", fake_wc))
+            # credential/graphql/xss stages run between web_checks and dirsearch;
+            # without stubs they issue real network probes to the canned hosts
+            # (incl. 192.0.2.10, RFC-5737 TEST-NET, which silently drops packets
+            # and hangs the test). Stub them like the other stages.
+            es.enter_context(mock.patch.object(main.credential_probe, "run_checks", fake_wc))
+            es.enter_context(mock.patch.object(main.graphql_checks, "run_checks", fake_wc))
+            es.enter_context(mock.patch.object(main.xss_checks, "run_checks", fake_wc))
             es.enter_context(mock.patch.object(main.dir_enum, "DirEnumerator", FakeDir))
             es.enter_context(mock.patch.object(main.js_paths, "JSPathsScanner", FakeJS))
             asyncio.run(main._probe_web_urls(

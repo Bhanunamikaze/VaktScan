@@ -128,10 +128,54 @@ class HTTPXRunner:
         return expanded_targets
 
     async def _run_httpx_binary(self, targets, concurrency):
+        """Probe ``targets`` with the ProjectDiscovery httpx binary.
+
+        Runs a primary pass that follows redirects (so the inventory carries the
+        terminal response's status/title/tech), then a recovery pass WITHOUT
+        redirect-following for any input the first pass dropped. httpx marks a
+        probe ``failed`` - and ``-silent`` suppresses it entirely - when a
+        redirect hop is unreachable (e.g. an HTTPS service that 302-redirects to
+        ``http://`` on a filtered port 80). Without the recovery pass such an
+        otherwise-alive endpoint vanishes from the inventory and every downstream
+        web stage (nuclei, web-checks, dirsearch, ...) is silently skipped
+        because the pipeline gates on httpx finding at least one alive URL.
+        """
         if not self.binary:
             return []
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results = await self._probe_once(targets, concurrency, follow_redirects=True)
+
+        # An input is "seen" if it produced an alive record (matched by the
+        # echoed input line or the reported url). Anything else was dropped -
+        # most often a redirect chain whose terminal hop was unreachable.
+        seen = {str(r.get("input") or "").strip() for r in results if r.get("input")}
+        seen |= {str(r.get("url") or "").strip() for r in results if r.get("url")}
+        missing = [t for t in targets if str(t).strip() not in seen]
+        if missing:
+            print(
+                f"\033[96m[*] Re-probing {len(missing)} endpoint(s) without redirect-following "
+                f"(their redirect chain ended at an unreachable hop)...\033[0m"
+            )
+            recovered = await self._probe_once(missing, concurrency, follow_redirects=False)
+            for entry in recovered:
+                key = str(entry.get("url") or entry.get("input") or "").strip()
+                if key and key in seen:
+                    continue
+                if key:
+                    seen.add(key)
+                results.append(entry)
+
+        print(f"\033[92m[+] httpx finished. Found {len(results)} alive services.\033[0m")
+        return results
+
+    async def _probe_once(self, targets, concurrency, follow_redirects=True):
+        """Run a single httpx binary pass over ``targets`` and return parsed records."""
+        if not self.binary or not targets:
+            return []
+
+        # Microsecond-resolution stamp so the primary and recovery passes never
+        # collide on the same temp-file paths.
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         input_file = os.path.join(self.output_dir, f"httpx_input_{timestamp}.txt")
         json_output = os.path.join(self.output_dir, f"httpx_raw_{timestamp}.json")
 
@@ -152,7 +196,15 @@ class HTTPXRunner:
             "-status-code",
             "-title",
             "-tech-detect",
-            "-follow-redirects",
+        ]
+        if follow_redirects:
+            cmd.append("-follow-redirects")
+        else:
+            # Recovery pass: do NOT follow redirects (so a dead terminal hop
+            # cannot suppress the source endpoint), but still record where each
+            # endpoint points via the redirect location.
+            cmd.append("-location")
+        cmd += [
             "-ip",
             "-o", json_output,
             "-t", str(concurrency),
@@ -283,7 +335,6 @@ class HTTPXRunner:
             except OSError:
                 pass
 
-        print(f"\033[92m[+] httpx finished. Found {len(results)} alive services.\033[0m")
         return results
 
     async def _run_httpx_library(self, targets, concurrency=100):
@@ -333,12 +384,21 @@ class HTTPXRunner:
                     try:
                         response = await client.get(target)
                     except python_httpx.HTTPError:
-                        completed += 1
-                        if dashboard.active:
-                            dashboard.update_task("httpx", completed=completed, status=_library_status())
-                        else:
-                            _print_httpx_progress(completed, total, len(results), progress_step)
-                        return
+                        # A redirect chain whose terminal hop is unreachable
+                        # (e.g. https:// -> http:// on a filtered port) raises
+                        # here and would drop an otherwise-alive endpoint,
+                        # mirroring the binary path's -follow-redirects drop.
+                        # Retry once without following redirects so the source
+                        # endpoint is still inventoried.
+                        try:
+                            response = await client.get(target, follow_redirects=False)
+                        except python_httpx.HTTPError:
+                            completed += 1
+                            if dashboard.active:
+                                dashboard.update_task("httpx", completed=completed, status=_library_status())
+                            else:
+                                _print_httpx_progress(completed, total, len(results), progress_step)
+                            return
 
                     source_url = target
                     final_url = str(response.url)

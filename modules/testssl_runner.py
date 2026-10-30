@@ -5,6 +5,7 @@ Checks: SSL/TLS protocols, vulnerabilities, weak certs, misconfigurations
 """
 
 import asyncio
+import ipaddress
 import json
 import os
 import shutil
@@ -175,25 +176,59 @@ async def run_scans(target_obj, port, **_):
     os.close(fd)
 
     try:
-        # Run testssl.sh: testssl --jsonfile-pretty <temp_path> --overwrite --severity LOW --nodns none <host>:<port>
+        # Build the testssl command.
+        #
+        # --warnings batch : run non-interactively (never block on a keypress).
+        # --quiet          : suppress the banner.
+        # --nodns min      : resolve A/AAAA only, skip slow reverse-DNS lookups.
+        #                    (The previous "--nodns none" disabled ALL DNS, so a
+        #                    hostname target could not be resolved and testssl
+        #                    died with "No IPv4/IPv6 address(es) ... available",
+        #                    producing zero findings on every hostname scan.)
+        #
+        # When we already hold a resolved IP, pin the scan to it with --ip: this
+        # (a) needs no DNS at all and (b) scans exactly one endpoint, so a
+        # hostname backed by several A-records is not scanned once per IP (which
+        # would duplicate every SSL finding). The hostname in the URI is still
+        # used for SNI. Without a usable IP we fall back to "--ip one" so only
+        # the first resolved address is scanned.
         cmd = [
             binary,
             "--jsonfile-pretty", temp_path,
             "--overwrite",
             "--severity", "LOW",
-            "--nodns", "none",
-            f"{host}:{port}"
+            "--warnings", "batch",
+            "--quiet",
+            "--nodns", "min",
         ]
+        try:
+            ipaddress.ip_address(str(resolved_ip))
+            cmd += ["--ip", str(resolved_ip)]
+        except ValueError:
+            cmd += ["--ip", "one"]
+        cmd.append(f"{host}:{port}")
 
         # Run the scan (buffered) with a per-host timeout of 5 minutes
         async with heartbeat("service_scans", f"testssl {display}:{port}"):
             result = await proc_runner.run_tool(cmd, timeout=300)
-        stdout, stderr = result.stdout, result.stderr
-        
-        if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+
+        result_stderr = (result.stderr or b"").decode("utf-8", "replace").strip()
+        produced_json = os.path.exists(temp_path) and os.path.getsize(temp_path) > 0
+
+        # Surface genuine failures instead of silently reporting "no findings".
+        # A clean scan of a host with no SSL issues still writes a valid JSON and
+        # emits no fatal stderr; a resolution/connection failure writes
+        # "Fatal error ..." to stderr (and often no JSON at all). Only the latter
+        # is worth flagging - it is exactly the case that used to vanish without
+        # a trace when the command could not resolve the target.
+        if not produced_json or "fatal error" in result_stderr.lower():
+            reason = result_stderr.splitlines()[-1] if result_stderr else "no scan output produced"
+            print(f"\033[93m[!] testssl could not scan {display}:{port} - {reason}\033[0m")
+
+        if produced_json:
             with open(temp_path, "r", encoding="utf-8", errors="replace") as f:
                 data = json.load(f)
-                
+
             for res in _iter_scan_findings(data):
                 vuln_id = res.get("id")
                 severity = res.get("severity")
@@ -249,7 +284,8 @@ async def run_scans(target_obj, port, **_):
                     findings.append(finding)
                 
     except Exception as e:
-        pass
+        if os.environ.get("VAKT_DEBUG"):
+            print(f"\033[93m[!] testssl error on {display}:{port} - {e}\033[0m")
     finally:
         # Cleanup temp file
         if os.path.exists(temp_path):
