@@ -8,6 +8,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime, timezone
@@ -73,8 +74,7 @@ VULN_MAP = {
     "cert_signature": "Weak SSL/TLS Certificate Signature Algorithm",
     "cert_signatureAlgorithm": "Weak SSL/TLS Certificate Signature Algorithm",
     "cert_keySize": "Weak SSL/TLS Certificate Key Size",
-    "cert_trust": "Untrusted SSL/TLS Certificate Chain",
-    "cert_chain_of_trust": "Untrusted SSL/TLS Certificate Chain",
+    "cert_revocation": "SSL/TLS Certificate Missing Revocation Information (OCSP/CRL)",
     "cert_expirationStatus": "SSL/TLS Certificate Expired or Nearing Expiry",
     "cert_expiration_status": "SSL/TLS Certificate Expired or Nearing Expiry",
 
@@ -102,6 +102,74 @@ VULN_MAP = {
 # testssl emits "OK" for the "not vulnerable" / "not offered" / "PFS is offered"
 # safe-signals that runcommand.py greps for.
 _SKIP_SEVERITIES = {"OK", "INFO", "FATAL", "DEBUG", ""}
+
+# testssl ids that are summaries, scores or scan metadata - never an actionable
+# SSL/TLS weakness - and are dropped regardless of the severity testssl assigns
+# them. ``overall_grade`` in particular is reported as CRITICAL whenever the
+# letter grade is poor, which previously surfaced one bogus "CRITICAL" per host.
+_NOISE_IDS = {
+    "overall_grade",        # letter grade summary (e.g. "M"), not a finding
+    "overall_grade_warn",
+    "security_headers",     # HTTP header posture aggregate, not a TLS issue (often "--")
+    "optimal_proto",        # scan metadata / "not a TLS server" artifact
+    # Certificate trust/chain verdicts are unreliable here: scans are pinned to a
+    # resolved IP (``--ip``), so a shared LB/CDN front frequently returns a default
+    # cert that fails chain validation ("self signed" / "failed") or "does not match
+    # supplied URI (same w/o SNI)". That is a scan artifact (a false positive the
+    # vast majority of the time), not a weakness in the certificate itself. Dropped
+    # per project decision even though testssl rates these CRITICAL / HIGH.
+    "cert_trust",
+    "cert_chain_of_trust",
+}
+
+# Prefixes for the long tail of per-cipher / per-detail ids testssl emits at
+# ``--severity LOW``. ``cipher-tls1_2_xc027`` et al. enumerate *every* individual
+# cipher the server offers (good ones included) - pure noise next to the
+# category-level findings (``cipherlist_*``). ``cipherlist_*`` does NOT match
+# "cipher-tls"/"cipher_order", so the meaningful categories are preserved.
+_NOISE_PREFIXES = ("cipher-tls", "cipher_order", "cipherorder", "grade_cap")
+
+# Severities high enough that we keep the finding even without an explicit title,
+# so a new testssl id for a genuine vulnerability is never silently dropped.
+_KEEP_SEVERITIES = {"HIGH", "CRITICAL"}
+
+
+def _base_id(vuln_id):
+    """Strip testssl's per-certificate suffix (e.g. ``cert_trust <hostCert#2>``).
+
+    testssl appends ``<hostCert#N>`` when a server presents more than one leaf
+    certificate (RSA + ECDSA). The suffix otherwise breaks the ``VULN_MAP``
+    lookup, dumping real certificate findings into the generic bucket.
+    """
+    return re.sub(r"\s*<[^>]*>\s*$", "", str(vuln_id)).strip()
+
+
+def _classify(vuln_id, severity):
+    """Decide whether a testssl finding is a real issue worth reporting.
+
+    Returns ``(report, title)``. Drops testssl's informational long tail
+    (per-cipher dumps, grades, serverDefaults detail lines) while keeping every
+    mapped issue and any unmapped HIGH/CRITICAL result.
+    """
+    base = _base_id(vuln_id)
+
+    # 1. Always drop pure-noise / summary ids, whatever severity testssl gives.
+    if base in _NOISE_IDS or base.startswith(_NOISE_PREFIXES):
+        return False, None
+
+    # 2. Keep anything we have an explicit, meaningful mapping for.
+    title = VULN_MAP.get(base) or VULN_MAP.get(base.lower())
+    if title:
+        return True, title
+
+    # 3. Keep genuinely dangerous unmapped findings (future-proofing against new
+    #    testssl ids), with a generic but clear title built from the base id.
+    if severity in _KEEP_SEVERITIES:
+        return True, f"SSL/TLS Issue: {base}"
+
+    # 4. Drop everything else: LOW/MEDIUM informational ids we don't map
+    #    (e.g. OCSP_stapling, FS_TLS12_sig_algs, TLS_session_ticket, cert_notAfter).
+    return False, None
 
 
 def _iter_scan_findings(data):
@@ -229,6 +297,11 @@ async def run_scans(target_obj, port, **_):
             with open(temp_path, "r", encoding="utf-8", errors="replace") as f:
                 data = json.load(f)
 
+            # De-dupe findings emitted once per leaf certificate (hostCert#1 /
+            # hostCert#2) or per repeated detail line - they collapse to the same
+            # (title, severity) for a host once the suffix is normalised away.
+            seen = set()
+
             for res in _iter_scan_findings(data):
                 vuln_id = res.get("id")
                 severity = res.get("severity")
@@ -239,7 +312,13 @@ async def run_scans(target_obj, port, **_):
                 # exactly the safe-signal runcommand.py checks for.
                 if not vuln_id or severity in _SKIP_SEVERITIES:
                     continue
-                    
+
+                # Keep only real issues; drop testssl's informational long tail
+                # (per-cipher dumps, letter grades, serverDefaults detail lines).
+                report, vuln_title = _classify(vuln_id, severity)
+                if not report:
+                    continue
+
                 # Map severity
                 vakt_severity = {
                     "CRITICAL": "CRITICAL",
@@ -248,7 +327,7 @@ async def run_scans(target_obj, port, **_):
                     "LOW": "LOW",
                     "WARN": "LOW",
                 }.get(severity, "LOW")
-                
+
                 vakt_status = {
                     "CRITICAL": "CRITICAL",
                     "HIGH": "VULNERABLE",
@@ -256,17 +335,14 @@ async def run_scans(target_obj, port, **_):
                     "LOW": "POTENTIAL",
                     "WARN": "POTENTIAL",
                 }.get(severity, "POTENTIAL")
-                
-                # Vulnerability title. Try exact id, then a case-insensitive
-                # match (covers testssl id-casing drift), then a generic fallback.
-                vuln_title = (
-                    VULN_MAP.get(vuln_id)
-                    or VULN_MAP.get(str(vuln_id).lower())
-                    or f"SSL/TLS Issue: {vuln_id}"
-                )
-                    
+
+                dedup_key = (vuln_title, vakt_severity)
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+
                 details = f"testssl.sh detected issue '{vuln_id}' with severity '{severity}'. Description: {finding_desc}"
-                
+
                 finding = _finding(
                     status=vakt_status,
                     severity=vakt_severity,
@@ -277,7 +353,7 @@ async def run_scans(target_obj, port, **_):
                     port=port,
                     url=f"https://{display}:{port}",
                 )
-                
+
                 # Validate schema
                 violations = validate_finding(finding)
                 if not violations:

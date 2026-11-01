@@ -128,7 +128,18 @@ class VulnMapTests(unittest.TestCase):
     def test_legacy_lowercase_ids_preserved(self):
         # The existing unit test relies on these exact mappings.
         self.assertEqual(VULN_MAP.get("SSLv2"), "SSLv2 Protocol Support Enabled")
-        self.assertEqual(VULN_MAP.get("cert_trust"), "Untrusted SSL/TLS Certificate Chain")
+        self.assertEqual(VULN_MAP.get("heartbleed"),
+                         "SSL/TLS Vulnerability: Heartbleed (CVE-2014-0160)")
+
+    def test_ip_scan_cert_trust_artifacts_are_suppressed(self):
+        # cert_trust / cert_chain_of_trust are IP-pinned-scan artifacts (SNI
+        # mismatch / default-cert chain failures), not real weaknesses, so they
+        # are dropped outright and intentionally carry no VULN_MAP title.
+        from modules.testssl_runner import _classify
+        self.assertIsNone(VULN_MAP.get("cert_trust"))
+        self.assertIsNone(VULN_MAP.get("cert_chain_of_trust"))
+        self.assertEqual(_classify("cert_trust <hostCert#1>", "HIGH"), (False, None))
+        self.assertEqual(_classify("cert_chain_of_trust <hostCert#2>", "CRITICAL"), (False, None))
 
 
 class RunScansNestedTests(unittest.IsolatedAsyncioTestCase):
