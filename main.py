@@ -678,9 +678,26 @@ async def run_recon_followups(
                 ds_count = len(ds_val) if isinstance(ds_val, list) else 0
                 dashboard.complete_task("domain_scan", f"Found {ds_count} vulnerabilities")
                 
-                # dirsearch
+                # dirsearch: run_dirsearch returns the reports directory (a str
+                # path), not a list/dict, so count the discovered paths by
+                # reading the per-target simple reports it wrote there.
                 dir_val = loc.get("_dirsearch")
-                dir_count = len(dir_val) if isinstance(dir_val, (list, dict)) else 0
+                if isinstance(dir_val, str) and os.path.isdir(dir_val):
+                    import glob as _glob
+                    dir_count = 0
+                    for _report in _glob.glob(os.path.join(dir_val, "*.txt")):
+                        try:
+                            with open(_report, "r", encoding="utf-8", errors="replace") as _fh:
+                                dir_count += sum(
+                                    1 for _ln in _fh
+                                    if _ln.strip().startswith(("http://", "https://"))
+                                )
+                        except OSError:
+                            pass
+                elif isinstance(dir_val, (list, dict)):
+                    dir_count = len(dir_val)
+                else:
+                    dir_count = 0
                 dashboard.complete_task("dirsearch", f"Found {dir_count} directories")
                 
                 # nuclei
@@ -708,9 +725,16 @@ async def run_recon_followups(
                 xss_count = len(xss_val) if isinstance(xss_val, list) else 0
                 dashboard.complete_task("xss_checks", f"Found {xss_count} vulnerabilities")
 
-                # js_paths
+                # js_paths: js_scanner.run() returns a dict
+                # ({findings, js_urls, absolute_urls, ...}); the finding count
+                # lives under "findings", not in len() of the dict itself.
                 js_val = loc.get("js_result")
-                js_count = len(js_val) if isinstance(js_val, list) else 0
+                if isinstance(js_val, dict):
+                    js_count = len(js_val.get("findings", []) or [])
+                elif isinstance(js_val, list):
+                    js_count = len(js_val)
+                else:
+                    js_count = 0
                 dashboard.complete_task("js_paths", f"Found {js_count} findings")
 
         if isinstance(domain_scan_findings, Exception):
