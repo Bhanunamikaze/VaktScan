@@ -97,6 +97,7 @@ from modules import (
     tech_fingerprint,
     web_tech_cve,
     default_creds,
+    vuln_data_refresh,
     notify,
     asset_classifier,
     artifact_findings,
@@ -213,6 +214,17 @@ def _positive_int(value):
     parsed = int(value)
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
+def _nonnegative_int(value):
+    """argparse type for an opt-in depth where zero disables recursion."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a non-negative integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
     return parsed
 
 
@@ -1856,6 +1868,7 @@ async def main(
     domain_scan_file=None,
     domain_scan_concurrency=50,
     recon_concurrency=2,
+    recursive_levels=0,
     connect_timeout=DEFAULT_CONNECT_TIMEOUT,
     port_retries=DEFAULT_PORT_RETRIES,
     js_url=None,
@@ -2372,6 +2385,7 @@ async def main(
             "archived_scan": archived_scan,
             "stream_web_probe": stream_web_probe,
             "extra_scans": list(extra_scans) if extra_scans else [],
+            **({"recursive_levels": recursive_levels} if recursive_levels else {}),
             "nmap": nmap_enabled,
             "no_dork": no_dork,
             "exclude": exclude_patterns,
@@ -2596,6 +2610,10 @@ async def main(
                     }
                     if skip_tools:
                         _scanner_kwargs["skip_tools"] = skip_tools
+                    if recursive_levels:
+                        _scanner_kwargs["recursive_levels"] = recursive_levels
+                        if _is_excluded:
+                            _scanner_kwargs["recursive_exclude"] = _is_excluded
                     scanner = recon.ReconScanner(domain, **_scanner_kwargs)
                     result = await scanner.run_all()
                     _file, _subs = result
@@ -3795,8 +3813,6 @@ async def cmd_scan(args):
 
     from modules.dashboard import LiveDashboard
     dashboard = LiveDashboard()
-    if not getattr(args, 'no_dashboard', False):
-        dashboard.start()
 
     target_type = target_classifier(args.target)
     print(f"{Colors.CYAN}[*] Target type: {target_type} - {args.target}{Colors.RESET}")
@@ -3804,6 +3820,10 @@ async def cmd_scan(args):
     if target_type == 'domain' and not is_valid_domain(args.target):
         print(f"{Colors.RED}[!] Error: '{args.target}' is not a valid domain name.{Colors.RESET}")
         sys.exit(1)
+
+    await vuln_data_refresh.refresh_outdated_sources()
+    if not getattr(args, 'no_dashboard', False):
+        dashboard.start()
 
     # --tech-only: lightweight web-technology fingerprint + version->CVE only.
     # Runs a minimal pipeline (resolve -> web-port scan -> httpx alive-probe ->
@@ -3900,6 +3920,7 @@ async def cmd_scan(args):
         "module_filter": args.module,
         "ports": args.ports,
         "no_subdomain_enum": bool(getattr(args, 'no_subdomain_enum', False)),
+        **({"recursive_levels": args.recursive_levels} if getattr(args, 'recursive_levels', 0) else {}),
         "dns_permute": bool(getattr(args, 'dns_permute', False)),
         "dns_hygiene": bool(getattr(args, 'dns_hygiene', True)),
         "dns_takeover": bool(getattr(args, 'dns_takeover', True)),
@@ -3977,6 +3998,7 @@ async def cmd_scan(args):
             domain_scan_file=None,
             domain_scan_concurrency=50,
             recon_concurrency=args.recon_concurrency,
+            recursive_levels=getattr(args, 'recursive_levels', 0),
             connect_timeout=args.connect_timeout,
             port_retries=args.port_retries,
             js_url=None,
@@ -4039,7 +4061,10 @@ async def cmd_enum(args):
         dashboard.start()
 
     try:
-        scanner = recon.ReconScanner(args.domain, output_dir=args.output_dir, wordlist=args.wordlist)
+        scanner_kwargs = {"output_dir": args.output_dir, "wordlist": args.wordlist}
+        if getattr(args, 'recursive_levels', 0):
+            scanner_kwargs["recursive_levels"] = args.recursive_levels
+        scanner = recon.ReconScanner(args.domain, **scanner_kwargs)
         results_file, subdomains = await scanner.run_all()
         ts = time.strftime("%Y%m%d_%H%M%S")
         out_file = os.path.join(args.output_dir, f"{args.domain}_subdomains_{ts}.txt")
@@ -4367,6 +4392,8 @@ if __name__ == "__main__":
                               "domain_scan, archived, service modules, nmap).")
     sp_scan.add_argument("--no-subdomain-enum", action="store_true", dest="no_subdomain_enum",
         help="Skip subdomain enumeration for domain targets")
+    sp_scan.add_argument("--recursive-levels", type=_nonnegative_int, default=0, metavar="N",
+                         help="Re-enumerate discovered subdomains up to N levels deep (default: 0/off)")
     sp_scan.add_argument("--no-dashboard", action="store_true", help="Disable the multi-row live progress dashboard")
     sp_scan.add_argument("--proxy", metavar="URL", default=None)
     sp_scan.add_argument("--update-templates", action="store_true", dest="update_templates")
@@ -4381,6 +4408,8 @@ if __name__ == "__main__":
     sp_enum.add_argument("--wordlist")
     sp_enum.add_argument("--output-dir", default="reports/")
     sp_enum.add_argument("--probe", action="store_true", help="Chain into probe after enum")
+    sp_enum.add_argument("--recursive-levels", type=_nonnegative_int, default=0, metavar="N",
+                         help="Re-enumerate discovered subdomains up to N levels deep (default: 0/off)")
     sp_enum.add_argument("--no-dashboard", action="store_true", help="Disable the multi-row live progress dashboard")
 
     # ---- probe subcommand ----

@@ -3,6 +3,7 @@ import re
 import os
 import json
 import time
+import tempfile
 
 MODULE_NAME = 'CISA-KEV'
 _KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'
@@ -10,27 +11,42 @@ _CACHE_FILE = os.path.join(os.path.dirname(__file__), 'data', 'cisa_kev_cache.js
 _CACHE_TTL = 86400  # 24 hours
 
 
-async def fetch_kev_catalog() -> dict:
+async def fetch_kev_catalog(*, force: bool = False) -> dict:
     """Fetch KEV catalog with 24-hour file cache."""
-    # Check cache
+    cached = {}
     if os.path.exists(_CACHE_FILE):
-        age = time.time() - os.path.getmtime(_CACHE_FILE)
-        if age < _CACHE_TTL:
+        try:
             with open(_CACHE_FILE) as f:
-                return json.load(f)
+                cached = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+        age = time.time() - os.path.getmtime(_CACHE_FILE)
+        if not force and age < _CACHE_TTL and cached:
+            return cached
     # Fetch fresh
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.get(_KEV_URL)
             if r.status_code == 200:
                 data = r.json()
-                os.makedirs(os.path.dirname(_CACHE_FILE), exist_ok=True)
-                with open(_CACHE_FILE, 'w') as f:
-                    json.dump(data, f)
+                if not isinstance(data, dict) or not isinstance(data.get('vulnerabilities'), list) or not data.get('dateReleased'):
+                    return cached
+                dest_dir = os.path.dirname(_CACHE_FILE)
+                os.makedirs(dest_dir, exist_ok=True)
+                fd, tmp_path = tempfile.mkstemp(dir=dest_dir, prefix='.cisa_kev_cache.', suffix='.tmp')
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                        json.dump(data, f)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp_path, _CACHE_FILE)
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
                 return data
     except Exception:
         pass
-    return {}
+    return cached
 
 
 def build_kev_index(catalog: dict) -> dict:

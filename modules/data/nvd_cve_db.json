@@ -3,28 +3,28 @@
     "source": "NVD JSON 2.0 feed (services.nvd.nist.gov/rest/json/cves/2.0)",
     "schema_version": 1,
     "min_cvss": 7.0,
-    "refreshed_at": "2026-07-28T09:34:14.424407Z",
+    "refreshed_at": "2026-11-26T22:11:41.821256Z",
     "products": {
       "apache:http_server": {
         "cpe": [
           "cpe:2.3:a:apache:http_server"
         ],
         "count": 113,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "apache:tomcat": {
         "cpe": [
           "cpe:2.3:a:apache:tomcat"
         ],
         "count": 72,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "eclipse:jetty": {
         "cpe": [
           "cpe:2.3:a:eclipse:jetty"
         ],
-        "count": 20,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "count": 21,
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "elastic:elasticsearch": {
         "cpe": [
@@ -32,14 +32,14 @@
           "cpe:2.3:a:elasticsearch:elasticsearch"
         ],
         "count": 11,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "lighttpd:lighttpd": {
         "cpe": [
           "cpe:2.3:a:lighttpd:lighttpd"
         ],
         "count": 14,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "microsoft:iis": {
         "cpe": [
@@ -47,14 +47,14 @@
           "cpe:2.3:a:microsoft:internet_information_server"
         ],
         "count": 55,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "mongodb:mongodb": {
         "cpe": [
           "cpe:2.3:a:mongodb:mongodb"
         ],
-        "count": 13,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "count": 14,
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "nginx:nginx": {
         "cpe": [
@@ -62,42 +62,42 @@
           "cpe:2.3:a:f5:nginx"
         ],
         "count": 21,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "openresty:openresty": {
         "cpe": [
           "cpe:2.3:a:openresty:openresty"
         ],
         "count": 4,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "openssl:openssl": {
         "cpe": [
           "cpe:2.3:a:openssl:openssl"
         ],
         "count": 94,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "oracle:mysql": {
         "cpe": [
           "cpe:2.3:a:oracle:mysql"
         ],
         "count": 73,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "php:php": {
         "cpe": [
           "cpe:2.3:a:php:php"
         ],
-        "count": 382,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "count": 387,
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "postgresql:postgresql": {
         "cpe": [
           "cpe:2.3:a:postgresql:postgresql"
         ],
         "count": 71,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "rabbitmq:rabbitmq": {
         "cpe": [
@@ -105,7 +105,7 @@
           "cpe:2.3:a:pivotal_software:rabbitmq"
         ],
         "count": 5,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "redis:redis": {
         "cpe": [
@@ -113,14 +113,14 @@
           "cpe:2.3:a:redislabs:redis"
         ],
         "count": 40,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       },
       "wordpress:wordpress": {
         "cpe": [
           "cpe:2.3:a:wordpress:wordpress"
         ],
         "count": 93,
-        "refreshed_at": "2026-07-28T09:34:14.424407Z"
+        "refreshed_at": "2026-11-26T22:11:41.821256Z"
       }
     }
   },
@@ -4085,6 +4085,19 @@
         "summary": "In Eclipse Jetty, versions <=9.4.57, <=10.0.25, <=11.0.25, <=12.0.21, <=12.1.0.alpha2, an HTTP/2 client may trigger the server to send RST_STREAM frames, for example by sending frames that are malform"
       },
       {
+        "cve": "CVE-2026-10050",
+        "cvss": 9.1,
+        "severity": "CRITICAL",
+        "affected_versions": [
+          ">=10.0.0,<10.0.31",
+          ">=11.0.0,<11.0.31",
+          ">=12.0.0,<12.0.36",
+          ">=12.1.0,<12.1.10",
+          ">=9.4.0,<9.4.63"
+        ],
+        "summary": "In Eclipse Jetty, the Digest authentication server-side component uses ISO-8859-1 to encode the password as bytes.\n\n\n\nThis was done because the initial specification for HTTP did not specify explicitl"
+      },
+      {
         "cve": "CVE-2026-10051",
         "cvss": 7.5,
         "severity": "HIGH",
@@ -5029,6 +5042,21 @@
           ">=8.0.0,<8.0.4"
         ],
         "summary": "A MongoDB server under specific conditions running on Linux with TLS and CRL revocation status checking enabled, fails to check the revocation status of the intermediate certificates in the peer's cer"
+      },
+      {
+        "cve": "CVE-2026-118383",
+        "cvss": 9.0,
+        "severity": "CRITICAL",
+        "affected_versions": [
+          ">=4.4.0,<4.4.32",
+          ">=5.0.0,<5.0.35",
+          ">=6.0.0,<6.0.30",
+          ">=7.0.0,<7.0.48",
+          ">=8.0.0,<8.0.37",
+          ">=8.3.0,<8.3.16",
+          ">=9.0.0,<9.0.7"
+        ],
+        "summary": "A use-after-free in the replication component of MongoDB Server can occur when a newly elected replica set primary completes catch-up. The condition can be caused by requests that do not require authe"
       },
       {
         "cve": "CVE-2026-11933",
@@ -18482,6 +18510,64 @@
           ">=8.4.0,<8.4.5"
         ],
         "summary": "In PHP from 8.1.* before 8.1.32, from 8.2.* before 8.2.28, from 8.3.* before 8.3.19, from 8.4.* before 8.4.5, when parsing HTTP redirect in the response to an HTTP request, there is currently limit on"
+      },
+      {
+        "cve": "CVE-2026-109618",
+        "cvss": 9.8,
+        "severity": "CRITICAL",
+        "affected_versions": [
+          ">=7.3.0,<8.2.35",
+          ">=8.3.0,<8.3.36",
+          ">=8.4.0,<8.4.27",
+          ">=8.5.0,<8.5.12"
+        ],
+        "summary": "PHP uses longjmp() for out-of-memory (OOM) errors to exit the current context and abort handling of the request. Some contexts may not properly account for this scenario and leave request memory in an"
+      },
+      {
+        "cve": "CVE-2026-109619",
+        "cvss": 8.1,
+        "severity": "HIGH",
+        "affected_versions": [
+          ">=5.4.0,<8.2.35",
+          ">=8.3.0,<8.3.36",
+          ">=8.4.0,<8.4.27",
+          ">=8.5.0,<8.5.12"
+        ],
+        "summary": "PHP has various global state that temporarily points into request memory. In some scenarios, global state may not be correctly reset, or may be repopulated after being reset. The global state may then"
+      },
+      {
+        "cve": "CVE-2026-17543",
+        "cvss": 9.8,
+        "severity": "CRITICAL",
+        "affected_versions": [
+          ">=8.2.0,<8.2.33",
+          ">=8.3.0,<8.3.33",
+          ">=8.4.0,<8.4.24",
+          ">=8.5.0,<8.5.9"
+        ],
+        "summary": "Improper escaping of backslashes in attacker-provided parameters would allow for trivial SQL injection in PHP versions\u00a0from 8.2.* before 8.2.33, from 8.3.* before 8.3.33, from 8.4.* before 8.4.24, and"
+      },
+      {
+        "cve": "CVE-2026-17544",
+        "cvss": 9.8,
+        "severity": "CRITICAL",
+        "affected_versions": [
+          ">=8.4.0,<8.4.24",
+          ">=8.5.0,<8.5.9"
+        ],
+        "summary": "Attacker-provided inputs to bccomp() could lead to an out-of-bounds write with stack and heap corruption in PHP versions from 8.4.* before 8.4.24 and from 8.5.* before 8.5.9."
+      },
+      {
+        "cve": "CVE-2026-17545",
+        "cvss": 7.5,
+        "severity": "HIGH",
+        "affected_versions": [
+          ">=8.2.0,<8.2.34",
+          ">=8.3.0,<8.3.35",
+          ">=8.4.0,<8.4.26",
+          ">=8.5.0,<8.5.11"
+        ],
+        "summary": "On Windows, PHP's filesystem and stream APIs do not reject reserved device names such as CON, PRN, AUX, NUL, COM1 to COM9, LPT1 to LPT9, CONIN$ and CONOUT$ when they appear as a component of a path. A"
       },
       {
         "cve": "CVE-2026-6104",

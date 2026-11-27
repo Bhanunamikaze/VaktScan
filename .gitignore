@@ -22,6 +22,7 @@ reports/
 vaktscan_inventory.db
 vaktscan_inventory.db-*
 modules/data/cisa_kev_cache.json
+modules/data/retirejs_db.meta.json
 reports_test/
 
 .pytest_cache

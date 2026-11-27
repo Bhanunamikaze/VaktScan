@@ -41,11 +41,17 @@ class ReconScanner:
     }
 
     def __init__(self, domain, output_dir="reports", wordlist=None,
-                 detailed_dashboard=True, skip_tools=frozenset()):
+                 detailed_dashboard=True, skip_tools=frozenset(),
+                 recursive_levels=0, recursive_exclude=None,
+                 dashboard_task=True, quiet=False):
         self.domain = domain.strip().lower()
         self.output_dir = output_dir
         self.wordlist = wordlist
         self.detailed_dashboard = detailed_dashboard
+        self.recursive_levels = max(0, int(recursive_levels))
+        self.recursive_exclude = recursive_exclude
+        self.dashboard_task = dashboard_task
+        self.quiet = quiet
         self.skip_tools = {
             str(name).strip().lower().replace("_", "-")
             for name in (skip_tools or ()) if str(name).strip()
@@ -128,14 +134,14 @@ class ReconScanner:
         from modules.dashboard import LiveDashboard
         dashboard = LiveDashboard()
         timeout = timeout or self.TOOL_TIMEOUTS.get(str(tool_name).strip().lower(), 300)
-        if not dashboard.active:
+        if not dashboard.active and not self.quiet:
             print(f"{Colors.CYAN}[*] [{self.domain}] Running {tool_name}...{Colors.RESET}")
         try:
             result = await proc_runner.run_tool(cmd, timeout=timeout)
             stdout, stderr = result.stdout, result.stderr
 
             if result.returncode == 0:
-                if not dashboard.active:
+                if not dashboard.active and not self.quiet:
                     print(f"{Colors.GREEN}[+] [{self.domain}] {tool_name} completed successfully.{Colors.RESET}")
                 return stdout.decode().strip().split('\n')
             else:
@@ -150,14 +156,14 @@ class ReconScanner:
         except asyncio.TimeoutError:
             # proc.run_tool tears down the complete child process group.  A
             # timeout is an expected provider failure, not a fatal scan error.
-            if not dashboard.active:
+            if not dashboard.active and not self.quiet:
                 print(
                     f"{Colors.YELLOW}[!] [{self.domain}] {tool_name} timed out "
                     f"after {timeout}s; continuing with other recon results.{Colors.RESET}"
                 )
             return []
         except Exception as e:
-            if not dashboard.active:
+            if not dashboard.active and not self.quiet:
                 print(f"{Colors.RED}[!] [{self.domain}] Error running {tool_name}: {e}{Colors.RESET}")
             return []
 
@@ -289,7 +295,7 @@ class ReconScanner:
             "-y --force"
         )
 
-        if not dashboard.active:
+        if not dashboard.active and not self.quiet:
             print(f"{Colors.CYAN}[*] [{self.domain}] Running BBOT scan (this may take time)...{Colors.RESET}")
         results = await self._run_command(cmd, "bbot")
 
@@ -306,11 +312,11 @@ class ReconScanner:
                     self._collect_results(dest_path)
                     #print(f"{Colors.GREEN}[+] BBOT results saved: {dest_path}{Colors.RESET}")
                 except Exception as exc:
-                    if not dashboard.active:
+                    if not dashboard.active and not self.quiet:
                         print(f"{Colors.YELLOW}[!] Failed to copy {fpath}: {exc}{Colors.RESET}")
             return
 
-        if not dashboard.active:
+        if not dashboard.active and not self.quiet:
             print(f"{Colors.YELLOW}[!] No BBOT output files found, falling back to console output.{Colors.RESET}")
         self._collect_from_lines(results if results else [])
 
@@ -357,7 +363,7 @@ class ReconScanner:
         seen = set()
         for match in self.domain_pattern.findall(lower_text):
             match = match.strip(".")
-            if match == self.domain or match.endswith(f".{self.domain}") or match.endswith(self.domain):
+            if match == self.domain or match.endswith(f".{self.domain}"):
                 if match not in seen:
                     seen.add(match)
                     matches.append(match)
@@ -374,7 +380,7 @@ class ReconScanner:
         direct_candidates = []
         cleaned = sub.lower().strip(' "\'')
         cleaned = cleaned.lstrip('.')
-        if cleaned.endswith(self.domain):
+        if cleaned == self.domain or cleaned.endswith(f".{self.domain}"):
             direct_candidates.append(cleaned)
             # also consider without leading "www."
             if cleaned.startswith("www.") and cleaned[4:] not in direct_candidates:
@@ -394,9 +400,60 @@ class ReconScanner:
             for value in values:
                 f.write(f"{value}\n")
 
+    async def _run_recursive_levels(self):
+        """Breadth-first enumeration of newly discovered in-scope hostnames."""
+        from modules.dashboard import LiveDashboard
+        dashboard = LiveDashboard()
+        task_id = f"recursive_{self.domain}"
+        if dashboard.active and self.dashboard_task:
+            dashboard.add_task(task_id, f"{self.domain} Recursive", total=self.recursive_levels)
+        visited = {self.domain}
+        frontier = set(self.subdomains) - visited
+        semaphore = asyncio.Semaphore(4)
+        for level in range(1, self.recursive_levels + 1):
+            seeds = sorted(host for host in frontier - visited
+                           if not self.recursive_exclude or not self.recursive_exclude(host))
+            if not seeds:
+                break
+            visited.update(seeds)
+            if dashboard.active and self.dashboard_task:
+                dashboard.update_task(task_id, completed=level - 1,
+                                      status=f"Level {level}/{self.recursive_levels}: {len(seeds)} host(s)")
+            else:
+                print(f"{Colors.CYAN}[*] [{self.domain}] Recursive enumeration level {level}/{self.recursive_levels}: "
+                      f"querying {len(seeds)} discovered host(s).{Colors.RESET}")
+
+            async def query(host):
+                async with semaphore:
+                    scanner = ReconScanner(
+                        host, output_dir=self.output_dir, wordlist=self.wordlist,
+                        detailed_dashboard=False, skip_tools=self.skip_tools,
+                        dashboard_task=False, quiet=True,
+                    )
+                    try:
+                        _, found = await scanner.run_all()
+                    except Exception as exc:
+                        print(f"{Colors.YELLOW}[!] [{host}] Recursive enumeration failed: {exc}{Colors.RESET}")
+                        return []
+                    return [name for name in found if name.endswith('.' + self.domain)]
+
+            discovered = await asyncio.gather(*(query(host) for host in seeds))
+            new_hosts = {host for batch in discovered for host in batch} - self.subdomains
+            for host in sorted(new_hosts):
+                self._add_subdomain(host)
+            frontier = new_hosts
+            if dashboard.active and self.dashboard_task:
+                dashboard.update_task(task_id, completed=level,
+                                      status=f"Level {level}: {len(new_hosts)} new host(s)")
+            else:
+                print(f"{Colors.GREEN}[+] [{self.domain}] Recursive level {level}: "
+                      f"{len(new_hosts)} new in-scope host(s).{Colors.RESET}")
+        if dashboard.active and self.dashboard_task:
+            dashboard.complete_task(task_id, f"Found {len(self.subdomains)} total host(s)")
+
     async def run_all(self):
         missing = self.check_tools()
-        if missing:
+        if missing and not self.quiet:
             print(f"{Colors.YELLOW}[!] Warning: The following tools were not found in PATH: {', '.join(missing)}{Colors.RESET}")
             print(f"{Colors.YELLOW}[!] Scanning will proceed with available tools.{Colors.RESET}")
 
@@ -405,7 +462,7 @@ class ReconScanner:
             name for name in self.tools
             if name.replace("_", "-") in self.skip_tools
         }
-        if skipped:
+        if skipped and not self.quiet:
             print(
                 f"{Colors.YELLOW}[*] Skipping recon tool(s): "
                 f"{', '.join(sorted(skipped))}.{Colors.RESET}"
@@ -433,7 +490,7 @@ class ReconScanner:
 
         async def wrap_task(task_coro, name):
             task_id = name.lower()
-            if dashboard.active:
+            if dashboard.active and self.dashboard_task:
                 if self.detailed_dashboard:
                     dashboard.add_task(task_id, f"{name} Enum")
                 else:
@@ -452,7 +509,7 @@ class ReconScanner:
                 if name in self.pending_tools:
                     self.pending_tools.remove(name)
 
-                if dashboard.active:
+                if dashboard.active and self.dashboard_task:
                     if self.detailed_dashboard:
                         dashboard.complete_task(task_id, f"Found {diff} subdomains")
                     else:
@@ -469,7 +526,7 @@ class ReconScanner:
             except Exception as e:
                 if name in self.pending_tools:
                     self.pending_tools.remove(name)
-                if dashboard.active:
+                if dashboard.active and self.dashboard_task:
                     if self.detailed_dashboard:
                         dashboard.complete_task(task_id, f"Failed: {str(e)}")
                     else:
@@ -485,7 +542,7 @@ class ReconScanner:
                             )
                 raise e
 
-        if dashboard.active and not self.detailed_dashboard:
+        if dashboard.active and self.dashboard_task and not self.detailed_dashboard:
             dashboard.add_task(f"recon_{self.domain}", f"{self.domain} Recon")
             dashboard.update_task(
                 f"recon_{self.domain}",
@@ -502,12 +559,15 @@ class ReconScanner:
         if "bbot" not in missing and "bbot" not in disabled and "bbot" not in skipped: tasks.append(wrap_task(self.run_bbot(), "BBOT"))
         if "censys" not in missing and "censys" not in skipped: tasks.append(wrap_task(self.run_censys(), "Censys"))
         if "crtsh" not in missing and "crtsh" not in skipped: tasks.append(wrap_task(self.run_crtsh(), "Crtsh"))
-        
+
         # Run passive tools concurrently
         if tasks:
             await asyncio.gather(*tasks)
 
-        if dashboard.active and not self.detailed_dashboard:
+        if self.recursive_levels:
+            await self._run_recursive_levels()
+
+        if dashboard.active and self.dashboard_task and not self.detailed_dashboard:
             dashboard.complete_task(f"recon_{self.domain}", f"Found {len(self.subdomains)} subdomains")
         
         # Run ffuf-based enumeration via the standalone DirEnumerator
@@ -519,7 +579,7 @@ class ReconScanner:
         self._write_list(raw_file, self.raw_candidates)
         self._write_list(final_file, sorted(self.subdomains))
         
-        if not dashboard.active:
+        if not dashboard.active and not self.quiet:
             print(f"\n{Colors.GREEN}[+] [{self.domain}] Enumeration complete!{Colors.RESET}")
             print(f"{Colors.GREEN}[+] [{self.domain}] Found {len(self.subdomains)} unique subdomains.{Colors.RESET}")
             print(f"{Colors.GRAY}[*] [{self.domain}] Raw combined output: {raw_file}{Colors.RESET}")

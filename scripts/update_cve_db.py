@@ -290,8 +290,14 @@ def load_existing() -> dict:
 def is_fresh(ttl_days: float) -> tuple[bool, float]:
     if not os.path.exists(OUT_PATH):
         return False, 0.0
-    age_days = (time.time() - os.path.getmtime(OUT_PATH)) / 86400.0
-    return age_days < ttl_days, age_days
+    try:
+        with open(OUT_PATH, 'r', encoding='utf-8') as fh:
+            stamp = json.load(fh).get('_meta', {}).get('refreshed_at')
+        checked = datetime.datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+        age_days = (datetime.datetime.now(datetime.timezone.utc) - checked).total_seconds() / 86400.0
+        return 0 <= age_days < ttl_days, age_days
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False, 0.0
 
 
 def atomic_write(payload: dict) -> None:
@@ -362,7 +368,7 @@ def main() -> int:
 
     failed: list[str] = []                   # network/fetch failures -> non-zero exit
     empty: list[str] = []                    # fetched OK but no qualifying CVEs
-    now = datetime.datetime.utcnow().isoformat() + 'Z'
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')
     request_count = 0
 
     for product in products:
@@ -400,6 +406,7 @@ def main() -> int:
             # leave the key ABSENT so lookups fail open to the live API.
             if prev_index.get(key):
                 index[key] = prev_index[key]
+                failed.append(product)
                 _log(f'[=] {product} -> {key}: 0 fetched; kept '
                      f'{len(prev_index[key])} existing.')
             else:
@@ -413,7 +420,7 @@ def main() -> int:
             'source': 'NVD JSON 2.0 feed (services.nvd.nist.gov/rest/json/cves/2.0)',
             'schema_version': SCHEMA_VERSION,
             'min_cvss': args.min_cvss,
-            'refreshed_at': now,
+            'refreshed_at': existing.get('_meta', {}).get('refreshed_at') if failed else now,
             'products': {k: meta_products[k] for k in sorted(meta_products)},
         },
         'index': {k: index[k] for k in sorted(index)},

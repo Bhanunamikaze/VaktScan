@@ -62,6 +62,9 @@ def scope_signature(cfg: dict) -> str:
     output format flags, ``no_dashboard``, ``js_timeout``, ``chunk_size``.
     """
     scope = {k: cfg.get(k) for k in SCOPE_FIELDS}
+    if cfg.get("recursive_levels"):
+        # Keep legacy scan IDs for the default (non-recursive) behavior.
+        scope["recursive_levels"] = int(cfg["recursive_levels"])
     # normalize collections so ordering never affects the signature
     for k in ("ports", "extra_scans", "exclude", "include_only"):
         if scope.get(k):

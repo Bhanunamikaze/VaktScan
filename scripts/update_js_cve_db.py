@@ -14,10 +14,10 @@ library-name -> {licenses, vulnerabilities, extractors} shape. It is NOT
 npmrepository.json (server-side npm advisories not detectable from served JS).
 
 Behaviour mirrors the repo's other refresh/cache conventions:
-  * Like modules/cisa_kev.py and modules/nuclei_runner.sync_nuclei_templates(),
-    freshness is tracked by the vendored file's mtime. If the DB is newer than
-    the TTL (default 7 days, matching the nuclei template TTL) the refresh is
-    skipped unless --force is given.
+  * A sidecar records the last successful upstream check and a SHA-256 hash of
+    the exact vendored file. If that check is within the TTL (default 7 days),
+    the refresh is skipped unless --force is given. The upstream JSON shape
+    stays unchanged for RetireJS consumers.
   * The download is validated (parses as JSON, plausible library count, known
     anchor library present, structural sanity, no large regression) BEFORE it
     replaces the vendored copy. The write is atomic (temp file in the same
@@ -37,6 +37,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
 import json
 import os
 import socket
@@ -48,6 +50,7 @@ import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 DB_PATH = os.path.join(ROOT, 'modules', 'data', 'retirejs_db.json')
+META_PATH = os.path.join(ROOT, 'modules', 'data', 'retirejs_db.meta.json')
 
 DEFAULT_URL = (
     'https://raw.githubusercontent.com/RetireJS/retire.js/master/'
@@ -99,11 +102,41 @@ def _load_existing() -> tuple[dict | None, int]:
 
 
 def _is_fresh(ttl_days: float) -> tuple[bool, float]:
-    """Return (fresh, age_days) based on the vendored file's mtime."""
+    """Return freshness from a successful check of this exact DB content."""
     if not os.path.exists(DB_PATH):
         return False, 0.0
-    age_days = (time.time() - os.path.getmtime(DB_PATH)) / 86400.0
-    return age_days < ttl_days, age_days
+    try:
+        with open(META_PATH, 'r', encoding='utf-8') as fh:
+            meta = json.load(fh)
+        with open(DB_PATH, 'rb') as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        checked = datetime.datetime.fromisoformat(meta['refreshed_at'].replace('Z', '+00:00'))
+        age_days = (datetime.datetime.now(datetime.timezone.utc) - checked).total_seconds() / 86400.0
+        return meta.get('sha256') == digest and 0 <= age_days < ttl_days, age_days
+    except (OSError, ValueError, KeyError, TypeError):
+        return False, 0.0
+
+
+def write_refresh_metadata(source: str = DEFAULT_URL) -> None:
+    """Record a verified upstream check without changing the RetireJS schema."""
+    with open(DB_PATH, 'rb') as fh:
+        digest = hashlib.sha256(fh.read()).hexdigest()
+    payload = {
+        'source': source,
+        'refreshed_at': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'),
+        'sha256': digest,
+    }
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(META_PATH), prefix='.retirejs_db.meta.', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            json.dump(payload, fh, indent=2)
+            fh.write('\n')
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, META_PATH)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 def download(url: str) -> tuple[str, dict]:
@@ -233,11 +266,11 @@ def main() -> int:
 
     # Skip the write if content is byte-identical to what we already have.
     if prev_data is not None and data == prev_data:
-        # Refresh mtime so the TTL clock resets even when content is unchanged.
         try:
-            os.utime(DB_PATH, None)
-        except OSError:
-            pass
+            write_refresh_metadata(args.url)
+        except OSError as exc:
+            _log(f'[!] Failed to record refresh metadata ({exc}).')
+            return 1
         _log(
             f'[+] Upstream unchanged ({new_count} libraries); '
             f'refreshed freshness timestamp only.'
@@ -246,6 +279,7 @@ def main() -> int:
 
     try:
         atomic_write(raw_text)
+        write_refresh_metadata(args.url)
     except OSError as exc:
         _log(f'[!] Failed to write DB atomically ({exc}); existing DB preserved.')
         return 1

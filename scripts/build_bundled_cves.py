@@ -2,7 +2,7 @@
 """
 Refresh modules/data/bundled_cves.json from NVD JSON 2.0 feeds.
 
-Source: https://services.nvd.nist.gov/rest/json/cves/2.0?cpeName=cpe:2.3:a:<vendor>:<product>:*
+Source: https://services.nvd.nist.gov/rest/json/cves/2.0?virtualMatchString=cpe:2.3:a:<vendor>:<product>
 
 The bundled-component table covers every software package cPanel installs
 by default. The script queries NVD per-component, filters to entries with
@@ -21,6 +21,7 @@ import datetime
 import json
 import os
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -28,6 +29,7 @@ import urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUT_PATH = os.path.join(ROOT, 'modules', 'data', 'bundled_cves.json')
+CURATED_PATH = os.path.join(ROOT, 'modules', 'data', 'bundled_cves_curated.json')
 
 # Component → NVD CPE prefix.
 COMPONENT_CPES = {
@@ -72,25 +74,38 @@ def fetch_nvd(cpe, results_per_page=2000):
     start = 0
     while True:
         params = {
-            'cpeName': cpe + ':*:*:*:*:*:*:*',
+            'virtualMatchString': cpe,
             'resultsPerPage': str(results_per_page),
             'startIndex': str(start),
         }
         url = NVD_API + '?' + urllib.parse.urlencode(params)
-        req = urllib.request.Request(url, headers={'User-Agent': 'VaktScan-bundled-refresh/1.0'})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
+        headers = {'User-Agent': 'VaktScan-bundled-refresh/1.0'}
+        if os.environ.get('NVD_API_KEY'):
+            headers['apiKey'] = os.environ['NVD_API_KEY']
+        req = urllib.request.Request(url, headers=headers)
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                break
+            except urllib.error.HTTPError as exc:
+                if exc.code not in (429, 500, 502, 503, 504) or attempt == 2:
+                    raise
+                retry_after = exc.headers.get('Retry-After', '')
+                delay = min(120, max(5, int(retry_after))) if retry_after.isdigit() else 30
+                print(f"[!] NVD returned HTTP {exc.code}; retrying in {delay}s.", flush=True)
+                time.sleep(delay)
         batch = data.get('vulnerabilities', [])
         all_vulns.extend(batch)
         total = data.get('totalResults', 0)
         start += len(batch)
         if start >= total or not batch:
             break
-        time.sleep(6)  # NVD rate limit between pages
+        time.sleep(0.6 if os.environ.get('NVD_API_KEY') else 6)
     return {'vulnerabilities': all_vulns}
 
 
-def extract_entries(nvd_payload):
+def extract_entries(nvd_payload, cpe_prefix=None):
     out = []
     for item in nvd_payload.get('vulnerabilities', []):
         cve = item.get('cve', {})
@@ -115,6 +130,8 @@ def extract_entries(nvd_payload):
                 for match in node.get('cpeMatch', []):
                     if not match.get('vulnerable'):
                         continue
+                    if cpe_prefix and not str(match.get('criteria', '')).startswith(cpe_prefix + ':'):
+                        continue
                     lo_inc = match.get('versionStartIncluding')
                     lo_exc = match.get('versionStartExcluding')
                     hi_exc = match.get('versionEndExcluding')
@@ -136,6 +153,17 @@ def extract_entries(nvd_payload):
     return out
 
 
+def merge_curated_entries(curated, fetched):
+    """Keep project-curated CVEs that NVD's product query omits."""
+    by_cve = {entry['cve']: entry for entry in curated if isinstance(entry, dict) and entry.get('cve')}
+    for entry in fetched:
+        old = by_cve.get(entry['cve'])
+        if old and old.get('affected_versions') and not entry.get('affected_versions'):
+            continue
+        by_cve[entry['cve']] = entry
+    return sorted(by_cve.values(), key=lambda entry: entry['cve'])
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dry-run', action='store_true')
@@ -154,36 +182,61 @@ def main():
     else:
         existing = {'_meta': {}, 'components': {c: [] for c in COMPONENT_CPES}}
 
+    with open(CURATED_PATH, 'r', encoding='utf-8') as fh:
+        curated_components = json.load(fh).get('components', {})
+
     components_out = dict(existing.get('components', {}))
+    for comp, entries in curated_components.items():
+        components_out[comp] = merge_curated_entries(entries, components_out.get(comp, []))
+    failed = []
+    pause = 0.6 if os.environ.get('NVD_API_KEY') else 6
+    requested = 0
     for comp in components:
+        if requested:
+            time.sleep(pause)
+        requested += 1
         cpe = COMPONENT_CPES[comp]
         try:
             payload = fetch_nvd(cpe)
         except (urllib.error.URLError, TimeoutError) as e:
             print(f"[!] {comp}: NVD fetch failed ({e}), keeping existing entries.")
+            failed.append(comp)
             continue
-        entries = extract_entries(payload)
+        entries = extract_entries(payload, cpe)
         if entries:
-            components_out[comp] = entries
-            print(f"[+] {comp}: {len(entries)} entries.")
-        time.sleep(6)  # NVD public rate limit.
+            components_out[comp] = merge_curated_entries(curated_components.get(comp, []), entries)
+            print(f"[+] {comp}: {len(entries)} NVD entries, {len(components_out[comp])} including curated entries.")
+        elif components_out.get(comp):
+            print(f"[!] {comp}: NVD returned no entries; keeping existing entries.")
+            failed.append(comp)
 
     out = {
         '_meta': {
             'source': 'NVD JSON 2.0 feed',
+            'curated_source': 'modules/data/bundled_cves_curated.json',
             'schema_version': 1,
-            'refreshed_at': datetime.datetime.utcnow().isoformat() + 'Z',
+            'refreshed_at': (existing.get('_meta', {}).get('refreshed_at') if failed
+                             else datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z')),
         },
         'components': components_out,
     }
     if args.dry_run:
         print(json.dumps(out, indent=2))
-        return
-    with open(OUT_PATH, 'w', encoding='utf-8') as fh:
-        json.dump(out, fh, indent=2)
-        fh.write('\n')
+        return 1 if failed else 0
+    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(OUT_PATH), prefix='.bundled_cves.', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            json.dump(out, fh, indent=2)
+            fh.write('\n')
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, OUT_PATH)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
     print(f"[+] Wrote {sum(len(v) for v in components_out.values())} entries to {OUT_PATH}")
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

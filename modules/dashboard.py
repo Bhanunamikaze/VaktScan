@@ -28,7 +28,23 @@ class LiveDashboard:
         self.loop = None
         self.render_task = None
         self.render_interval = 0.1
+        self.render_suspended = False
         self.lock = threading.Lock()
+
+    def _write(self, content: str) -> bool:
+        """A busy nonblocking terminal must not abort a scan."""
+        try:
+            self.original_stdout_write(content)
+            return True
+        except BlockingIOError:
+            self.render_suspended = True
+            return False
+
+    def _flush(self) -> None:
+        try:
+            sys.stdout.flush()
+        except BlockingIOError:
+            self.render_suspended = True
 
     def start(self):
         with self.lock:
@@ -36,9 +52,10 @@ class LiveDashboard:
                 return
             self.active = True
             self.drawn_lines = 0
+            self.render_suspended = False
             # Hide cursor
-            self.original_stdout_write("\033[?25l")
-            sys.stdout.flush()
+            self._write("\033[?25l")
+            self._flush()
             builtins.print = self._custom_print
             try:
                 self.loop = asyncio.get_running_loop()
@@ -59,11 +76,12 @@ class LiveDashboard:
                     self.loop.call_soon_threadsafe(self.render_task.cancel)
             
             # Make sure we clear the last drawn dashboard lines
-            self._clear_dashboard()
+            if not self.render_suspended:
+                self._clear_dashboard()
             self.tasks.clear()
             # Show cursor
-            self.original_stdout_write("\033[?25h\r")
-            sys.stdout.flush()
+            self._write("\033[?25h\r")
+            self._flush()
 
     def add_task(self, task_id: str, name: str, total: int = None):
         with self.lock:
@@ -109,25 +127,28 @@ class LiveDashboard:
     def log_message(self, message: str):
         with self.lock:
             if not self.active:
-                self.original_stdout_write(message)
+                self._write(message)
                 return
-            self._clear_dashboard()
-            self.original_stdout_write(message)
-            sys.stdout.flush()
-            self._draw_dashboard()
+            if not self.render_suspended:
+                self._clear_dashboard()
+            self._write(message)
+            self._flush()
+            if not self.render_suspended:
+                self._draw_dashboard()
 
     def _clear_dashboard(self):
         if self.drawn_lines > 0:
             # Move cursor up self.drawn_lines lines and clear everything below it
-            self.original_stdout_write(f"\r\033[{self.drawn_lines}A\033[J")
+            self._write(f"\r\033[{self.drawn_lines}A\033[J")
             self.drawn_lines = 0
 
     def _draw_dashboard(self):
-        if not self.active or not self.tasks:
+        if not self.active or self.render_suspended or not self.tasks:
             return
         
         import shutil
-        term_width = shutil.get_terminal_size((80, 24)).columns
+        terminal = shutil.get_terminal_size((80, 24))
+        term_width = terminal.columns
         max_line_len = term_width - 1
         
         lines = []
@@ -137,7 +158,16 @@ class LiveDashboard:
         spinners = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         spinner_char = spinners[int(time.time() * 10) % len(spinners)]
 
-        for task_id, task in self.tasks.items():
+        visible_limit = min(20, max(4, terminal.lines - 4))
+        active_tasks = [(key, task) for key, task in self.tasks.items() if task["progress"] < 100.0]
+        completed_tasks = [(key, task) for key, task in self.tasks.items() if task["progress"] >= 100.0]
+        visible = active_tasks[-visible_limit:]
+        visible += completed_tasks[-(visible_limit - len(visible)):] if len(visible) < visible_limit else []
+        hidden_count = len(self.tasks) - len(visible)
+        if hidden_count:
+            lines.append(f" {hidden_count} more task(s) hidden")
+
+        for task_id, task in visible:
             name = task["name"]
             progress = task["progress"]
             status = task["status"]
@@ -186,8 +216,11 @@ class LiveDashboard:
         
         # Write dashboard content with trailing newline, keeping the cursor at the end
         dashboard_content = "\n".join(lines) + "\n"
-        self.original_stdout_write(dashboard_content)
-        sys.stdout.flush()
+        if not self._write(dashboard_content):
+            return
+        self._flush()
+        if self.render_suspended:
+            return
         self.drawn_lines = len(lines)
 
     async def _render_loop(self):
@@ -195,7 +228,8 @@ class LiveDashboard:
             while self.active:
                 await asyncio.sleep(self.render_interval)
                 with self.lock:
-                    self._clear_dashboard()
-                    self._draw_dashboard()
+                    if not self.render_suspended:
+                        self._clear_dashboard()
+                        self._draw_dashboard()
         except asyncio.CancelledError:
             pass

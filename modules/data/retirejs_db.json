@@ -2023,6 +2023,28 @@
         ]
       },
       {
+        "atOrAbove": "7.9.3",
+        "below": "7.9.4",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "TinyMCE Cross-Site Scripting (XSS) vulnerability using media plugin `data-mce-object` serialization",
+          "githubID": "GHSA-mf2p-h6hf-fcwm",
+          "CVE": [
+            "CVE-2026-116675"
+          ]
+        },
+        "info": [
+          "https://github.com/tinymce/tinymce/security/advisories/GHSA-mf2p-h6hf-fcwm",
+          "https://github.com/tinymce/tinymce/commit/bd1ab5ef024c648c3f9c0b409e54a6c227c7d8a2",
+          "https://github.com/tinymce/tinymce/releases/tag/8.9.3",
+          "https://www.tiny.cloud/docs/tinymce/7/7.9.4-release-notes/#overview",
+          "https://www.tiny.cloud/docs/tinymce/latest/8.9.3-release-notes/#overview"
+        ]
+      },
+      {
         "atOrAbove": "8.0.0",
         "below": "8.5.1",
         "severity": "high",
@@ -2080,6 +2102,28 @@
           "https://github.com/tinymce/tinymce/security/advisories/GHSA-vg35-5wq7-3x7w",
           "https://www.tiny.cloud/docs/tinymce/7/7.9.3-release-notes/#overview",
           "https://www.tiny.cloud/docs/tinymce/8/8.5.1-release-notes/#overview"
+        ]
+      },
+      {
+        "atOrAbove": "8.5.1",
+        "below": "8.9.3",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "TinyMCE Cross-Site Scripting (XSS) vulnerability using media plugin `data-mce-object` serialization",
+          "githubID": "GHSA-mf2p-h6hf-fcwm",
+          "CVE": [
+            "CVE-2026-116675"
+          ]
+        },
+        "info": [
+          "https://github.com/tinymce/tinymce/security/advisories/GHSA-mf2p-h6hf-fcwm",
+          "https://github.com/tinymce/tinymce/commit/bd1ab5ef024c648c3f9c0b409e54a6c227c7d8a2",
+          "https://github.com/tinymce/tinymce/releases/tag/8.9.3",
+          "https://www.tiny.cloud/docs/tinymce/7/7.9.4-release-notes/#overview",
+          "https://www.tiny.cloud/docs/tinymce/latest/8.9.3-release-notes/#overview"
         ]
       }
     ],
@@ -3103,23 +3147,6 @@
         ]
       },
       {
-        "below": "1.14",
-        "severity": "high",
-        "cwe": [
-          "CWE-79"
-        ],
-        "identifiers": {
-          "summary": "In Dojo Toolkit before 1.14.0, there is unescaped string injection in dojox/Grid/DataGrid.",
-          "CVE": [
-            "CVE-2018-15494"
-          ],
-          "githubID": "GHSA-84cm-x2q5-8225"
-        },
-        "info": [
-          "https://dojotoolkit.org/blog/dojo-1-14-released"
-        ]
-      },
-      {
         "atOrAbove": "1.14.0",
         "below": "1.14.6",
         "severity": "high",
@@ -3228,6 +3255,294 @@
       },
       "ast": [
         "//BlockStatement/ExpressionStatement/AssignmentExpression[       /:left/:property/:name == \"version\" &&        /:left[         /:object/:name == \"dojo\" ||         /:$object/:init/:properties/:key/:name == \"dojox\"       ]     ]/ObjectExpression[       /Property/:key/:name == \"major\" ||       /Property/:key/:name == \"minor\" ||       /Property/:key/:name == \"patch\"     ]/fn:concat(       /Property[/:key/:name == \"major\"]/:value/:value, \".\",       /Property[/:key/:name == \"minor\"]/:value/:value, \".\",       /Property[/:key/:name == \"patch\"]/:value/:value     )"
+      ]
+    }
+  },
+  "dojox": {
+    "vulnerabilities": [
+      {
+        "atOrAbove": "0",
+        "below": "1.11.9",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "XSS in dojox due to insufficient escape in dojox.xmpp.util.xmlEncode ",
+          "githubID": "GHSA-pg97-ww7h-5mjr",
+          "CVE": [
+            "CVE-2019-10785"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-pg97-ww7h-5mjr",
+          "https://github.com/dojo/dojox/pull/315",
+          "https://github.com/dojo/dojox/commit/abd033a787c718abc1a390f480ac3ea61288e5ee",
+          "https://lists.debian.org/debian-lts-announce/2020/02/msg00033.html",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257,"
+        ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "1.11.10",
+        "severity": "low",
+        "cwe": [
+          "CWE-94"
+        ],
+        "identifiers": {
+          "summary": "Prototype Pollution in Dojox",
+          "githubID": "GHSA-3hw5-q855-g6cw",
+          "CVE": [
+            "CVE-2020-5259"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-3hw5-q855-g6cw",
+          "https://github.com/dojo/dojox/commit/47d1b302b5b23d94e875b77b9b9a8c4f5622c9da",
+          "https://lists.debian.org/debian-lts-announce/2020/03/msg00012.html"
+        ]
+      },
+      {
+        "atOrAbove": "1.12.0",
+        "below": "1.12.7",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "XSS in dojox due to insufficient escape in dojox.xmpp.util.xmlEncode ",
+          "githubID": "GHSA-pg97-ww7h-5mjr",
+          "CVE": [
+            "CVE-2019-10785"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-pg97-ww7h-5mjr",
+          "https://github.com/dojo/dojox/pull/315",
+          "https://github.com/dojo/dojox/commit/abd033a787c718abc1a390f480ac3ea61288e5ee",
+          "https://lists.debian.org/debian-lts-announce/2020/02/msg00033.html",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257,"
+        ]
+      },
+      {
+        "atOrAbove": "1.12.0",
+        "below": "1.12.8",
+        "severity": "low",
+        "cwe": [
+          "CWE-94"
+        ],
+        "identifiers": {
+          "summary": "Prototype Pollution in Dojox",
+          "githubID": "GHSA-3hw5-q855-g6cw",
+          "CVE": [
+            "CVE-2020-5259"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-3hw5-q855-g6cw",
+          "https://github.com/dojo/dojox/commit/47d1b302b5b23d94e875b77b9b9a8c4f5622c9da",
+          "https://lists.debian.org/debian-lts-announce/2020/03/msg00012.html"
+        ]
+      },
+      {
+        "atOrAbove": "1.13.0",
+        "below": "1.13.6",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "XSS in dojox due to insufficient escape in dojox.xmpp.util.xmlEncode ",
+          "githubID": "GHSA-pg97-ww7h-5mjr",
+          "CVE": [
+            "CVE-2019-10785"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-pg97-ww7h-5mjr",
+          "https://github.com/dojo/dojox/pull/315",
+          "https://github.com/dojo/dojox/commit/abd033a787c718abc1a390f480ac3ea61288e5ee",
+          "https://lists.debian.org/debian-lts-announce/2020/02/msg00033.html",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257,"
+        ]
+      },
+      {
+        "atOrAbove": "1.13.0",
+        "below": "1.13.7",
+        "severity": "low",
+        "cwe": [
+          "CWE-94"
+        ],
+        "identifiers": {
+          "summary": "Prototype Pollution in Dojox",
+          "githubID": "GHSA-3hw5-q855-g6cw",
+          "CVE": [
+            "CVE-2020-5259"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-3hw5-q855-g6cw",
+          "https://github.com/dojo/dojox/commit/47d1b302b5b23d94e875b77b9b9a8c4f5622c9da",
+          "https://lists.debian.org/debian-lts-announce/2020/03/msg00012.html"
+        ]
+      },
+      {
+        "below": "1.14.0",
+        "severity": "critical",
+        "cwe": [
+          "CWE-116"
+        ],
+        "identifiers": {
+          "summary": "In Dojo Toolkit before 1.14.0, there is unescaped string injection in dojox/Grid/DataGrid.",
+          "CVE": [
+            "CVE-2018-15494"
+          ],
+          "githubID": "GHSA-84cm-x2q5-8225",
+          "PR": "283"
+        },
+        "info": [
+          "https://github.com/advisories/GHSA-84cm-x2q5-8225",
+          "https://github.com/dojo/dojox/pull/283",
+          "https://dojotoolkit.org/blog/dojo-1-14-released"
+        ]
+      },
+      {
+        "atOrAbove": "1.14.0",
+        "below": "1.14.5",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "XSS in dojox due to insufficient escape in dojox.xmpp.util.xmlEncode ",
+          "githubID": "GHSA-pg97-ww7h-5mjr",
+          "CVE": [
+            "CVE-2019-10785"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-pg97-ww7h-5mjr",
+          "https://github.com/dojo/dojox/pull/315",
+          "https://github.com/dojo/dojox/commit/abd033a787c718abc1a390f480ac3ea61288e5ee",
+          "https://lists.debian.org/debian-lts-announce/2020/02/msg00033.html",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257,"
+        ]
+      },
+      {
+        "atOrAbove": "1.14.0",
+        "below": "1.14.6",
+        "severity": "low",
+        "cwe": [
+          "CWE-94"
+        ],
+        "identifiers": {
+          "summary": "Prototype Pollution in Dojox",
+          "githubID": "GHSA-3hw5-q855-g6cw",
+          "CVE": [
+            "CVE-2020-5259"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-3hw5-q855-g6cw",
+          "https://github.com/dojo/dojox/commit/47d1b302b5b23d94e875b77b9b9a8c4f5622c9da",
+          "https://lists.debian.org/debian-lts-announce/2020/03/msg00012.html"
+        ]
+      },
+      {
+        "atOrAbove": "1.15.0",
+        "below": "1.15.2",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "XSS in dojox due to insufficient escape in dojox.xmpp.util.xmlEncode ",
+          "githubID": "GHSA-pg97-ww7h-5mjr",
+          "CVE": [
+            "CVE-2019-10785"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-pg97-ww7h-5mjr",
+          "https://github.com/dojo/dojox/pull/315",
+          "https://github.com/dojo/dojox/commit/abd033a787c718abc1a390f480ac3ea61288e5ee",
+          "https://lists.debian.org/debian-lts-announce/2020/02/msg00033.html",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257,"
+        ]
+      },
+      {
+        "atOrAbove": "1.15.0",
+        "below": "1.15.3",
+        "severity": "low",
+        "cwe": [
+          "CWE-94"
+        ],
+        "identifiers": {
+          "summary": "Prototype Pollution in Dojox",
+          "githubID": "GHSA-3hw5-q855-g6cw",
+          "CVE": [
+            "CVE-2020-5259"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-3hw5-q855-g6cw",
+          "https://github.com/dojo/dojox/commit/47d1b302b5b23d94e875b77b9b9a8c4f5622c9da",
+          "https://lists.debian.org/debian-lts-announce/2020/03/msg00012.html"
+        ]
+      },
+      {
+        "atOrAbove": "1.16.0",
+        "below": "1.16.1",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "XSS in dojox due to insufficient escape in dojox.xmpp.util.xmlEncode ",
+          "githubID": "GHSA-pg97-ww7h-5mjr",
+          "CVE": [
+            "CVE-2019-10785"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-pg97-ww7h-5mjr",
+          "https://github.com/dojo/dojox/pull/315",
+          "https://github.com/dojo/dojox/commit/abd033a787c718abc1a390f480ac3ea61288e5ee",
+          "https://lists.debian.org/debian-lts-announce/2020/02/msg00033.html",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257",
+          "https://snyk.io/vuln/SNYK-JS-DOJOX-548257,"
+        ]
+      },
+      {
+        "atOrAbove": "1.16.0",
+        "below": "1.16.2",
+        "severity": "low",
+        "cwe": [
+          "CWE-94"
+        ],
+        "identifiers": {
+          "summary": "Prototype Pollution in Dojox",
+          "githubID": "GHSA-3hw5-q855-g6cw",
+          "CVE": [
+            "CVE-2020-5259"
+          ]
+        },
+        "info": [
+          "https://github.com/dojo/dojox/security/advisories/GHSA-3hw5-q855-g6cw",
+          "https://github.com/dojo/dojox/commit/47d1b302b5b23d94e875b77b9b9a8c4f5622c9da",
+          "https://lists.debian.org/debian-lts-announce/2020/03/msg00012.html"
+        ]
+      }
+    ],
+    "extractors": {
+      "uri": [
+        "/(?:dojo-release-)?(§§version§§)(?:-src)?/dojox/.+\\.js",
+        "/dojox@(§§version§§)/.+\\.js"
       ]
     }
   },
@@ -3964,6 +4279,32 @@
       {
         "atOrAbove": "0",
         "below": "19.2.26",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Angular: Sanitization bypass via directive host bindings on concrete host elements in @angular/core and @angular/compiler",
+          "githubID": "GHSA-hh8m-fm6v-7cvg",
+          "CVE": [
+            "CVE-2026-88057"
+          ]
+        },
+        "info": [
+          "https://github.com/angular/angular/security/advisories/GHSA-hh8m-fm6v-7cvg",
+          "https://github.com/angular/angular/issues/69550",
+          "https://github.com/angular/angular/pull/69558",
+          "https://github.com/angular/angular/commit/2f96c8020f85ccb715a76de4b79a0c680c2c7264",
+          "https://github.com/angular/angular/commit/6afe6fa781c2f0931f0aedd729b9884a8fe212ee",
+          "https://github.com/angular/angular/commit/6caa298dee58319b2d674dc91364e26ffe3ecb2b",
+          "https://github.com/angular/angular/releases/tag/v20.3.28",
+          "https://github.com/angular/angular/releases/tag/v21.2.20",
+          "https://github.com/angular/angular/releases/tag/v22.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "19.2.26",
         "severity": "high",
         "cwe": [
           "CWE-79",
@@ -4091,6 +4432,32 @@
           "https://github.com/angular/angular/security/advisories/GHSA-rgjc-h3x7-9mwg",
           "https://github.com/angular/angular/pull/69064",
           "https://github.com/angular/angular/commit/6bde84fa8e6a5770b54040fbbc9bf10d5d0386fa"
+        ]
+      },
+      {
+        "atOrAbove": "20.0.0",
+        "below": "20.3.28",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Angular: Sanitization bypass via directive host bindings on concrete host elements in @angular/core and @angular/compiler",
+          "githubID": "GHSA-hh8m-fm6v-7cvg",
+          "CVE": [
+            "CVE-2026-88057"
+          ]
+        },
+        "info": [
+          "https://github.com/angular/angular/security/advisories/GHSA-hh8m-fm6v-7cvg",
+          "https://github.com/angular/angular/issues/69550",
+          "https://github.com/angular/angular/pull/69558",
+          "https://github.com/angular/angular/commit/2f96c8020f85ccb715a76de4b79a0c680c2c7264",
+          "https://github.com/angular/angular/commit/6afe6fa781c2f0931f0aedd729b9884a8fe212ee",
+          "https://github.com/angular/angular/commit/6caa298dee58319b2d674dc91364e26ffe3ecb2b",
+          "https://github.com/angular/angular/releases/tag/v20.3.28",
+          "https://github.com/angular/angular/releases/tag/v21.2.20",
+          "https://github.com/angular/angular/releases/tag/v22.1.0"
         ]
       },
       {
@@ -4231,6 +4598,32 @@
         ]
       },
       {
+        "atOrAbove": "21.0.0",
+        "below": "21.2.20",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Angular: Sanitization bypass via directive host bindings on concrete host elements in @angular/core and @angular/compiler",
+          "githubID": "GHSA-hh8m-fm6v-7cvg",
+          "CVE": [
+            "CVE-2026-88057"
+          ]
+        },
+        "info": [
+          "https://github.com/angular/angular/security/advisories/GHSA-hh8m-fm6v-7cvg",
+          "https://github.com/angular/angular/issues/69550",
+          "https://github.com/angular/angular/pull/69558",
+          "https://github.com/angular/angular/commit/2f96c8020f85ccb715a76de4b79a0c680c2c7264",
+          "https://github.com/angular/angular/commit/6afe6fa781c2f0931f0aedd729b9884a8fe212ee",
+          "https://github.com/angular/angular/commit/6caa298dee58319b2d674dc91364e26ffe3ecb2b",
+          "https://github.com/angular/angular/releases/tag/v20.3.28",
+          "https://github.com/angular/angular/releases/tag/v21.2.20",
+          "https://github.com/angular/angular/releases/tag/v22.1.0"
+        ]
+      },
+      {
         "atOrAbove": "22.0.0-next.0",
         "below": "22.0.0-rc.2",
         "severity": "medium",
@@ -4313,6 +4706,32 @@
           "https://github.com/angular/angular/security/advisories/GHSA-rgjc-h3x7-9mwg",
           "https://github.com/angular/angular/pull/69064",
           "https://github.com/angular/angular/commit/6bde84fa8e6a5770b54040fbbc9bf10d5d0386fa"
+        ]
+      },
+      {
+        "atOrAbove": "22.0.0",
+        "below": "22.1.0",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Angular: Sanitization bypass via directive host bindings on concrete host elements in @angular/core and @angular/compiler",
+          "githubID": "GHSA-hh8m-fm6v-7cvg",
+          "CVE": [
+            "CVE-2026-88057"
+          ]
+        },
+        "info": [
+          "https://github.com/angular/angular/security/advisories/GHSA-hh8m-fm6v-7cvg",
+          "https://github.com/angular/angular/issues/69550",
+          "https://github.com/angular/angular/pull/69558",
+          "https://github.com/angular/angular/commit/2f96c8020f85ccb715a76de4b79a0c680c2c7264",
+          "https://github.com/angular/angular/commit/6afe6fa781c2f0931f0aedd729b9884a8fe212ee",
+          "https://github.com/angular/angular/commit/6caa298dee58319b2d674dc91364e26ffe3ecb2b",
+          "https://github.com/angular/angular/releases/tag/v20.3.28",
+          "https://github.com/angular/angular/releases/tag/v21.2.20",
+          "https://github.com/angular/angular/releases/tag/v22.1.0"
         ]
       }
     ],
@@ -4979,6 +5398,71 @@
         "info": [
           "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-7rx3-28cr-v5wh",
           "https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.9"
+        ]
+      },
+      {
+        "atOrAbove": "3.0.0",
+        "below": "4.7.10",
+        "severity": "critical",
+        "cwe": [
+          "CWE-1289",
+          "CWE-184"
+        ],
+        "identifiers": {
+          "summary": "Handlebars: JavaScript Injection via Own Property Check Bypass",
+          "githubID": "GHSA-p8wg-vrv2-v86f",
+          "CVE": [
+            "CVE-2026-106445"
+          ]
+        },
+        "info": [
+          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-p8wg-vrv2-v86f",
+          "https://github.com/handlebars-lang/handlebars.js/pull/2185",
+          "https://github.com/handlebars-lang/handlebars.js/commit/ceec388abe1d1aac8f6369860d5f390fa71ef4fa",
+          "https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.10"
+        ]
+      },
+      {
+        "atOrAbove": "4.0.0",
+        "below": "4.7.10",
+        "severity": "critical",
+        "cwe": [
+          "CWE-843",
+          "CWE-94"
+        ],
+        "identifiers": {
+          "summary": "Handlebars: JavaScript Injection via AST Type Confusion in compile (bypass of CVE-2026-33937)",
+          "githubID": "GHSA-8r5x-fm3f-whwj",
+          "CVE": [
+            "CVE-2026-106446"
+          ]
+        },
+        "info": [
+          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-8r5x-fm3f-whwj",
+          "https://github.com/handlebars-lang/handlebars.js/pull/2185",
+          "https://github.com/handlebars-lang/handlebars.js/commit/703fdcc5fd6cc8d1cc0c33cc19de40c467c4b8d2",
+          "https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.10"
+        ]
+      },
+      {
+        "atOrAbove": "4.0.0",
+        "below": "4.7.10",
+        "severity": "medium",
+        "cwe": [
+          "CWE-116"
+        ],
+        "identifiers": {
+          "summary": "Handlebars: JavaScript Injection via Unsafe Inline Embedding of Precompiled Templates",
+          "githubID": "GHSA-xw65-4hp5-5hc7",
+          "CVE": [
+            "CVE-2026-106444"
+          ]
+        },
+        "info": [
+          "https://github.com/handlebars-lang/handlebars.js/security/advisories/GHSA-xw65-4hp5-5hc7",
+          "https://github.com/handlebars-lang/handlebars.js/pull/2185",
+          "https://github.com/handlebars-lang/handlebars.js/commit/609d1b11c833c9a3e00f56f2f34d22f425446725",
+          "https://github.com/handlebars-lang/handlebars.js/releases/tag/v4.7.10"
         ]
       }
     ],
@@ -6026,6 +6510,133 @@
           "https://github.com/cure53/DOMPurify/commit/a9ca1e537422319a557a9a2aa61f003b23b4a197",
           "https://github.com/cure53/DOMPurify/releases/tag/3.4.12"
         ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "3.4.13",
+        "severity": "medium",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "DOMPurify: IN_PLACE hook removal leaves a detached subtree executable, causing XSS",
+          "githubID": "GHSA-55q2-fjhq-7xh7",
+          "CVE": [
+            "CVE-2026-75838"
+          ]
+        },
+        "info": [
+          "https://github.com/cure53/DOMPurify/security/advisories/GHSA-55q2-fjhq-7xh7",
+          "https://github.com/cure53/DOMPurify/pull/1557",
+          "https://github.com/cure53/DOMPurify/commit/3067f7746769",
+          "https://github.com/cure53/DOMPurify/releases/tag/3.4.13"
+        ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "3.4.16",
+        "severity": "low",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "DOMPurify: IN_PLACE returns a force-removed rawtext root whose text carries attacker markup — pure HTML reparse executes",
+          "githubID": "GHSA-6688-9rhm-gjv2",
+          "CVE": [
+            "CVE-2026-109345"
+          ]
+        },
+        "info": [
+          "https://github.com/cure53/DOMPurify/security/advisories/GHSA-6688-9rhm-gjv2",
+          "https://github.com/cure53/DOMPurify/pull/1636",
+          "https://github.com/cure53/DOMPurify/commit/b9b9d80f7e401771c2ccaef5f45def7eec8f27d7",
+          "https://github.com/cure53/DOMPurify/releases/tag/3.4.16"
+        ]
+      },
+      {
+        "atOrAbove": "3.4.13",
+        "below": "3.4.16",
+        "severity": "low",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "DOMPurify: IN_PLACE: node-removing afterSanitize hook leaves detached subtree event handlers armed, causing DOM XSS",
+          "githubID": "GHSA-p98j-92pf-mc4p",
+          "CVE": [
+            "CVE-2026-109344"
+          ]
+        },
+        "info": [
+          "https://github.com/cure53/DOMPurify/security/advisories/GHSA-p98j-92pf-mc4p",
+          "https://github.com/cure53/DOMPurify/pull/1636",
+          "https://github.com/cure53/DOMPurify/commit/b9b9d80f7e401771c2ccaef5f45def7eec8f27d7",
+          "https://github.com/cure53/DOMPurify/releases/tag/3.4.16"
+        ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "3.4.17",
+        "severity": "low",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "DOMPurify: SMIL attributeName=href guard is skipped when PARSER_MEDIA_TYPE is application/xhtml+xml",
+          "githubID": "GHSA-c6gr-qvv4-5v3f",
+          "CVE": [
+            "CVE-2026-116802"
+          ]
+        },
+        "info": [
+          "https://github.com/cure53/DOMPurify/security/advisories/GHSA-c6gr-qvv4-5v3f",
+          "https://github.com/cure53/DOMPurify/pull/1672",
+          "https://github.com/cure53/DOMPurify/commit/a77a3e78b59f72fa4d1c83f22e121ad9cc7d3575",
+          "https://github.com/cure53/DOMPurify/releases/tag/3.4.17"
+        ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "3.4.17",
+        "severity": "high",
+        "cwe": [
+          "CWE-693",
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "DOMPurify IN_PLACE: hook that removes a parent or sibling leaves the detached subtree's event handlers armed (incomplete fix for GHSA-p98j-92pf-mc4p)",
+          "githubID": "GHSA-mrv2-3pqr-j5jr",
+          "CVE": [
+            "CVE-2026-116803"
+          ]
+        },
+        "info": [
+          "https://github.com/cure53/DOMPurify/security/advisories/GHSA-mrv2-3pqr-j5jr",
+          "https://github.com/cure53/DOMPurify/pull/1672",
+          "https://github.com/cure53/DOMPurify/commit/a77a3e78b59f72fa4d1c83f22e121ad9cc7d3575",
+          "https://github.com/cure53/DOMPurify/releases/tag/3.4.17"
+        ]
+      },
+      {
+        "atOrAbove": "3.4.4",
+        "below": "3.4.17",
+        "severity": "critical",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "DOMPurify SAFE_FOR_TEMPLATES bypass: split template expressions survive in attached shadow root content on DOM output modes",
+          "githubID": "GHSA-cg2g-xh64-v4q7",
+          "CVE": [
+            "CVE-2026-116804"
+          ]
+        },
+        "info": [
+          "https://github.com/cure53/DOMPurify/security/advisories/GHSA-cg2g-xh64-v4q7",
+          "https://github.com/cure53/DOMPurify/pull/1672",
+          "https://github.com/cure53/DOMPurify/commit/a77a3e78b59f72fa4d1c83f22e121ad9cc7d3575",
+          "https://github.com/cure53/DOMPurify/releases/tag/3.4.17"
+        ]
       }
     ],
     "extractors": {
@@ -6041,7 +6652,7 @@
       ],
       "hashes": {},
       "ast": [
-        "//CallExpression[       /:callee//:left/:property/:name == \"DOMPurify\"     ]/:arguments//AssignmentExpression[       /:left/:property/:name == \"version\"     ]/:right/:value",
+        "//CallExpression[       /:callee//AssignmentExpression[/:left/:property/:name == \"DOMPurify\"]     ]/:arguments//AssignmentExpression[       /:left/:property/:name == \"version\"     ]/:right/:value",
         "//IfStatement[       /:test//AssignmentExpression[/:left/:property/:name == \"removed\"]/:left/$:object ==       /:consequent//AssignmentExpression[/:left/:property/:name == \"isSupported\"]/:left/$:object     ]/:test//AssignmentExpression[/:left/:property/:name == \"version\"]/$$:right/:value"
       ]
     }
@@ -6213,7 +6824,10 @@
       "ast": [
         "//CallExpression[       /FunctionExpression//MemberExpression/:property/:name == \"React\"     ]/FunctionExpression/BlockStatement/ExpressionStatement/AssignmentExpression[       /:left/:property/:name == \"version\"     ]/$$:right/:value",
         "//BlockStatement[       /ExpressionStatement/AssignmentExpression/MemberExpression[/:property/:name == \"__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED\"]/$:object ==       /ExpressionStatement/AssignmentExpression/MemberExpression[/:property/:name == \"version\"]/$:object     ]/ExpressionStatement/AssignmentExpression[/MemberExpression/:property/:name == \"version\"]/$$:right/:value",
-        "/ExpressionStatement/AssignmentExpression[         /MemberExpression/:property/:name == \"version\" &&         /MemberExpression/:$object ==          ../../ExpressionStatement/AssignmentExpression/MemberExpression[           /:property/:name == \"__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED\"         ]/$:object     ]/$$:right/:value"
+        "/ExpressionStatement/AssignmentExpression[         /MemberExpression/:property/:name == \"version\" &&         /MemberExpression/:$object ==         ../../ExpressionStatement/AssignmentExpression/MemberExpression[           /:property/:name == \"__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED\"         ]/$:object     ]/$$:right/:value",
+        "//SequenceExpression[       /AssignmentExpression/:left[/:object/:name == \"exports\" && /:property/:name == \"__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE\"]     ]/AssignmentExpression[       /:left/:object/:name == \"exports\" && /:left/:property/:name == \"version\"     ]/:right/:value",
+        "//SequenceExpression[       /AssignmentExpression[/:left/:property/:name == \"__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE\"]/:left/$:object ==       /AssignmentExpression[/:left/:property/:name == \"version\"]/:left/$:object     ]/AssignmentExpression[       /:left/:property/:name == \"version\"     ]/$$:right/:value",
+        "/ExpressionStatement/AssignmentExpression[       /MemberExpression/:property/:name == \"version\" &&       /MemberExpression/:object/:name == \"exports\" &&       ../../ExpressionStatement/AssignmentExpression/MemberExpression[         /:property/:name == \"__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE\" &&         /:object/:name == \"exports\"       ]     ]/$$:right/:value"
       ]
     }
   },
@@ -6337,7 +6951,8 @@
         "//ObjectExpression/Property[/:key/:name == \"reconcilerVersion\"]/$$:value/:value",
         "//ObjectExpression[       /Property[/:key/:name == \"rendererPackageName\" && /:value/:value == \"react-dom\"]     ]/Property[/:key/:name == \"version\"]/:value/:value",
         "//SequenceExpression[             /AssignmentExpression/:left[/:object/:name == \"exports\" && /:property/:name == \"__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE\"]          ]/AssignmentExpression[             /:left/:object/:name == \"exports\" && /:left/:property/:name == \"version\"         ]/:right/:value",
-        "/ExpressionStatement/AssignmentExpression[   /MemberExpression/:property/:name == \"version\" &&   /MemberExpression     [/:$object ==          ../../../ExpressionStatement/AssignmentExpression/MemberExpression[           /:property/:name == \"__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE\"         ]/$:object ||       /Identifier[         /:name == \"exports\" && ../../../../ExpressionStatement/AssignmentExpression/MemberExpression[           /:property/:name == \"__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE\"         ]/Identifier/:name == \"exports\"       ]     ]     ]/$$:right/:value"
+        "/ExpressionStatement/AssignmentExpression[   /MemberExpression/:property/:name == \"version\" &&   /MemberExpression     [/:$object ==          ../../../ExpressionStatement/AssignmentExpression/MemberExpression[           /:property/:name == \"__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE\"         ]/$:object ||       /Identifier[         /:name == \"exports\" && ../../../../ExpressionStatement/AssignmentExpression/MemberExpression[           /:property/:name == \"__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE\"         ]/Identifier/:name == \"exports\"       ]     ]     ]/$$:right/:value",
+        "//SequenceExpression[       /AssignmentExpression[/:left/:property/:name == \"__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE\"]/:left/$:object ==       /AssignmentExpression[/:left/:property/:name == \"version\"]/:left/$:object     ]/AssignmentExpression[       /:left/:property/:name == \"version\"     ]/$$:right/:value"
       ]
     }
   },
@@ -6556,6 +7171,28 @@
         "info": [
           "https://github.com/moment/moment/security/advisories/GHSA-wc69-rhjr-hc9g",
           "https://security.snyk.io/vuln/SNYK-JS-MOMENT-2944238"
+        ]
+      },
+      {
+        "atOrAbove": "2.29.2",
+        "below": "2.31.0",
+        "severity": "medium",
+        "cwe": [
+          "CWE-27"
+        ],
+        "identifiers": {
+          "summary": "moment vulnerable to Path Traversal via crafted non-string locale name",
+          "githubID": "GHSA-4p3w-j4w9-5jqw",
+          "CVE": [
+            "CVE-2026-17495"
+          ]
+        },
+        "info": [
+          "https://github.com/moment/moment/security/advisories/GHSA-4p3w-j4w9-5jqw",
+          "https://github.com/moment/moment/pull/6386",
+          "https://github.com/moment/moment/commit/5f7d983c9881e65e07574de9dda3190d99520c07",
+          "https://cna.openjsf.org/security-advisories.html",
+          "https://github.com/moment/moment/releases/tag/2.31.0"
         ]
       }
     ],
@@ -6949,8 +7586,8 @@
       "hashes": {},
       "ast": [
         "//BlockStatement[       /ClassDeclaration[/:id/:name == \"BaseComponent\"] &&       /VariableDeclaration/VariableDeclarator[/:init/:value == \"bs.alert\"]     ]/VariableDeclaration/VariableDeclarator[/:id/:name == \"VERSION\"]/:init/:value",
-        "//ClassBody[       /MethodDefinition[/:kind == \"get\" && /:key/:name == \"DATA_KEY\"]//TemplateLiteral &&       /MethodDefinition[/:kind == \"get\" && /:key/:name == \"EVENT_KEY\"]//TemplateLiteral     ]/MethodDefinition[/:kind == \"get\" && /:key/:name == \"VERSION\"]//ReturnStatement//Literal/:value",
-        "//BlockStatement[       //ClassBody/MethodDefinition[/:kind == \"get\" && /:key/:name == \"DATA_KEY\"]//Literal[/:value == \"bs.alert\"]     ]//ClassBody/MethodDefinition[/:kind == \"get\" && /:key/:name == \"VERSION\"]//ReturnStatement//Literal/:value",
+        "//ClassBody[       /MethodDefinition[/:kind == \"get\" && /:key/:name == \"DATA_KEY\"]//TemplateLiteral &&       /MethodDefinition[/:kind == \"get\" && /:key/:name == \"EVENT_KEY\"]//TemplateLiteral     ]/MethodDefinition[/:kind == \"get\" && /:key/:name == \"VERSION\"]//ReturnStatement/$$:argument/:value",
+        "//BlockStatement[       //ClassBody/MethodDefinition[/:kind == \"get\" && /:key/:name == \"DATA_KEY\"]//Literal[/:value == \"bs.alert\"]     ]//ClassBody/MethodDefinition[/:kind == \"get\" && /:key/:name == \"VERSION\"]//ReturnStatement/$$:argument/:value",
         "//BlockStatement[       //Literal[/:value == \"bs.alert\"]     ]//ObjectExpression[       /Property[/:key/:name == \"key\" && /:value/:value == \"VERSION\"]     ]/Property[/:key/:name == \"get\"]//ReturnStatement/$$:argument/:value"
       ]
     }
@@ -7395,6 +8032,94 @@
           "https://github.com/ckeditor/ckeditor5/security/advisories/GHSA-x9gp-vjh6-3wv6",
           "https://github.com/ckeditor/ckeditor5/commit/b210e90c6cf84e662ef6c7daf93a92355a961bf2"
         ]
+      },
+      {
+        "atOrAbove": "29.0.0",
+        "below": "47.7.4",
+        "severity": "low",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "CKEditor: Cross-site scripting (XSS) in the engine package",
+          "githubID": "GHSA-v6mg-96c6-gmpq",
+          "CVE": [
+            "CVE-2026-116687"
+          ]
+        },
+        "info": [
+          "https://github.com/ckeditor/ckeditor5/security/advisories/GHSA-v6mg-96c6-gmpq",
+          "https://github.com/ckeditor/ckeditor5/commit/4d9c5bb34f63cd956d15ccafbe584e14280c86a0",
+          "https://github.com/ckeditor/ckeditor5/commit/a750e38635db6a18c5b11599c09f4fd702850423",
+          "https://github.com/ckeditor/ckeditor5/releases/tag/v47.7.4",
+          "https://github.com/ckeditor/ckeditor5/releases/tag/v48.5.1"
+        ]
+      },
+      {
+        "atOrAbove": "45.0.0",
+        "below": "47.7.4",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "CKEditor: Cross-site scripting (XSS) in the engine package",
+          "githubID": "GHSA-rh54-vffm-5fvp",
+          "CVE": [
+            "CVE-2026-116688"
+          ]
+        },
+        "info": [
+          "https://github.com/ckeditor/ckeditor5/security/advisories/GHSA-rh54-vffm-5fvp",
+          "https://github.com/ckeditor/ckeditor5/commit/4d9c5bb34f63cd956d15ccafbe584e14280c86a0",
+          "https://github.com/ckeditor/ckeditor5/commit/a750e38635db6a18c5b11599c09f4fd702850423",
+          "https://github.com/ckeditor/ckeditor5/releases/tag/v47.7.4",
+          "https://github.com/ckeditor/ckeditor5/releases/tag/v48.5.1"
+        ]
+      },
+      {
+        "atOrAbove": "48.0.0",
+        "below": "48.5.1",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "CKEditor: Cross-site scripting (XSS) in the engine package",
+          "githubID": "GHSA-rh54-vffm-5fvp",
+          "CVE": [
+            "CVE-2026-116688"
+          ]
+        },
+        "info": [
+          "https://github.com/ckeditor/ckeditor5/security/advisories/GHSA-rh54-vffm-5fvp",
+          "https://github.com/ckeditor/ckeditor5/commit/4d9c5bb34f63cd956d15ccafbe584e14280c86a0",
+          "https://github.com/ckeditor/ckeditor5/commit/a750e38635db6a18c5b11599c09f4fd702850423",
+          "https://github.com/ckeditor/ckeditor5/releases/tag/v47.7.4",
+          "https://github.com/ckeditor/ckeditor5/releases/tag/v48.5.1"
+        ]
+      },
+      {
+        "atOrAbove": "48.0.0",
+        "below": "48.5.1",
+        "severity": "low",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "CKEditor: Cross-site scripting (XSS) in the engine package",
+          "githubID": "GHSA-v6mg-96c6-gmpq",
+          "CVE": [
+            "CVE-2026-116687"
+          ]
+        },
+        "info": [
+          "https://github.com/ckeditor/ckeditor5/security/advisories/GHSA-v6mg-96c6-gmpq",
+          "https://github.com/ckeditor/ckeditor5/commit/4d9c5bb34f63cd956d15ccafbe584e14280c86a0",
+          "https://github.com/ckeditor/ckeditor5/commit/a750e38635db6a18c5b11599c09f4fd702850423",
+          "https://github.com/ckeditor/ckeditor5/releases/tag/v47.7.4",
+          "https://github.com/ckeditor/ckeditor5/releases/tag/v48.5.1"
+        ]
       }
     ],
     "extractors": {
@@ -7513,7 +8238,7 @@
       ],
       "ast": [
         "//VariableDeclarator[       /:id/:name == \"Vue\"     ]/CallExpression/FunctionExpression/BlockStatement/ReturnStatement/SequenceExpression/AssignmentExpression[       /:left/:property/:name == \"version\"     ]/$:right/:init/:value     ",
-        "//CallExpression[       /:callee//:left/:property/:name == \"Vue\"     ]/:arguments//AssignmentExpression[       /:left/:property/:name == \"version\"     ]/$$:right/:value",
+        "//CallExpression[       /:callee//AssignmentExpression[/:left/:property/:name == \"Vue\"]     ]/:arguments//AssignmentExpression[       /:left/:property/:name == \"version\"     ]/$$:right/:value",
         "//AssignmentExpression[       /:left/:object/:name == \"Vue\" &&       /:left/:property/:name == \"version\"     ]/:right/:value"
       ]
     }
@@ -8434,7 +9159,10 @@
         ],
         "identifiers": {
           "summary": "Axios: Nested axios option objects can consume polluted prototype values",
-          "githubID": "GHSA-7q8q-rj6j-mhjq"
+          "githubID": "GHSA-7q8q-rj6j-mhjq",
+          "CVE": [
+            "CVE-2026-67319"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-7q8q-rj6j-mhjq",
@@ -8456,32 +9184,13 @@
         ],
         "identifiers": {
           "summary": "Axios: Excessive recursion in formDataToJSON can cause denial of service",
-          "githubID": "GHSA-42h9-826w-cgv3"
+          "githubID": "GHSA-42h9-826w-cgv3",
+          "CVE": [
+            "CVE-2026-67313"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-42h9-826w-cgv3",
-          "https://github.com/axios/axios/pull/11000",
-          "https://github.com/axios/axios/pull/11001",
-          "https://github.com/axios/axios/commit/1417285c69344bbcc6420a021f67dee0c6fedb2d",
-          "https://github.com/axios/axios/commit/32fc489632377d214db55bfa4e2c48486a7d7ce2",
-          "https://github.com/axios/axios/releases/tag/v0.33.0",
-          "https://github.com/axios/axios/releases/tag/v1.18.0"
-        ]
-      },
-      {
-        "atOrAbove": "0.28.0",
-        "below": "0.33.0",
-        "severity": "medium",
-        "cwe": [
-          "CWE-400",
-          "CWE-770"
-        ],
-        "identifiers": {
-          "summary": "Axios: Deep formToJSON Key Recursion Can Cause Denial of Service",
-          "githubID": "GHSA-pmv8-rq9r-6j72"
-        },
-        "info": [
-          "https://github.com/axios/axios/security/advisories/GHSA-pmv8-rq9r-6j72",
           "https://github.com/axios/axios/pull/11000",
           "https://github.com/axios/axios/pull/11001",
           "https://github.com/axios/axios/commit/1417285c69344bbcc6420a021f67dee0c6fedb2d",
@@ -8500,7 +9209,10 @@
         ],
         "identifiers": {
           "summary": "Axios: NO_PROXY bypass for 0.0.0.0 local addresses in axios",
-          "githubID": "GHSA-f4gw-2p7v-4548"
+          "githubID": "GHSA-f4gw-2p7v-4548",
+          "CVE": [
+            "CVE-2026-67315"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-f4gw-2p7v-4548",
@@ -8522,7 +9234,10 @@
         ],
         "identifiers": {
           "summary": "Axios Node HTTP adapter can use an inherited proxy after interceptor config cloning",
-          "githubID": "GHSA-gcfj-64vw-6mp9"
+          "githubID": "GHSA-gcfj-64vw-6mp9",
+          "CVE": [
+            "CVE-2026-67320"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-gcfj-64vw-6mp9",
@@ -8543,7 +9258,10 @@
         ],
         "identifiers": {
           "summary": "Axios form serializer maxDepth bypass via {} metatoken",
-          "githubID": "GHSA-hcpx-6fm6-wx23"
+          "githubID": "GHSA-hcpx-6fm6-wx23",
+          "CVE": [
+            "CVE-2026-67321"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-hcpx-6fm6-wx23",
@@ -8564,7 +9282,10 @@
         ],
         "identifiers": {
           "summary": "Axios: Prototype pollution gadgets can alter axios request construction",
-          "githubID": "GHSA-mmx7-hfxf-jppx"
+          "githubID": "GHSA-mmx7-hfxf-jppx",
+          "CVE": [
+            "CVE-2026-67316"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-mmx7-hfxf-jppx",
@@ -8574,6 +9295,76 @@
           "https://github.com/axios/axios/commit/32fc489632377d214db55bfa4e2c48486a7d7ce2",
           "https://github.com/axios/axios/releases/tag/v0.33.0",
           "https://github.com/axios/axios/releases/tag/v1.18.0"
+        ]
+      },
+      {
+        "atOrAbove": "0.28.0",
+        "below": "0.33.0",
+        "severity": "medium",
+        "cwe": [
+          "CWE-400",
+          "CWE-770"
+        ],
+        "identifiers": {
+          "summary": "Axios: Deep formToJSON Key Recursion Can Cause Denial of Service",
+          "githubID": "GHSA-pmv8-rq9r-6j72",
+          "CVE": [
+            "CVE-2026-67312"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-pmv8-rq9r-6j72",
+          "https://github.com/axios/axios/pull/11000",
+          "https://github.com/axios/axios/pull/11001",
+          "https://github.com/axios/axios/commit/1417285c69344bbcc6420a021f67dee0c6fedb2d",
+          "https://github.com/axios/axios/commit/32fc489632377d214db55bfa4e2c48486a7d7ce2",
+          "https://github.com/axios/axios/releases/tag/v0.33.0",
+          "https://github.com/axios/axios/releases/tag/v1.18.0"
+        ]
+      },
+      {
+        "atOrAbove": "0.27.2",
+        "below": "0.34.0",
+        "severity": "medium",
+        "cwe": [
+          "CWE-1321"
+        ],
+        "identifiers": {
+          "summary": "Axios: Prototype-Pollution Gadget in the Default Instance Allows Inherited Object.prototype.method to Override HTTP Method",
+          "githubID": "GHSA-9fr6-4gfg-395g",
+          "CVE": [
+            "CVE-2026-101902"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-9fr6-4gfg-395g",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v0.34.0",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "0.28.0",
+        "below": "0.34.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-1321"
+        ],
+        "identifiers": {
+          "summary": "Axios: Prototype Pollution Gadget in axios toFormData Options",
+          "githubID": "GHSA-x97p-jq2g-jp4f",
+          "CVE": [
+            "CVE-2026-101909"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-x97p-jq2g-jp4f",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/commit/d29be181f85f6fe93397a07b1f69606d9622637b",
+          "https://github.com/axios/axios/releases/tag/v0.34.0",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
         ]
       },
       {
@@ -9208,7 +9999,10 @@
         ],
         "identifiers": {
           "summary": "Axios: Excessive recursion in formDataToJSON can cause denial of service",
-          "githubID": "GHSA-42h9-826w-cgv3"
+          "githubID": "GHSA-42h9-826w-cgv3",
+          "CVE": [
+            "CVE-2026-67313"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-42h9-826w-cgv3",
@@ -9229,7 +10023,10 @@
         ],
         "identifiers": {
           "summary": "Axios: Nested axios option objects can consume polluted prototype values",
-          "githubID": "GHSA-7q8q-rj6j-mhjq"
+          "githubID": "GHSA-7q8q-rj6j-mhjq",
+          "CVE": [
+            "CVE-2026-67319"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-7q8q-rj6j-mhjq",
@@ -9250,7 +10047,10 @@
         ],
         "identifiers": {
           "summary": "Axios: Prototype pollution gadgets can alter axios request construction",
-          "githubID": "GHSA-mmx7-hfxf-jppx"
+          "githubID": "GHSA-mmx7-hfxf-jppx",
+          "CVE": [
+            "CVE-2026-67316"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-mmx7-hfxf-jppx",
@@ -9272,7 +10072,10 @@
         ],
         "identifiers": {
           "summary": "Axios: Deep formToJSON Key Recursion Can Cause Denial of Service",
-          "githubID": "GHSA-pmv8-rq9r-6j72"
+          "githubID": "GHSA-pmv8-rq9r-6j72",
+          "CVE": [
+            "CVE-2026-67312"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-pmv8-rq9r-6j72",
@@ -9293,7 +10096,10 @@
         ],
         "identifiers": {
           "summary": "Axios: Fetch adapter `ReadableStream` uploads bypass `maxBodyLength`",
-          "githubID": "GHSA-jqh4-m9w3-8hp9"
+          "githubID": "GHSA-jqh4-m9w3-8hp9",
+          "CVE": [
+            "CVE-2026-67317"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-jqh4-m9w3-8hp9",
@@ -9311,7 +10117,10 @@
         ],
         "identifiers": {
           "summary": "Axios: HTTP/2 streamed uploads bypass `maxBodyLength`",
-          "githubID": "GHSA-mwf2-3pr3-8698"
+          "githubID": "GHSA-mwf2-3pr3-8698",
+          "CVE": [
+            "CVE-2026-67318"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-mwf2-3pr3-8698",
@@ -9330,7 +10139,10 @@
         ],
         "identifiers": {
           "summary": "Axios: NO_PROXY bypass for 0.0.0.0 local addresses in axios",
-          "githubID": "GHSA-f4gw-2p7v-4548"
+          "githubID": "GHSA-f4gw-2p7v-4548",
+          "CVE": [
+            "CVE-2026-67315"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-f4gw-2p7v-4548",
@@ -9351,7 +10163,10 @@
         ],
         "identifiers": {
           "summary": "Axios form serializer maxDepth bypass via {} metatoken",
-          "githubID": "GHSA-hcpx-6fm6-wx23"
+          "githubID": "GHSA-hcpx-6fm6-wx23",
+          "CVE": [
+            "CVE-2026-67321"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-hcpx-6fm6-wx23",
@@ -9373,7 +10188,10 @@
         ],
         "identifiers": {
           "summary": "Axios Node HTTP adapter can use an inherited proxy after interceptor config cloning",
-          "githubID": "GHSA-gcfj-64vw-6mp9"
+          "githubID": "GHSA-gcfj-64vw-6mp9",
+          "CVE": [
+            "CVE-2026-67320"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-gcfj-64vw-6mp9",
@@ -9394,13 +10212,277 @@
         ],
         "identifiers": {
           "summary": "Axios: Prototype pollution auth subfields can inject Basic auth",
-          "githubID": "GHSA-xj6q-8x83-jv6g"
+          "githubID": "GHSA-xj6q-8x83-jv6g",
+          "CVE": [
+            "CVE-2026-67314"
+          ]
         },
         "info": [
           "https://github.com/axios/axios/security/advisories/GHSA-xj6q-8x83-jv6g",
           "https://github.com/axios/axios/pull/11000",
           "https://github.com/axios/axios/commit/32fc489632377d214db55bfa4e2c48486a7d7ce2",
           "https://github.com/axios/axios/releases/tag/v1.18.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.0.0",
+        "below": "1.20.0",
+        "severity": "medium",
+        "cwe": [
+          "CWE-1321"
+        ],
+        "identifiers": {
+          "summary": "Axios: Prototype-Pollution Gadget in the Default Instance Allows Inherited Object.prototype.method to Override HTTP Method",
+          "githubID": "GHSA-9fr6-4gfg-395g",
+          "CVE": [
+            "CVE-2026-101902"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-9fr6-4gfg-395g",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v0.34.0",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.0.0",
+        "below": "1.20.0",
+        "severity": "medium",
+        "cwe": [
+          "CWE-1321",
+          "CWE-74"
+        ],
+        "identifiers": {
+          "summary": "Axios: Header Injection via Inherited headers After Minimal Interceptor",
+          "githubID": "GHSA-j8rh-479h-cp32",
+          "CVE": [
+            "CVE-2026-101904"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-j8rh-479h-cp32",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.7.0",
+        "below": "1.20.0",
+        "severity": "medium",
+        "cwe": [
+          "CWE-1321"
+        ],
+        "identifiers": {
+          "summary": "Axios: Prototype pollution gadget in fetch adapter can alter outbound requests",
+          "githubID": "GHSA-vh66-26gq-q6x8",
+          "CVE": [
+            "CVE-2026-101908"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-vh66-26gq-q6x8",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.12.0",
+        "below": "1.20.0",
+        "severity": "medium",
+        "cwe": [
+          "CWE-1321",
+          "CWE-693",
+          "CWE-74"
+        ],
+        "identifiers": {
+          "summary": "Axios: Fetch Adapter Header Injection via Inherited FormData getHeaders",
+          "githubID": "GHSA-4hqw-qxg8-jxx2",
+          "CVE": [
+            "CVE-2026-101900"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-4hqw-qxg8-jxx2",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.13.0",
+        "below": "1.20.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-918"
+        ],
+        "identifiers": {
+          "summary": "Axios: HTTP/2 adapter bypasses configured DNS lookup and proxy controls",
+          "githubID": "GHSA-3pq3-5fj3-cg6v",
+          "CVE": [
+            "CVE-2026-101898"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-3pq3-5fj3-cg6v",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.13.0",
+        "below": "1.20.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-400"
+        ],
+        "identifiers": {
+          "summary": "Axios: Denial of Service via Unhandled 'error' Event in HTTP/2 ClientHttp2Session Initialization",
+          "githubID": "GHSA-542g-h47m-68v8",
+          "CVE": [
+            "CVE-2026-101901"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-542g-h47m-68v8",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.15.0",
+        "below": "1.20.0",
+        "severity": "medium",
+        "cwe": [
+          "CWE-693"
+        ],
+        "identifiers": {
+          "summary": "Axios: CIDR-form NO_PROXY entries are ignored, causing proxy exclusion bypass for internal IP ranges",
+          "githubID": "GHSA-44g4-m2mj-wpvx",
+          "CVE": [
+            "CVE-2026-101899"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-44g4-m2mj-wpvx",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.15.0",
+        "below": "1.20.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-1333",
+          "CWE-400"
+        ],
+        "identifiers": {
+          "summary": "Axios: ReDoS (O(N²)) in shouldBypassProxy host normalization, reachable via untrusted redirect Location",
+          "githubID": "GHSA-mghh-pgcx-3jjj",
+          "CVE": [
+            "CVE-2026-101906"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-mghh-pgcx-3jjj",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.15.1",
+        "below": "1.20.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-1321"
+        ],
+        "identifiers": {
+          "summary": "Axios: Prototype Pollution Gadget in axios toFormData Options",
+          "githubID": "GHSA-x97p-jq2g-jp4f",
+          "CVE": [
+            "CVE-2026-101909"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-x97p-jq2g-jp4f",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/commit/d29be181f85f6fe93397a07b1f69606d9622637b",
+          "https://github.com/axios/axios/releases/tag/v0.34.0",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.15.2",
+        "below": "1.20.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-1321",
+          "CWE-441"
+        ],
+        "identifiers": {
+          "summary": "Axios: Node HTTP adapter prototype-pollution gadget allows request socket hijack via inherited createConnection",
+          "githubID": "GHSA-m8m8-qj5v-23w3",
+          "CVE": [
+            "CVE-2026-101905"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-m8m8-qj5v-23w3",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.16.1",
+        "below": "1.20.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-1333"
+        ],
+        "identifiers": {
+          "summary": "Axios: ReDoS in fromDataURI data: URL parser freezes the Node event loop (DoS)",
+          "githubID": "GHSA-c29m-xwm3-cm6r",
+          "CVE": [
+            "CVE-2026-101903"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-c29m-xwm3-cm6r",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
+        ]
+      },
+      {
+        "atOrAbove": "1.17.0",
+        "below": "1.20.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-441",
+          "CWE-601"
+        ],
+        "identifiers": {
+          "summary": "Axios: maxRedirects: 0 is not enforced by the fetch adapter, allowing redirect-based SSRF",
+          "githubID": "GHSA-r4gj-5m52-g5wh",
+          "CVE": [
+            "CVE-2026-101907"
+          ]
+        },
+        "info": [
+          "https://github.com/axios/axios/security/advisories/GHSA-r4gj-5m52-g5wh",
+          "https://github.com/axios/axios/pull/11141",
+          "https://github.com/axios/axios/commit/d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "https://github.com/axios/axios/releases/tag/v1.20.0"
         ]
       }
     ],
@@ -9570,6 +10652,184 @@
         },
         "info": [
           "https://github.com/markdown-it/markdown-it/security/advisories/GHSA-6v5v-wf23-fmfq"
+        ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "14.3.1",
+        "severity": "medium",
+        "cwe": [
+          "CWE-400",
+          "CWE-407"
+        ],
+        "identifiers": {
+          "summary": "markdown-it linkify: true has two quadratic paths, so a few hundred KB of markdown blocks the event loop for tens of seconds",
+          "githubID": "GHSA-253c-mchw-3w2r"
+        },
+        "info": [
+          "https://github.com/markdown-it/markdown-it/security/advisories/GHSA-253c-mchw-3w2r",
+          "https://github.com/markdown-it/markdown-it/commit/09fa07118dda4c953f058848f53dae88395618ca",
+          "https://github.com/markdown-it/markdown-it/commit/aaadcfa6d817b3c5f89afb49d97c7b797a6dd4fd",
+          "https://github.com/markdown-it/markdown-it/commit/ad70f6b7cff64bee10e42a774147112480ca0d49"
+        ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "14.3.2",
+        "severity": "high",
+        "cwe": [
+          "CWE-400",
+          "CWE-407"
+        ],
+        "identifiers": {
+          "summary": "markdown-it: Quadratic complexity in smartquotes with unmatched closing quotes",
+          "githubID": "GHSA-r7fv-28h4-cvq7",
+          "CVE": [
+            "CVE-2026-111759"
+          ]
+        },
+        "info": [
+          "https://github.com/markdown-it/markdown-it/security/advisories/GHSA-r7fv-28h4-cvq7",
+          "https://github.com/markdown-it/markdown-it/commit/1b379c1b6d0522421bd1a51b77337c79af2c8670",
+          "https://github.com/markdown-it/markdown-it/commit/cf27366035edf9196667110c47d9d67b030a4152",
+          "https://github.com/markdown-it/markdown-it/commit/daf5a3c32303e5d9de01b12eeb725fb5990b8162",
+          "https://github.com/markdown-it/markdown-it/releases/tag/14.3.2",
+          "https://github.com/markdown-it/markdown-it/releases/tag/15.0.2"
+        ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "14.3.3",
+        "severity": "low",
+        "cwe": [
+          "CWE-400",
+          "CWE-407"
+        ],
+        "identifiers": {
+          "summary": "markdown-it: Quadratic-time denial of service in inline HTML parsing with html enabled",
+          "githubID": "GHSA-vfgh-jcmw-g37q",
+          "CVE": [
+            "CVE-2026-111766"
+          ]
+        },
+        "info": [
+          "https://github.com/markdown-it/markdown-it/security/advisories/GHSA-vfgh-jcmw-g37q",
+          "https://github.com/markdown-it/markdown-it/commit/928bc8c11ded60181c0e7fc5aa954eec582e8e79",
+          "https://github.com/markdown-it/markdown-it/commit/d99f48839d37af6fd8a2617516c43dab90755503",
+          "https://github.com/markdown-it/markdown-it/releases/tag/14.3.3",
+          "https://github.com/markdown-it/markdown-it/releases/tag/15.0.3"
+        ]
+      },
+      {
+        "atOrAbove": "14.1.0",
+        "below": "14.3.3",
+        "severity": "high",
+        "cwe": [
+          "CWE-400",
+          "CWE-407"
+        ],
+        "identifiers": {
+          "summary": "markdown-it: Quadratic-time rendering of a single multi-line link reference definition with default options (regression since 14.0)",
+          "githubID": "GHSA-gfr2-rv44-r23c",
+          "CVE": [
+            "CVE-2026-111758"
+          ]
+        },
+        "info": [
+          "https://github.com/markdown-it/markdown-it/security/advisories/GHSA-gfr2-rv44-r23c",
+          "https://github.com/markdown-it/markdown-it/commit/48fbc465812c440020c663f040ab22deaf8f1eca",
+          "https://github.com/markdown-it/markdown-it/commit/d99f48839d37af6fd8a2617516c43dab90755503",
+          "https://github.com/markdown-it/markdown-it/releases/tag/14.3.3",
+          "https://github.com/markdown-it/markdown-it/releases/tag/15.0.3"
+        ]
+      },
+      {
+        "atOrAbove": "15.0.0",
+        "below": "15.0.1",
+        "severity": "medium",
+        "cwe": [
+          "CWE-400",
+          "CWE-407"
+        ],
+        "identifiers": {
+          "summary": "markdown-it linkify: true has two quadratic paths, so a few hundred KB of markdown blocks the event loop for tens of seconds",
+          "githubID": "GHSA-253c-mchw-3w2r"
+        },
+        "info": [
+          "https://github.com/markdown-it/markdown-it/security/advisories/GHSA-253c-mchw-3w2r",
+          "https://github.com/markdown-it/markdown-it/commit/09fa07118dda4c953f058848f53dae88395618ca",
+          "https://github.com/markdown-it/markdown-it/commit/aaadcfa6d817b3c5f89afb49d97c7b797a6dd4fd",
+          "https://github.com/markdown-it/markdown-it/commit/ad70f6b7cff64bee10e42a774147112480ca0d49"
+        ]
+      },
+      {
+        "atOrAbove": "15.0.0",
+        "below": "15.0.2",
+        "severity": "high",
+        "cwe": [
+          "CWE-400",
+          "CWE-407"
+        ],
+        "identifiers": {
+          "summary": "markdown-it: Quadratic complexity in smartquotes with unmatched closing quotes",
+          "githubID": "GHSA-r7fv-28h4-cvq7",
+          "CVE": [
+            "CVE-2026-111759"
+          ]
+        },
+        "info": [
+          "https://github.com/markdown-it/markdown-it/security/advisories/GHSA-r7fv-28h4-cvq7",
+          "https://github.com/markdown-it/markdown-it/commit/1b379c1b6d0522421bd1a51b77337c79af2c8670",
+          "https://github.com/markdown-it/markdown-it/commit/cf27366035edf9196667110c47d9d67b030a4152",
+          "https://github.com/markdown-it/markdown-it/commit/daf5a3c32303e5d9de01b12eeb725fb5990b8162",
+          "https://github.com/markdown-it/markdown-it/releases/tag/14.3.2",
+          "https://github.com/markdown-it/markdown-it/releases/tag/15.0.2"
+        ]
+      },
+      {
+        "atOrAbove": "15.0.0",
+        "below": "15.0.3",
+        "severity": "high",
+        "cwe": [
+          "CWE-400",
+          "CWE-407"
+        ],
+        "identifiers": {
+          "summary": "markdown-it: Quadratic-time rendering of a single multi-line link reference definition with default options (regression since 14.0)",
+          "githubID": "GHSA-gfr2-rv44-r23c",
+          "CVE": [
+            "CVE-2026-111758"
+          ]
+        },
+        "info": [
+          "https://github.com/markdown-it/markdown-it/security/advisories/GHSA-gfr2-rv44-r23c",
+          "https://github.com/markdown-it/markdown-it/commit/48fbc465812c440020c663f040ab22deaf8f1eca",
+          "https://github.com/markdown-it/markdown-it/commit/d99f48839d37af6fd8a2617516c43dab90755503",
+          "https://github.com/markdown-it/markdown-it/releases/tag/14.3.3",
+          "https://github.com/markdown-it/markdown-it/releases/tag/15.0.3"
+        ]
+      },
+      {
+        "atOrAbove": "15.0.0",
+        "below": "15.0.3",
+        "severity": "low",
+        "cwe": [
+          "CWE-400",
+          "CWE-407"
+        ],
+        "identifiers": {
+          "summary": "markdown-it: Quadratic-time denial of service in inline HTML parsing with html enabled",
+          "githubID": "GHSA-vfgh-jcmw-g37q",
+          "CVE": [
+            "CVE-2026-111766"
+          ]
+        },
+        "info": [
+          "https://github.com/markdown-it/markdown-it/security/advisories/GHSA-vfgh-jcmw-g37q",
+          "https://github.com/markdown-it/markdown-it/commit/928bc8c11ded60181c0e7fc5aa954eec582e8e79",
+          "https://github.com/markdown-it/markdown-it/commit/d99f48839d37af6fd8a2617516c43dab90755503",
+          "https://github.com/markdown-it/markdown-it/releases/tag/14.3.3",
+          "https://github.com/markdown-it/markdown-it/releases/tag/15.0.3"
         ]
       }
     ],
@@ -11977,7 +13237,8 @@
         "below": "15.5.18",
         "severity": "high",
         "cwe": [
-          "CWE-288"
+          "CWE-288",
+          "CWE-358"
         ],
         "identifiers": {
           "summary": "The fix for CVE-2026-44575 (middleware authorization bypass) was not applied to middleware.ts when using Turbopack. Applications using Turbopack for compilation remain vulnerable to the same middleware bypass as described in that advisory.",
@@ -12167,6 +13428,204 @@
           "https://github.com/vercel/next.js/commit/93cb90891402fa4c47798d03cb9e05c13233766c",
           "https://github.com/vercel/next.js/releases/tag/v15.5.21",
           "https://github.com/vercel/next.js/releases/tag/v16.2.11"
+        ]
+      },
+      {
+        "atOrAbove": "10.0.0",
+        "below": "15.5.24",
+        "severity": "critical",
+        "cwe": [
+          "CWE-1395"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Unauthenticated Remote Code Execution in Image Optimization API when AVIF files are used",
+          "githubID": "GHSA-2xp9-vwfh-vxw4"
+        },
+        "info": [
+          "https://github.com/strukturag/libheif/security/advisories/GHSA-g89c-p67h-r497",
+          "https://github.com/vercel/next.js/security/advisories/GHSA-2xp9-vwfh-vxw4",
+          "https://github.com/vercel/next.js/pull/97875",
+          "https://github.com/vercel/next.js/pull/97931",
+          "https://github.com/vercel/next.js/commit/3a15b4ac6ac8e70b1a9b18ecc18e8434462899b3",
+          "https://github.com/vercel/next.js/commit/409772ec807def20132d251ad48fd8d8ad4c73c2",
+          "https://github.com/vercel/next.js/commit/7a5937a8ab20b89d0a961f75eabb11577f5d5998",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.24",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.3"
+        ]
+      },
+      {
+        "atOrAbove": "13.4.0",
+        "below": "15.5.24",
+        "severity": "critical",
+        "cwe": [
+          "CWE-22"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Unauthenticated Remote Code Execution on windows-hosted servers",
+          "githubID": "GHSA-p293-qw3h-jr36",
+          "CVE": [
+            "CVE-2026-75604"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-p293-qw3h-jr36",
+          "https://github.com/vercel/next.js/commit/968b9fcb26bdeb8e0a861a9df05361474666d51b",
+          "https://github.com/vercel/next.js/commit/b0f3460a92b955d3ca41fccff9a525a2b910fbf3",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.24",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.3"
+        ]
+      },
+      {
+        "atOrAbove": "15.0.0",
+        "below": "15.5.27",
+        "severity": "medium",
+        "cwe": [
+          "CWE-524"
+        ],
+        "identifiers": {
+          "summary": "Next.js has cache poisoning of SSG and ISR pages in self-hosted applications",
+          "githubID": "GHSA-4jqv-mc3x-m676",
+          "CVE": [
+            "CVE-2026-94543"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-4jqv-mc3x-m676",
+          "https://github.com/vercel/next.js/commit/52c94abdd2ea5f416f5e8353ea8a2edd3fe311b8",
+          "https://github.com/vercel/next.js/commit/719e4c67d6e92df60246f95e1d96e2dd60789a52",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.27",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.8"
+        ]
+      },
+      {
+        "atOrAbove": "15.0.0",
+        "below": "15.5.27",
+        "severity": "medium",
+        "cwe": [
+          "CWE-524"
+        ],
+        "identifiers": {
+          "summary": "Next.js has cache poisoning in SSG/ISR rendering that leads to cross-user content substitution and persistent denial of service",
+          "githubID": "GHSA-mcj8-r9mp-w47p",
+          "CVE": [
+            "CVE-2026-94484"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-mcj8-r9mp-w47p",
+          "https://github.com/vercel/next.js/commit/52c94abdd2ea5f416f5e8353ea8a2edd3fe311b8",
+          "https://github.com/vercel/next.js/commit/719e4c67d6e92df60246f95e1d96e2dd60789a52",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.27",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.8"
+        ]
+      },
+      {
+        "atOrAbove": "10.0.0",
+        "below": "15.5.28",
+        "severity": "critical",
+        "cwe": [
+          "CWE-1395"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Unauthenticated Remote Code Execution in Image Optimization API when SVG files are used",
+          "githubID": "GHSA-2464-fhr4-w9xw"
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-2464-fhr4-w9xw",
+          "https://github.com/vercel/next.js/commit/5e3b687b5edb868b064bdc058d768a7021e7f6ad",
+          "https://github.com/vercel/next.js/commit/9571ec899f063df6533351bec390ccb2cc0af6a3",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.28",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.1"
+        ]
+      },
+      {
+        "atOrAbove": "13.0.0",
+        "below": "15.5.28",
+        "severity": "high",
+        "cwe": [
+          "CWE-770"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Denial of Service in App Router using Server Actions",
+          "githubID": "GHSA-p3m5-59mp-jv5r",
+          "CVE": [
+            "CVE-2026-94482"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-p3m5-59mp-jv5r",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.28",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.1"
+        ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "15.5.29",
+        "severity": "medium",
+        "cwe": [
+          "CWE-444"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Cross-client response injection and disclosure in self-hosted Next.js applications forwarding fetched responses",
+          "githubID": "GHSA-pc58-hwjq-p385",
+          "CVE": [
+            "CVE-2026-119348"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-pc58-hwjq-p385",
+          "https://github.com/vercel/next.js/commit/2842833be3a5a1e5fef0c5fb8c96df74742eef2a",
+          "https://github.com/vercel/next.js/commit/848ec29a3fbe68c02edb022efe19b04356997c32",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.29",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.5",
+          "https://nextjs.org/blog/november-2026-security-release"
+        ]
+      },
+      {
+        "atOrAbove": "15.0.0",
+        "below": "15.5.29",
+        "severity": "medium",
+        "cwe": [
+          "CWE-1287"
+        ],
+        "identifiers": {
+          "summary": "Next.js: SVG rejection bypass in the image optimization",
+          "githubID": "GHSA-7qx7-33qx-rqx2",
+          "CVE": [
+            "CVE-2026-119347"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-7qx7-33qx-rqx2",
+          "https://github.com/vercel/next.js/commit/4f133352e639589ad9872b9b55307b89b258e41b",
+          "https://github.com/vercel/next.js/commit/e66e656e7d423a828bdca5f87e82cef7038c57a6",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.29",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.5",
+          "https://nextjs.org/blog/november-2026-security-release"
+        ]
+      },
+      {
+        "atOrAbove": "15.0.0",
+        "below": "15.5.29",
+        "severity": "medium",
+        "cwe": [
+          "CWE-200",
+          "CWE-201"
+        ],
+        "identifiers": {
+          "summary": "Next.js: HttpOnly cookie exposure through internal response header on Next.js Edge runtime routes",
+          "githubID": "GHSA-f3mh-rxg3-f5g2",
+          "CVE": [
+            "CVE-2026-119346"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-f3mh-rxg3-f5g2",
+          "https://github.com/vercel/next.js/commit/809be725f033ec7aa4c658ba2b7a084cb039d1f2",
+          "https://github.com/vercel/next.js/commit/9fc04bd869ded4900bed7d069832aa2c5f56fa29",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.29",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.5",
+          "https://nextjs.org/blog/november-2026-security-release"
         ]
       },
       {
@@ -12839,7 +14298,8 @@
         "below": "16.2.6",
         "severity": "high",
         "cwe": [
-          "CWE-288"
+          "CWE-288",
+          "CWE-358"
         ],
         "identifiers": {
           "summary": "The fix for CVE-2026-44575 (middleware authorization bypass) was not applied to middleware.ts when using Turbopack. Applications using Turbopack for compilation remain vulnerable to the same middleware bypass as described in that advisory.",
@@ -13050,6 +14510,423 @@
           "https://github.com/vercel/next.js/commit/93cb90891402fa4c47798d03cb9e05c13233766c",
           "https://github.com/vercel/next.js/releases/tag/v15.5.21",
           "https://github.com/vercel/next.js/releases/tag/v16.2.11"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.3.3",
+        "severity": "critical",
+        "cwe": [
+          "CWE-1395"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Unauthenticated Remote Code Execution in Image Optimization API when AVIF files are used",
+          "githubID": "GHSA-2xp9-vwfh-vxw4"
+        },
+        "info": [
+          "https://github.com/strukturag/libheif/security/advisories/GHSA-g89c-p67h-r497",
+          "https://github.com/vercel/next.js/security/advisories/GHSA-2xp9-vwfh-vxw4",
+          "https://github.com/vercel/next.js/pull/97875",
+          "https://github.com/vercel/next.js/pull/97931",
+          "https://github.com/vercel/next.js/commit/3a15b4ac6ac8e70b1a9b18ecc18e8434462899b3",
+          "https://github.com/vercel/next.js/commit/409772ec807def20132d251ad48fd8d8ad4c73c2",
+          "https://github.com/vercel/next.js/commit/7a5937a8ab20b89d0a961f75eabb11577f5d5998",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.24",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.3"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.3.3",
+        "severity": "critical",
+        "cwe": [
+          "CWE-22"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Unauthenticated Remote Code Execution on windows-hosted servers",
+          "githubID": "GHSA-p293-qw3h-jr36",
+          "CVE": [
+            "CVE-2026-75604"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-p293-qw3h-jr36",
+          "https://github.com/vercel/next.js/commit/968b9fcb26bdeb8e0a861a9df05361474666d51b",
+          "https://github.com/vercel/next.js/commit/b0f3460a92b955d3ca41fccff9a525a2b910fbf3",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.24",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.3"
+        ]
+      },
+      {
+        "atOrAbove": "16.2.0",
+        "below": "16.3.6",
+        "severity": "critical",
+        "cwe": [
+          "CWE-1395"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Remote Code Execution in next/og ImageResponse",
+          "githubID": "GHSA-vcvr-r3jv-pc5j"
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-vcvr-r3jv-pc5j",
+          "https://github.com/vercel/satori/security/advisories/GHSA-wx4j-mvgx-mqwp",
+          "https://github.com/vercel/next.js/commit/868fad38690d72088868f299fa2bef339b26838e",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.6"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.3.8",
+        "severity": "low",
+        "cwe": [
+          "CWE-346"
+        ],
+        "identifiers": {
+          "summary": "Next.js has information disclosure in development server's Model Context Protocol endpoint",
+          "githubID": "GHSA-39w2-rjm5-chcv",
+          "CVE": [
+            "CVE-2026-94486"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-39w2-rjm5-chcv",
+          "https://github.com/vercel/next.js/commit/2d9f50a409312696145b82b3157aadb6b1fef476",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.8"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.3.8",
+        "severity": "medium",
+        "cwe": [
+          "CWE-524"
+        ],
+        "identifiers": {
+          "summary": "Next.js has cache poisoning of SSG and ISR pages in self-hosted applications",
+          "githubID": "GHSA-4jqv-mc3x-m676",
+          "CVE": [
+            "CVE-2026-94543"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-4jqv-mc3x-m676",
+          "https://github.com/vercel/next.js/commit/52c94abdd2ea5f416f5e8353ea8a2edd3fe311b8",
+          "https://github.com/vercel/next.js/commit/719e4c67d6e92df60246f95e1d96e2dd60789a52",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.27",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.8"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.3.8",
+        "severity": "high",
+        "cwe": [
+          "CWE-918"
+        ],
+        "identifiers": {
+          "summary": "Next.js has Server-Side Request Forgery in Image Optimization",
+          "githubID": "GHSA-cjq9-62q9-8jv4",
+          "CVE": [
+            "CVE-2026-94483"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-cjq9-62q9-8jv4",
+          "https://github.com/vercel/next.js/commit/e002ad68bd676bb0ed0c87bb22e3590304763e0b",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.8"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.3.8",
+        "severity": "medium",
+        "cwe": [
+          "CWE-346"
+        ],
+        "identifiers": {
+          "summary": "Next.js has information disclosure in App Router metadata image routes via dynamicParams bypass",
+          "githubID": "GHSA-f87g-xv8r-7p7x",
+          "CVE": [
+            "CVE-2026-94485"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-f87g-xv8r-7p7x",
+          "https://github.com/vercel/next.js/commit/2d9f50a409312696145b82b3157aadb6b1fef476",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.8"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.3.8",
+        "severity": "medium",
+        "cwe": [
+          "CWE-524"
+        ],
+        "identifiers": {
+          "summary": "Next.js has cache poisoning in SSG/ISR rendering that leads to cross-user content substitution and persistent denial of service",
+          "githubID": "GHSA-mcj8-r9mp-w47p",
+          "CVE": [
+            "CVE-2026-94484"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-mcj8-r9mp-w47p",
+          "https://github.com/vercel/next.js/commit/52c94abdd2ea5f416f5e8353ea8a2edd3fe311b8",
+          "https://github.com/vercel/next.js/commit/719e4c67d6e92df60246f95e1d96e2dd60789a52",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.27",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.8"
+        ]
+      },
+      {
+        "atOrAbove": "16.3.0",
+        "below": "16.3.8",
+        "severity": "medium",
+        "cwe": [
+          "CWE-524"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Pending `use cache` fill can leak Draft Mode content into regular responses and persisted pages",
+          "githubID": "GHSA-3w37-wq28-93x7",
+          "CVE": [
+            "CVE-2026-94544"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-3w37-wq28-93x7",
+          "https://github.com/vercel/next.js/commit/bd9214f9a32854a011bf5fe58e481dffe1bbf598",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.8"
+        ]
+      },
+      {
+        "atOrAbove": "16.3.0",
+        "below": "16.3.8",
+        "severity": "medium",
+        "cwe": [
+          "CWE-524"
+        ],
+        "identifiers": {
+          "summary": "next.js cache leak across root param values in nested 'use cache' functions",
+          "githubID": "GHSA-h694-7cp9-m8p3",
+          "CVE": [
+            "CVE-2026-103004"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-h694-7cp9-m8p3",
+          "https://github.com/vercel/next.js/commit/e92db4536a7f34ae2dbda583cfa1b4e0d06d1865",
+          "https://github.com/vercel/next.js/releases/tag/v16.3.8"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.4.1",
+        "severity": "critical",
+        "cwe": [
+          "CWE-1395"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Unauthenticated Remote Code Execution in Image Optimization API when SVG files are used",
+          "githubID": "GHSA-2464-fhr4-w9xw"
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-2464-fhr4-w9xw",
+          "https://github.com/vercel/next.js/commit/5e3b687b5edb868b064bdc058d768a7021e7f6ad",
+          "https://github.com/vercel/next.js/commit/9571ec899f063df6533351bec390ccb2cc0af6a3",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.28",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.1"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.4.1",
+        "severity": "critical",
+        "cwe": [
+          "CWE-502"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Unauthenticated Remote Code Execution in `use cache` functions returning typed arrays",
+          "githubID": "GHSA-673q-mjm6-r5xr"
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-673q-mjm6-r5xr",
+          "https://github.com/vercel/next.js/commit/a4cea6aec5da89d116b8960e113189cf51745d2f",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.1"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.4.1",
+        "severity": "high",
+        "cwe": [
+          "CWE-770"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Denial of Service in App Router using Server Actions",
+          "githubID": "GHSA-p3m5-59mp-jv5r",
+          "CVE": [
+            "CVE-2026-94482"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-p3m5-59mp-jv5r",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.28",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.1"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.4.5",
+        "severity": "medium",
+        "cwe": [
+          "CWE-1287"
+        ],
+        "identifiers": {
+          "summary": "Next.js: SVG rejection bypass in the image optimization",
+          "githubID": "GHSA-7qx7-33qx-rqx2",
+          "CVE": [
+            "CVE-2026-119347"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-7qx7-33qx-rqx2",
+          "https://github.com/vercel/next.js/commit/4f133352e639589ad9872b9b55307b89b258e41b",
+          "https://github.com/vercel/next.js/commit/e66e656e7d423a828bdca5f87e82cef7038c57a6",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.29",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.5",
+          "https://nextjs.org/blog/november-2026-security-release"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.4.5",
+        "severity": "medium",
+        "cwe": [
+          "CWE-200",
+          "CWE-201"
+        ],
+        "identifiers": {
+          "summary": "Next.js: HttpOnly cookie exposure through internal response header on Next.js Edge runtime routes",
+          "githubID": "GHSA-f3mh-rxg3-f5g2",
+          "CVE": [
+            "CVE-2026-119346"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-f3mh-rxg3-f5g2",
+          "https://github.com/vercel/next.js/commit/809be725f033ec7aa4c658ba2b7a084cb039d1f2",
+          "https://github.com/vercel/next.js/commit/9fc04bd869ded4900bed7d069832aa2c5f56fa29",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.29",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.5",
+          "https://nextjs.org/blog/november-2026-security-release"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.4.5",
+        "severity": "medium",
+        "cwe": [
+          "CWE-444"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Cross-client response injection and disclosure in self-hosted Next.js applications forwarding fetched responses",
+          "githubID": "GHSA-pc58-hwjq-p385",
+          "CVE": [
+            "CVE-2026-119348"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-pc58-hwjq-p385",
+          "https://github.com/vercel/next.js/commit/2842833be3a5a1e5fef0c5fb8c96df74742eef2a",
+          "https://github.com/vercel/next.js/commit/848ec29a3fbe68c02edb022efe19b04356997c32",
+          "https://github.com/vercel/next.js/releases/tag/v15.5.29",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.5",
+          "https://nextjs.org/blog/november-2026-security-release"
+        ]
+      },
+      {
+        "atOrAbove": "16.0.0",
+        "below": "16.4.5",
+        "severity": "medium",
+        "cwe": [
+          "CWE-694"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Cross-user cache disclosure and poisoning in Next.js use cache with binary arguments",
+          "githubID": "GHSA-rhh4-g77r-r9qj",
+          "CVE": [
+            "CVE-2026-119349"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-rhh4-g77r-r9qj",
+          "https://github.com/vercel/next.js/commit/6596840a0fa3c2633735b05e41ca3d9ab01ece41",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.5",
+          "https://nextjs.org/blog/november-2026-security-release"
+        ]
+      },
+      {
+        "atOrAbove": "16.2.0",
+        "below": "16.4.5",
+        "severity": "medium",
+        "cwe": [
+          "CWE-362"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Cache leak across root param values in nested 'use cache' functions via delayed inner stream metadata",
+          "githubID": "GHSA-vc7v-qv4w-wrv8",
+          "CVE": [
+            "CVE-2026-119351"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-vc7v-qv4w-wrv8",
+          "https://github.com/vercel/next.js/commit/80c96ede21798d4ad54da12fe50d5b00a09b06e3",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.5",
+          "https://nextjs.org/blog/november-2026-security-release"
+        ]
+      },
+      {
+        "atOrAbove": "16.3.0",
+        "below": "16.4.5",
+        "severity": "medium",
+        "cwe": [
+          "CWE-362"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Information disclosure across root params when a 'use cache' function is called through unstable_cache()",
+          "githubID": "GHSA-mfr8-8qww-v76h",
+          "CVE": [
+            "CVE-2026-119790"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-mfr8-8qww-v76h",
+          "https://github.com/vercel/next.js/commit/d605874e5a4b8b6b7dca1b6e07bcabb44d0e2e5b",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.5",
+          "https://nextjs.org/blog/november-2026-security-release"
+        ]
+      },
+      {
+        "atOrAbove": "16.4.0",
+        "below": "16.4.5",
+        "severity": "medium",
+        "cwe": [
+          "CWE-349"
+        ],
+        "identifiers": {
+          "summary": "Next.js: Cache poisoning of shared fallback shells in Cache Components via request-supplied placeholder route params",
+          "githubID": "GHSA-vvgp-ww4w-46vf",
+          "CVE": [
+            "CVE-2026-119350"
+          ]
+        },
+        "info": [
+          "https://github.com/vercel/next.js/security/advisories/GHSA-vvgp-ww4w-46vf",
+          "https://github.com/vercel/next.js/commit/18eeffb5fabd91911852d44cf56948b3f2cbee04",
+          "https://github.com/vercel/next.js/releases/tag/v16.4.5",
+          "https://nextjs.org/blog/november-2026-security-release"
         ]
       }
     ],
@@ -13359,6 +15236,313 @@
         "info": [
           "https://security.snyk.io/vuln/SNYK-JS-HIGHCHARTS-1290057"
         ]
+      },
+      {
+        "atOrAbove": "0",
+        "below": "11.4.9",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts: `javascript:` URL in credits.href runs script on click",
+          "githubID": "GHSA-5793-x2q3-c3q7",
+          "CVE": [
+            "CVE-2026-118251"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-5793-x2q3-c3q7",
+          "https://github.com/highcharts/highcharts/pull/25315",
+          "https://github.com/highcharts/highcharts/commit/9534773d0f41400aac0945bf8aaebc38dfc72aff",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "6.1.0",
+        "below": "11.4.9",
+        "severity": "high",
+        "cwe": [
+          "CWE-1321"
+        ],
+        "identifiers": {
+          "summary": "Highcharts: dotted series.keys paths write to Object.prototype",
+          "githubID": "GHSA-rmqc-xvr3-v46c",
+          "CVE": [
+            "CVE-2026-118250"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-rmqc-xvr3-v46c",
+          "https://github.com/highcharts/highcharts/pull/25313",
+          "https://github.com/highcharts/highcharts/commit/fd4ee8140732618bbe71295aba55398fb1f8fa9e",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "10.0.0",
+        "below": "11.4.9",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts Core: `breadcrumbs.style` keys become SVG event-handler attributes",
+          "githubID": "GHSA-35rr-xwfh-x789",
+          "CVE": [
+            "CVE-2026-118246"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-35rr-xwfh-x789",
+          "https://github.com/highcharts/highcharts/commit/b0fafdaaee7d0cac2ecfeb0eaf37b11cd40594ef",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "10.3.2",
+        "below": "11.4.9",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts Core: `javascript:` URL in an `xlink:href` attribute survives text filtering and reaches exported charts",
+          "githubID": "GHSA-mw4f-gj5x-6xr4",
+          "CVE": [
+            "CVE-2026-116796"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-mw4f-gj5x-6xr4",
+          "https://github.com/highcharts/highcharts/commit/6cf359fb144aa51fdc105e2b9bbd013439b02c88",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.1"
+        ]
+      },
+      {
+        "atOrAbove": "12.0.0",
+        "below": "12.6.1",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts Core: `breadcrumbs.style` keys become SVG event-handler attributes",
+          "githubID": "GHSA-35rr-xwfh-x789",
+          "CVE": [
+            "CVE-2026-118246"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-35rr-xwfh-x789",
+          "https://github.com/highcharts/highcharts/commit/b0fafdaaee7d0cac2ecfeb0eaf37b11cd40594ef",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "12.0.0",
+        "below": "12.6.1",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts: `javascript:` URL in credits.href runs script on click",
+          "githubID": "GHSA-5793-x2q3-c3q7",
+          "CVE": [
+            "CVE-2026-118251"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-5793-x2q3-c3q7",
+          "https://github.com/highcharts/highcharts/pull/25315",
+          "https://github.com/highcharts/highcharts/commit/9534773d0f41400aac0945bf8aaebc38dfc72aff",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "12.0.0",
+        "below": "12.6.1",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts Core: HTML text parsing falls back to unfiltered `innerHTML` during printing",
+          "githubID": "GHSA-65hg-cf3f-5m39",
+          "CVE": [
+            "CVE-2026-118244"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-65hg-cf3f-5m39",
+          "https://github.com/highcharts/highcharts/commit/abde7c576793bf50b0e0636e59b49630de6dd0d5",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "12.0.0",
+        "below": "12.6.1",
+        "severity": "high",
+        "cwe": [
+          "CWE-1321"
+        ],
+        "identifiers": {
+          "summary": "Highcharts: dotted series.keys paths write to Object.prototype",
+          "githubID": "GHSA-rmqc-xvr3-v46c",
+          "CVE": [
+            "CVE-2026-118250"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-rmqc-xvr3-v46c",
+          "https://github.com/highcharts/highcharts/pull/25313",
+          "https://github.com/highcharts/highcharts/commit/fd4ee8140732618bbe71295aba55398fb1f8fa9e",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "12.0.0",
+        "below": "12.6.2",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts Core: `javascript:` URL in an `xlink:href` attribute survives text filtering and reaches exported charts",
+          "githubID": "GHSA-mw4f-gj5x-6xr4",
+          "CVE": [
+            "CVE-2026-116796"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-mw4f-gj5x-6xr4",
+          "https://github.com/highcharts/highcharts/commit/6cf359fb144aa51fdc105e2b9bbd013439b02c88",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.1"
+        ]
+      },
+      {
+        "atOrAbove": "13.0.0",
+        "below": "13.1.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts Core: `breadcrumbs.style` keys become SVG event-handler attributes",
+          "githubID": "GHSA-35rr-xwfh-x789",
+          "CVE": [
+            "CVE-2026-118246"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-35rr-xwfh-x789",
+          "https://github.com/highcharts/highcharts/commit/b0fafdaaee7d0cac2ecfeb0eaf37b11cd40594ef",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "13.0.0",
+        "below": "13.1.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts: `javascript:` URL in credits.href runs script on click",
+          "githubID": "GHSA-5793-x2q3-c3q7",
+          "CVE": [
+            "CVE-2026-118251"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-5793-x2q3-c3q7",
+          "https://github.com/highcharts/highcharts/pull/25315",
+          "https://github.com/highcharts/highcharts/commit/9534773d0f41400aac0945bf8aaebc38dfc72aff",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "13.0.0",
+        "below": "13.1.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts Core: HTML text parsing falls back to unfiltered `innerHTML` during printing",
+          "githubID": "GHSA-65hg-cf3f-5m39",
+          "CVE": [
+            "CVE-2026-118244"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-65hg-cf3f-5m39",
+          "https://github.com/highcharts/highcharts/commit/abde7c576793bf50b0e0636e59b49630de6dd0d5",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "13.0.0",
+        "below": "13.1.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-1321"
+        ],
+        "identifiers": {
+          "summary": "Highcharts: series column construction writes to Object.prototype",
+          "githubID": "GHSA-gfvx-2c2g-38wq",
+          "CVE": [
+            "CVE-2026-118249"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-gfvx-2c2g-38wq",
+          "https://github.com/highcharts/highcharts/pull/25321",
+          "https://github.com/highcharts/highcharts/commit/d3357705c8f348904441327e32f50ab528c3a205",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "13.0.0",
+        "below": "13.1.0",
+        "severity": "high",
+        "cwe": [
+          "CWE-1321"
+        ],
+        "identifiers": {
+          "summary": "Highcharts: dotted series.keys paths write to Object.prototype",
+          "githubID": "GHSA-rmqc-xvr3-v46c",
+          "CVE": [
+            "CVE-2026-118250"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-rmqc-xvr3-v46c",
+          "https://github.com/highcharts/highcharts/pull/25313",
+          "https://github.com/highcharts/highcharts/commit/fd4ee8140732618bbe71295aba55398fb1f8fa9e",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.0"
+        ]
+      },
+      {
+        "atOrAbove": "13.0.0",
+        "below": "13.1.1",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "Highcharts Core: `javascript:` URL in an `xlink:href` attribute survives text filtering and reaches exported charts",
+          "githubID": "GHSA-mw4f-gj5x-6xr4",
+          "CVE": [
+            "CVE-2026-116796"
+          ]
+        },
+        "info": [
+          "https://github.com/highcharts/highcharts/security/advisories/GHSA-mw4f-gj5x-6xr4",
+          "https://github.com/highcharts/highcharts/commit/6cf359fb144aa51fdc105e2b9bbd013439b02c88",
+          "https://github.com/highcharts/highcharts/releases/tag/v13.1.1"
+        ]
       }
     ],
     "extractors": {
@@ -13631,8 +15815,7 @@
         "identifiers": {
           "summary": "Command Injection in lodash",
           "CVE": [
-            "CVE-2021-23337",
-            "CVE-2026-4800"
+            "CVE-2021-23337"
           ],
           "githubID": "GHSA-35jh-r3h4-6jhm"
         },
@@ -13705,33 +15888,12 @@
           "summary": "Lodash versions 4.0.0 through 4.17.22 are vulnerable to prototype pollution via the _.unset and _.omit functions. An attacker can pass crafted paths to delete methods from global prototypes such as Object.prototype, though the issue only permits deletion and not overwriting of properties.",
           "githubID": "GHSA-xxjr-mmjv-4gpg",
           "CVE": [
-            "CVE-2025-13465",
-            "CVE-2026-2950"
+            "CVE-2025-13465"
           ]
         },
         "info": [
           "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg",
           "https://github.com/lodash/lodash/commit/edadd452146f7e4bad4ea684e955708931d84d81"
-        ]
-      },
-      {
-        "atOrAbove": "0",
-        "below": "4.18.0",
-        "severity": "medium",
-        "cwe": [
-          "CWE-1321"
-        ],
-        "identifiers": {
-          "summary": "Lodash 4.17.23 and earlier are vulnerable to a prototype pollution bypass in _.unset and _.omit. The fix for CVE-2025-13465 only guards against string key members, so attackers can bypass it by passing array-wrapped path segments to delete properties from built-in prototypes including Object.prototype, Number.prototype, and String.prototype.",
-          "githubID": "GHSA-f23m-r3pf-42rh",
-          "CVE": [
-            "CVE-2025-13465",
-            "CVE-2026-2950"
-          ]
-        },
-        "info": [
-          "https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh",
-          "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg"
         ]
       },
       {
@@ -13745,7 +15907,6 @@
           "summary": "Lodash _.template is vulnerable to code injection via unsanitized options.imports key names. Untrusted key names are passed to the Function() constructor sink without validation, and the use of assignInWith (which enumerates inherited properties) also means that pre-existing prototype pollution on Object.prototype can flow into the Function() sink and execute arbitrary code at template compilation time.",
           "githubID": "GHSA-r5fr-rjxr-66jc",
           "CVE": [
-            "CVE-2021-23337",
             "CVE-2026-4800"
           ]
         },
@@ -13753,6 +15914,25 @@
           "https://github.com/lodash/lodash/security/advisories/GHSA-r5fr-rjxr-66jc",
           "https://github.com/lodash/lodash/commit/3469357cff396a26c363f8c1b5a91dde28ba4b1c",
           "https://cna.openjsf.org/security-advisories.html"
+        ]
+      },
+      {
+        "atOrAbove": "4.17.23",
+        "below": "4.18.1",
+        "severity": "medium",
+        "cwe": [
+          "CWE-1321"
+        ],
+        "identifiers": {
+          "summary": "Lodash 4.17.23 and earlier are vulnerable to a prototype pollution bypass in _.unset and _.omit. The fix for CVE-2025-13465 only guards against string key members, so attackers can bypass it by passing array-wrapped path segments to delete properties from built-in prototypes including Object.prototype, Number.prototype, and String.prototype.",
+          "githubID": "GHSA-f23m-r3pf-42rh",
+          "CVE": [
+            "CVE-2026-2950"
+          ]
+        },
+        "info": [
+          "https://github.com/lodash/lodash/security/advisories/GHSA-f23m-r3pf-42rh",
+          "https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg"
         ]
       }
     ],
@@ -13767,6 +15947,10 @@
       ],
       "uri": [
         "/(§§version§§)/lodash(\\.min)?\\.js"
+      ],
+      "ast": [
+        "//BlockStatement[       //VariableDeclarator[/:init/:value == \"__lodash_placeholder__\"]     ]//AssignmentExpression[       /:left/:property/:name == \"VERSION\"     ]/$$:right/:value",
+        "//BlockStatement[       //AssignmentExpression/:left/:property/:name == \"forOwn\" &&       //AssignmentExpression/:left/:property/:name == \"forIn\" &&       //AssignmentExpression/:left/:property/:name == \"VERSION\"     ]//AssignmentExpression[       /:left/:property/:name == \"VERSION\"     ]/$$:right/:value"
       ]
     }
   },
@@ -14195,6 +16379,25 @@
           "https://github.com/mozilla/pdf.js/commit/85e64b5c16c9aaef738f421733c12911a441cec6",
           "https://bugzilla.mozilla.org/show_bug.cgi?id=1893645",
           "https://github.com/mozilla/pdf.js"
+        ]
+      },
+      {
+        "atOrAbove": "5.6.83",
+        "below": "6.2.108",
+        "severity": "high",
+        "cwe": [
+          "CWE-79"
+        ],
+        "identifiers": {
+          "summary": "PDF.js: Arbitrary JavaScript execution upon opening a malicious PDF ",
+          "githubID": "GHSA-hq66-cqwq-w95j",
+          "CVE": [
+            "CVE-2026-16633"
+          ]
+        },
+        "info": [
+          "https://github.com/mozilla/pdf.js/security/advisories/GHSA-hq66-cqwq-w95j",
+          "https://bugzilla.mozilla.org/show_bug.cgi?id=2055885"
         ]
       }
     ],
@@ -14770,7 +16973,7 @@
       ],
       "ast": [
         "//SequenceExpression[/AssignmentExpression/:left/:property/:name == \"showDebugDirtyRect\"]/AssignmentExpression[//:left/:property/:name == \"version\"]/:right/:value",
-        "//BlockStatement[/FunctionDeclaration/:id/:name == \"registerPainter\" && /FunctionDeclaration/:id/:name == \"getWheelDeltaMayPolyfill\"]/VariableDeclaration/VariableDeclarator[/:id/:name == \"version\"]/Literal/:value"
+        "//BlockStatement[/FunctionDeclaration/:id/:name == \"registerPainter\" && /FunctionDeclaration/:id/:name == \"getWheelDeltaMayPolyfill\"]/VariableDeclaration/VariableDeclarator[/:id/:name == \"version\"]/:init/:value"
       ]
     }
   },
@@ -14896,7 +17099,8 @@
           "summary": "Quill 2.0.3 is vulnerable to Cross-Site Scripting (XSS) via insufficient data validation in the HTML export feature, allowing injected HTML content to execute in the browser.",
           "githubID": "GHSA-v3m3-f69x-jf25",
           "CVE": [
-            "CVE-2025-15056"
+            "CVE-2025-15056",
+            "CVE-2026-120350"
           ]
         },
         "info": [
@@ -15149,6 +17353,28 @@
         ]
       },
       {
+        "atOrAbove": "0",
+        "below": "6.11.6",
+        "severity": "critical",
+        "cwe": [
+          "CWE-94"
+        ],
+        "identifiers": {
+          "summary": "protobufjs is vulnerable to Remote Code Execution when loading crafted JSON descriptors. Schema-controlled type names and type references reach runtime code generation without sufficient validation, allowing an attacker who can influence the loaded schema to execute arbitrary JavaScript in the process.",
+          "githubID": "GHSA-xq3m-2v4x-88gg",
+          "CVE": [
+            "CVE-2026-41242"
+          ]
+        },
+        "info": [
+          "https://github.com/protobufjs/protobuf.js/security/advisories/GHSA-xq3m-2v4x-88gg",
+          "https://github.com/protobufjs/protobuf.js/commit/535df444ac060243722ac5d672db205e5c531d75",
+          "https://github.com/protobufjs/protobuf.js/commit/ff7b2afef8754837cc6dc64c864cd111ab477956",
+          "https://github.com/protobufjs/protobuf.js/releases/tag/protobufjs-v7.5.5",
+          "https://github.com/protobufjs/protobuf.js/releases/tag/protobufjs-v8.0.1"
+        ]
+      },
+      {
         "atOrAbove": "7.0.0",
         "below": "7.2.5",
         "severity": "critical",
@@ -15174,7 +17400,7 @@
         ]
       },
       {
-        "atOrAbove": "0",
+        "atOrAbove": "7.0.0",
         "below": "7.5.5",
         "severity": "critical",
         "cwe": [
@@ -15704,6 +17930,17 @@
       ],
       "uri": [
         "/protobufjs/(§§version§§)/protobuf(?:\\.min)?\\.js"
+      ]
+    }
+  },
+  "es-toolkit": {
+    "vulnerabilities": [],
+    "extractors": {
+      "filename": [
+        "es-toolkit-(§§version§§)(?:\\.min)?\\.js"
+      ],
+      "uri": [
+        "/es-toolkit@(§§version§§)/"
       ]
     }
   },

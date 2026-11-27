@@ -80,6 +80,13 @@ class SameTargetSameIdTest(unittest.TestCase):
 
 
 class ScopeFlagFlipChangesIdTest(unittest.TestCase):
+    def test_recursive_depth_changes_id_but_zero_keeps_default(self):
+        default = scope_signature(_base_scope_cfg())
+        self.assertEqual(default, scope_signature(_base_scope_cfg(recursive_levels=0)))
+        self.assertNotEqual(default, scope_signature(_base_scope_cfg(recursive_levels=1)))
+        self.assertNotEqual(scope_signature(_base_scope_cfg(recursive_levels=1)),
+                            scope_signature(_base_scope_cfg(recursive_levels=2)))
+
     def test_module_filter_flip_changes_id(self):
         default = _scan_id_for("domain", "example.com", "example.com", _base_scope_cfg())
         with_mod = _scan_id_for("domain", "example.com", "example.com",

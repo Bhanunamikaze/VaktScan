@@ -67,6 +67,9 @@ python main.py scan targets.txt
 # Skip subdomain enumeration for a domain target
 python main.py scan hackingdream.net --no-subdomain-enum
 
+# Re-enumerate discovered subdomains for two additional levels
+python main.py scan hackingdream.net --recursive-levels 2
+
 # Resume: re-running the same command auto-resumes where it left off
 # (works for domain / IP / CIDR / file targets, not just files)
 python main.py scan targets.txt
@@ -237,6 +240,7 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `--no-subdomain-enum` | off | Skip subdomain discovery for domain targets |
 | `--no-dashboard` | off | Disable the live multi-row progress dashboard |
 | `--proxy URL` | - | Route all traffic through a proxy (sets `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`) |
+| `--recursive-levels N` | `0` | Re-enumerate each newly discovered in-scope subdomain up to N additional levels; `0` keeps recursion off |
 | `--update-templates` | off | Sync latest Nuclei templates before scanning |
 | `--no-dork` | off | Skip Google dorking passive recon |
 | `--dork-method` | `auto` | Google-dork method: `api` `playwright` `html` `auto` |
@@ -268,6 +272,8 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 | `domain` | - | Apex domain to enumerate |
 | `-c`, `--concurrency` | `20` | Concurrency |
 | `--wordlist` | - | Wordlist for ffuf VHost fuzzing |
+`enum` also accepts `--recursive-levels N`. For example, `python main.py enum example.com --recursive-levels 2` queries discovered subdomains at two additional levels and writes the merged result.
+
 | `--output-dir` | `reports/` | Output directory |
 | `--probe` | off | Chain into `probe` after enumeration |
 | `--no-dashboard` | off | Disable the live progress dashboard |
@@ -352,6 +358,9 @@ VaktScan uses subcommands. Run `python main.py <subcommand> --help` for the exac
 All are optional; modules degrade gracefully when they are absent.
 
 | Variable | Used by | Purpose |
+At the start of `scan`, VaktScan checks the local NVD, RetireJS, bundled-component, and CISA KEV data. It downloads a new copy when the recorded data/check age exceeds 1, 7, 30, and 1 day respectively, or when freshness is unknown. A failed download keeps the cached data and prints a warning. NVD refresh can take several minutes without `NVD_API_KEY` because its public API is rate-limited.
+The bundled-component rebuild also merges the project-maintained entries in `modules/data/bundled_cves_curated.json`, preserving CVEs that NVD omits from its product query.
+
 |---|---|---|
 | `SHODAN_API_KEY` | passive_intel | Shodan host enrichment |
 | `CENSYS_API_ID` / `CENSYS_API_SECRET` | passive_intel / recon | Censys search API |

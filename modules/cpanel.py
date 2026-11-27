@@ -92,6 +92,13 @@ CPANEL_SECURITY_BULLETINS = _TSR_DATA.get('bulletins', [])
 BUNDLED_COMPONENT_CVES = _BUNDLED_DATA.get('components', {})
 
 
+def reload_bundled_cves():
+    """Use a freshly downloaded bundled CVE table in the current scan."""
+    global _BUNDLED_DATA, BUNDLED_COMPONENT_CVES
+    _BUNDLED_DATA = _load_json(os.path.join(DATA_DIR, 'bundled_cves.json'))
+    BUNDLED_COMPONENT_CVES = _BUNDLED_DATA.get('components', {})
+
+
 # ─── Protocol / version helpers ───────────────────────────────────────────────
 
 async def detect_protocol(scan_address, port, timeout=3):
